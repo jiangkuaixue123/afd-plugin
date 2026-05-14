@@ -78,6 +78,9 @@ out-of-tree 的 vLLM external plugin。
 ### Phase 4：Worker 与 Runner 集成
 
 - 将 FFN 侧 model runner 行为迁移为 plugin-owned class。
+- FFNModelRunner 第一版可以直接基于原始 AFD 实现中的 `GPUFFNModelRunner`。
+- AttentionModelRunner 第一版应继承 vLLM v1 原生 `GPUModelRunner`，只覆盖
+  AFD 必需行为。
 - Attention 侧 runner/worker 行为只通过显式 class path 或兼容 shim 接入。
 - 除非 vLLM `v0.20.2` 没有可用 class-path hook，否则避免隐式全局 patch。
 
@@ -88,13 +91,13 @@ out-of-tree 的 vLLM external plugin。
 - 在 `register_afd()` 中通过 vLLM model registry 注册模型架构。
 - 模型特定的 AFD 逻辑不要放进通用 connector 或 worker 模块。
 
-### Phase 6：FFN Server 入口
+### Phase 6：FFN 侧 vLLM Serve 集成
 
-- 提供 plugin-owned FFN server entrypoint。
-- 优先使用类似 `vllm-afd-fserver` 的 console script，因为添加原生
-  `vllm fserver` 子命令需要修改 vLLM。
-- 尽量复刻原始 `fserver` 行为，同时在可行范围内保持与 vLLM
-  `AsyncEngineArgs` 的参数解析兼容。
+- FFN 不沿用原始 AFD commit 中新增的 `fserver` 入口。
+- FFN 侧应优先使用原生 `vllm serve` 启动方式，通过插件配置、role 配置、
+  显式 class path 或必要兼容 shim 切换到 FFN runtime。
+- 不设计 `vllm fserver` 子命令，也不优先设计 `vllm-afd-fserver` console
+  script。
 
 ### Phase 7：端到端验证
 
@@ -153,10 +156,21 @@ afd-plugin/
 - `afd_plugin.runtime`：vLLM 可通过显式 class path 加载的运行时 adapter/class，
   包括 worker、runner、ubatching、forward-context 相关能力。这里不作为 patch
   目录使用。
-- `afd_plugin.entrypoints`：plugin-owned executable entrypoint。
+- `afd_plugin.entrypoints`：保留给必须由插件提供的 executable entrypoint。
+  当前方向是 FFN 也使用原生 `vllm serve`，因此不要优先在这里实现原始
+  `fserver` 等价入口。
 - `docs`：迁移说明、架构决策、operator runbook 和已知限制。
 - `examples`：可运行示例和部署/online serving 样例。
 - `tests`：测试目录。单元测试、集成测试、GPU-gated 测试的具体分层后续再定。
+
+## 当前设计决策
+
+- FFN 侧不要沿用原始 AFD commit 中新增的 `fserver` 入口；优先复用原生
+  `vllm serve` 启动路径。
+- FFNModelRunner 第一版可以直接使用或迁移原始 AFD 实现中的
+  `GPUFFNModelRunner`。
+- AttentionModelRunner 第一版继承 vLLM v1 原生 `GPUModelRunner`，并只加入
+  AFD 必需的最小覆盖逻辑。
 
 ## 开发规则
 
