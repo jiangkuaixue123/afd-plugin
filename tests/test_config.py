@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from afd_plugin.config import AFDConfig, AFDConfig_from_mapping, parse_afd_config
+
+
+def test_parse_empty_additional_config_returns_disabled_default():
+    config = parse_afd_config({})
+
+    assert config == AFDConfig()
+    assert not config.enabled
+    assert config.is_attention_server
+
+
+def test_parse_canonical_additional_config_namespace():
+    config = parse_afd_config(
+        {
+            "afd": {
+                "enabled": True,
+                "role": "ffn",
+                "connector": "dummy",
+                "num_afd_stages": "3",
+                "num_attention_servers": 2,
+                "num_ffn_servers": 2,
+                "afd_server_rank": 1,
+            },
+        },
+        expected_role="ffn",
+    )
+
+    assert config.enabled
+    assert config.role == "ffn"
+    assert config.afd_role == "ffn"
+    assert config.is_ffn_server
+    assert config.num_afd_stages == 3
+    assert config.afd_server_rank == 1
+
+
+def test_parse_vllm_like_config_object():
+    vllm_config = SimpleNamespace(
+        additional_config={
+            "afd": {
+                "enabled": True,
+                "role": "attention",
+                "connector": "dummy",
+            },
+        },
+    )
+
+    config = parse_afd_config(vllm_config, expected_role="attention")
+
+    assert config.enabled
+    assert config.is_attention_server
+
+
+def test_original_afd_field_aliases_are_supported():
+    config = AFDConfig_from_mapping(
+        {
+            "enabled": "true",
+            "afd_role": "ffn",
+            "afd_connector": "p2pconnector",
+            "afd_host": "localhost",
+            "afd_port": 2345,
+            "afd_extra_config": {"rank_map": "env"},
+        },
+    )
+
+    assert config.role == "ffn"
+    assert config.connector == "p2pconnector"
+    assert config.afd_host == "localhost"
+    assert config.afd_port == 2345
+    assert config.afd_extra_config == {"rank_map": "env"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"enabled": "maybe"}, "enabled must be a boolean"),
+        ({"role": "decode"}, "AFD role must be one of"),
+        ({"connector": "tcp"}, "AFD connector must be one of"),
+        ({"num_afd_stages": 0}, "num_afd_stages must be positive"),
+        ({"afd_server_rank": 2, "num_attention_servers": 2}, "afd_server_rank"),
+        ({"unknown": True}, "unknown AFD config field"),
+    ],
+)
+def test_validation_errors_are_clear(raw, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        AFDConfig_from_mapping(raw)
+
+
+def test_role_mismatch_fails_fast():
+    with pytest.raises(ValueError, match="AFD role mismatch"):
+        AFDConfig_from_mapping(
+            {"enabled": True, "role": "ffn"},
+            expected_role="attention",
+        )
+
+
+def test_compute_hash_changes_for_graph_affecting_fields():
+    attention = AFDConfig(enabled=True, role="attention")
+    ffn = AFDConfig(enabled=True, role="ffn")
+
+    assert attention.compute_hash() != ffn.compute_hash()

@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
+"""vLLM AFD plugin: Attention-FFN Disaggregation support."""
+
+from __future__ import annotations
+
+import importlib.util
+import logging
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+from afd_plugin.config import AFDConfig, parse_afd_config
+
+
+def __getattr__(name: str):
+    if name in {
+        "AFDAttentionModelRunner",
+        "AFDAttentionWorker",
+        "AFDFFNWorker",
+        "GPUFFNModelRunner",
+    }:
+        from afd_plugin import runtime
+
+        return getattr(runtime, name)
+    if name == "assert_compatible_afd_stack":
+        from afd_plugin.validation import assert_compatible_afd_stack
+
+        return assert_compatible_afd_stack
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+try:
+    __version__ = version("vllm-afd-plugin")
+except PackageNotFoundError:
+    try:
+        from setuptools_scm import get_version
+
+        __version__ = get_version(root=str(Path(__file__).resolve().parents[1]))
+    except (ImportError, LookupError):
+        __version__ = "0.0.0+unknown"
+
+
+_logger = logging.getLogger(__name__)
+_registered = False
+
+
+def register_afd() -> None:
+    """Entry point for ``vllm.general_plugins``.
+
+    Phase 1 intentionally performs only lightweight, idempotent setup. Model
+    registration and compatibility patches are deferred until later phases.
+    Importing this package or calling this function remains safe without vLLM
+    installed, which keeps local CPU smoke tests useful on non-CUDA machines.
+    """
+
+    global _registered
+    if _registered:
+        _logger.debug("AFD plugin: register_afd() already completed")
+        return
+
+    _logger.debug("AFD plugin: register_afd() called")
+    if importlib.util.find_spec("vllm") is None:
+        _logger.debug("AFD plugin: vLLM not found, skipping runtime registration")
+        _registered = True
+        return
+
+    try:
+        from afd_plugin.compat.vllm import assert_vllm_version_supported
+
+        assert_vllm_version_supported(strict=False)
+    except Exception:
+        _logger.debug(
+            "AFD plugin: vLLM version check could not be completed",
+            exc_info=True,
+        )
+
+    _registered = True
+
+
+__all__ = [
+    "AFDConfig",
+    "AFDAttentionModelRunner",
+    "AFDAttentionWorker",
+    "AFDFFNWorker",
+    "GPUFFNModelRunner",
+    "assert_compatible_afd_stack",
+    "parse_afd_config",
+    "__version__",
+    "register_afd",
+]

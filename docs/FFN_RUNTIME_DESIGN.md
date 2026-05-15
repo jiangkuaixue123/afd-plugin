@@ -11,6 +11,8 @@ hidden states 和 metadata。
 - FFN 侧仍使用原生 `vllm serve` 启动。
 - 不沿用原始 in-tree AFD commit 中新增的 `fserver` CLI。
 - 不新增 `vllm fserver` 子命令。
+- 不保留 plugin-owned executable entrypoint 目录；当前仓库不需要
+  `afd_plugin.entrypoints`。
 - 第一版不 patch vLLM `EngineCore`。
 - 第一版不使用自定义 `scheduler-cls` 驱动执行。
 - FFN 侧不接收普通 OpenAI/vLLM request。

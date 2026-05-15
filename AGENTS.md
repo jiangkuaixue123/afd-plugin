@@ -160,7 +160,6 @@ afd-plugin/
       patches/
     connectors/
     distributed/
-    entrypoints/
     models/
     runtime/
 
@@ -186,9 +185,6 @@ afd-plugin/
 - `afd_plugin.runtime`：vLLM 可通过显式 class path 加载的运行时 adapter/class，
   包括 worker、runner、ubatching、forward-context 相关能力。这里不作为 patch
   目录使用。
-- `afd_plugin.entrypoints`：保留给必须由插件提供的 executable entrypoint。
-  当前方向是 FFN 也使用原生 `vllm serve`，因此不要优先在这里实现原始
-  `fserver` 等价入口。
 - `docs`：迁移说明、架构决策、operator runbook 和已知限制。
 - `examples`：可运行示例和部署/online serving 样例。
 - `tests`：测试目录。单元测试、集成测试、GPU-gated 测试的具体分层后续再定。
