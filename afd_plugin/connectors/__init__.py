@@ -2,4 +2,18 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """AFD connector namespace."""
 
-__all__: list[str] = []
+from afd_plugin.connectors.base import AFDConnectorBase
+from afd_plugin.connectors.factory import AFDConnectorFactory
+from afd_plugin.connectors.metadata import (
+    AFDConnectorMetadata,
+    AFDMetadata,
+    FFNNeedForwardData,
+)
+
+__all__ = [
+    "AFDConnectorBase",
+    "AFDConnectorFactory",
+    "AFDConnectorMetadata",
+    "AFDMetadata",
+    "FFNNeedForwardData",
+]
