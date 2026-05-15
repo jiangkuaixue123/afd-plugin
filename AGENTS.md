@@ -7,9 +7,9 @@ out-of-tree 的 vLLM external plugin。
 
 - 将 `afd-plugin` 构建为 vLLM 的 external plugin，用于支持
   Attention-FFN Disaggregation (AFD)。
-- 目标运行版本：vLLM `v0.20.2`。本地参考 checkout 位于 `../vllm`，
-  当前已确认 tag 为 `v0.20.2`。
-- 不修改 vLLM `v0.20.2` 源码树。所有行为都必须由本插件包、运行时注册、
+- 目标运行版本：vLLM `v0.19.1`。本地参考 checkout 位于 `../vllm`，
+  当前已确认 tag 为 `v0.19.1`。
+- 不修改 vLLM `v0.19.1` 源码树。所有行为都必须由本插件包、运行时注册、
   显式 CLI class path、console script，或本仓库内范围清晰的兼容 shim 提供。
 - 保持原始 AFD 实现的行为，参考 vLLM 分支 `afd_gpu` 中的 commit
   `0ce8b91b937ec5d47b6902867c4275e0c5fb895e`。
@@ -47,7 +47,7 @@ out-of-tree 的 vLLM external plugin。
 
 ### Phase 0：基线与兼容性盘点
 
-- 确认 vLLM `v0.20.2` 的 plugin hook 和 class-path 扩展点。
+- 确认 vLLM `v0.19.1` 的 plugin hook 和 class-path 扩展点。
 - 将 AFD commit 与目标 vLLM 版本做 diff，并按 config、connector、
   distributed state、engine、worker、model、CLI、example 分类。
 - 判断哪些 in-tree 改动可以变成普通 plugin class，哪些需要兼容 shim。
@@ -142,7 +142,7 @@ out-of-tree 的 vLLM external plugin。
 - 文档化支持的 topology 组合、已知限制、必需环境变量和故障模式。
 - 添加 FFN server 和 connector traffic 的 profiling/debugging 说明。
 - 添加端到端 GPU integration tests 和 runbook。
-- 在明确测试其他版本之前，兼容性说明都绑定到 vLLM `v0.20.2`。
+- 在明确测试其他版本之前，兼容性说明都绑定到 vLLM `v0.19.1`。
 
 ## 初始目录结构
 
@@ -173,7 +173,7 @@ afd-plugin/
 
 - `afd_plugin`：插件主包。顶层只放全局注册、配置、校验、轻量公共入口等跨目录
   模块；具体文件名后续再定。
-- `afd_plugin.compat`：vLLM `v0.20.2` 的版本保护、延迟 import、兼容 helper
+- `afd_plugin.compat`：vLLM `v0.19.1` 的版本保护、延迟 import、兼容 helper
   和 shim。所有与目标 vLLM 版本强绑定的兼容逻辑优先集中在这里。
 - `afd_plugin.compat.patches`：不得不 monkey patch vLLM 时使用的隔离区。这里的
   patch 必须幂等、受版本保护、有文档说明，并且只在没有可用 plugin/class-path
@@ -206,7 +206,7 @@ afd-plugin/
 
 - 不要编辑 `../vllm` 或 `../dllm-plugin` 下的文件。
 - 优先用 `git -C ../vllm show <commit>:<path>` 阅读原始 AFD 代码。
-- 保持 vLLM `v0.20.2` 兼容性显式可见，并通过测试覆盖。
+- 保持 vLLM `v0.19.1` 兼容性显式可见，并通过测试覆盖。
 - 优先使用 plugin-owned class 和显式 dotted class path，而不是 monkey patch。
   如果 monkey patch 无法避免，必须保证它幂等、受版本保护、有文档说明且有测试。
 - 尽量保持 package import CPU-safe。CUDA-heavy module 应延迟 import。

@@ -206,7 +206,7 @@ execute_ffn_step(dp_metadata_list=...)
 - connector 名称合法
 - topology 字段存在且可解析
 - FFN serve 是否使用 `--headless`，未使用时至少 warning
-- vLLM 版本为已验证的 `v0.20.2`
+- vLLM 版本为已验证的 `v0.19.1`
 
 `AFDFFNWorker.execute_model(...)` 被调用时应 fail fast，错误信息应说明：
 
@@ -239,4 +239,3 @@ P2P connector、CUDA graph capture、复杂拓扑、异构 A/F 比例和 profili
 - `GPUFFNModelRunner` 从原始 AFD commit 迁移后，哪些 import 需要 compat helper。
 - FFN loop 的异常如何传递回 vLLM worker/engine 进程，避免 silent failure。
 - 多进程/多卡下 connector 初始化顺序是否稳定。
-
