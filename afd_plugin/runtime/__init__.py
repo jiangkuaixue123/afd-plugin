@@ -4,7 +4,8 @@
 
 from afd_plugin.runtime.attention_model_runner import AFDAttentionModelRunner
 from afd_plugin.runtime.attention_worker import AFDAttentionWorker
-from afd_plugin.runtime.ffn import AFDFFNWorker, GPUFFNModelRunner
+from afd_plugin.runtime.ffn_model_runner import GPUFFNModelRunner
+from afd_plugin.runtime.ffn_worker import AFDFFNWorker
 
 __all__ = [
     "AFDAttentionModelRunner",

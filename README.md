@@ -22,7 +22,7 @@ Phase 1 established the CPU-safe plugin skeleton:
   - `afd_plugin.runtime.AFDFFNWorker`
   - `afd_plugin.runtime.GPUFFNModelRunner`
 
-Phase 2 has started for the Attention side:
+Phase 2 added the Attention-side MVP:
 
 - `AFDAttentionWorker` now injects `AFDAttentionModelRunner` while preserving
   the vLLM v1 GPU worker lifecycle.
@@ -32,7 +32,19 @@ Phase 2 has started for the Attention side:
 - A minimal plugin-owned model helper can read AFD metadata from the forward
   context without patching `vllm.forward_context`.
 
-The FFN runtime class paths remain Phase 1 placeholders until Phase 3.
+Phase 3 has started for the FFN side:
+
+- `AFDFFNWorker` injects `GPUFFNModelRunner`, returns an empty KV cache spec,
+  and starts a connector-driven FFN loop during worker initialization.
+- `GPUFFNModelRunner` consumes Attention-side hidden states from the dummy
+  connector, runs `model.compute_ffn_output()` when available, and returns
+  outputs to the Attention side.
+- The dummy connector now supports an in-process Attention -> FFN -> Attention
+  round trip for CPU-safe smoke tests.
+
+Phase 3 is still an MVP: FFN serving should use `--headless`; scheduler-driven
+FFN execution fails fast, and real P2P, ubatching/DBO, and CUDA graph support
+remain deferred to later phases.
 
 Example config shape:
 

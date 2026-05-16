@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
-"""Dummy AFD connector used by the Phase 2 Attention runtime MVP."""
+"""In-process dummy AFD connector for CPU-safe AFD runtime smoke tests."""
 
 from __future__ import annotations
 
+import threading
+import time
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Any
 
 from afd_plugin.config import AFDConfig
@@ -12,8 +15,33 @@ from afd_plugin.connectors.base import AFDConnectorBase
 from afd_plugin.connectors.metadata import AFDConnectorMetadata
 
 
+@dataclass
+class _DummyState:
+    condition: threading.Condition = field(
+        default_factory=lambda: threading.Condition(threading.Lock()),
+    )
+    attn_to_ffn: deque[tuple[Any, AFDConnectorMetadata]] = field(
+        default_factory=deque,
+    )
+    ffn_to_attn: deque[tuple[Any, AFDConnectorMetadata]] = field(
+        default_factory=deque,
+    )
+    dp_metadata: deque[tuple[dict[int, Any], bool, bool]] = field(
+        default_factory=deque,
+    )
+
+
+_DUMMY_STATE = _DummyState()
+
+
 class DummyAFDConnector(AFDConnectorBase):
-    """No-op connector that records metadata and returns zero-like tensors."""
+    """In-process connector that links Attention and FFN dummy runtimes.
+
+    The dummy backend deliberately stays CPU-safe. It is not a cross-process
+    transport; Phase 4 owns real P2P communication. For Phase 3 it gives tests
+    and local development a real queue-backed Attention -> FFN -> Attention
+    round trip without importing CUDA-heavy modules.
+    """
 
     def __init__(
         self,
@@ -30,6 +58,7 @@ class DummyAFDConnector(AFDConnectorBase):
         self.dp_metadata_updates: list[dict[int, Any]] = []
         self.sent_dp_metadata_lists: list[dict[int, Any]] = []
         self.world_rank = rank
+        self._state = _DUMMY_STATE
         self.init_afd_connector()
 
     def init_afd_connector(self) -> None:
@@ -37,6 +66,8 @@ class DummyAFDConnector(AFDConnectorBase):
 
     def close(self) -> None:
         self._is_initialized = False
+        with self._state.condition:
+            self._state.condition.notify_all()
 
     @property
     def is_initialized(self) -> bool:
@@ -58,9 +89,28 @@ class DummyAFDConnector(AFDConnectorBase):
         dp_metadata_list: dict[int, Any],
         *,
         is_warmup: bool = False,
+        is_attn_graph_capturing: bool = False,
     ) -> None:
-        del is_warmup
         self.sent_dp_metadata_lists.append(dict(dp_metadata_list))
+        with self._state.condition:
+            self._state.dp_metadata.append(
+                (dict(dp_metadata_list), bool(is_attn_graph_capturing), is_warmup),
+            )
+            self._state.condition.notify_all()
+
+    def recv_dp_metadata_list(
+        self,
+        timeout_ms: int | None = None,
+    ) -> tuple[dict[int, Any], bool, bool]:
+        deadline = _deadline(timeout_ms)
+        with self._state.condition:
+            while not self._state.dp_metadata:
+                _wait_for_item(
+                    self._state.condition,
+                    deadline,
+                    "timed out waiting for dummy AFD DP metadata",
+                )
+            return self._state.dp_metadata.popleft()
 
     def send_attn_output(
         self,
@@ -77,14 +127,37 @@ class DummyAFDConnector(AFDConnectorBase):
         if not metadata.is_single_sequence:
             raise ValueError("attention side metadata must describe one sequence")
         self.events.append((hidden_states, metadata))
+        with self._state.condition:
+            self._state.attn_to_ffn.append((hidden_states, metadata))
+            self._state.condition.notify_all()
         return None
 
     def recv_ffn_output(self, handle: Any = None, **kwargs: Any) -> Any:
         del handle
+        timeout_ms = kwargs.get("timeout_ms")
+        if timeout_ms is not None:
+            deadline = _deadline(timeout_ms)
+            with self._state.condition:
+                while not self._state.ffn_to_attn:
+                    _wait_for_item(
+                        self._state.condition,
+                        deadline,
+                        "timed out waiting for dummy AFD FFN output",
+                    )
+                ffn_output, _ = self._state.ffn_to_attn.popleft()
+                return ffn_output
+
+        with self._state.condition:
+            if self._state.ffn_to_attn:
+                ffn_output, _ = self._state.ffn_to_attn.popleft()
+                return ffn_output
+
         ref_tensor = kwargs.get("ref_tensor")
         if ref_tensor is not None:
             return _zeros_like(ref_tensor)
         hidden_states, _ = self.events.popleft()
+        with self._state.condition:
+            _discard_queued_attention_event(self._state.attn_to_ffn, hidden_states)
         return _zeros_like(hidden_states)
 
     def recv_attn_output(
@@ -92,9 +165,16 @@ class DummyAFDConnector(AFDConnectorBase):
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
     ) -> tuple[Any, AFDConnectorMetadata]:
-        raise NotImplementedError(
-            "DummyAFDConnector.recv_attn_output is implemented in Phase 3",
-        )
+        del ubatch_idx
+        deadline = _deadline(timeout_ms)
+        with self._state.condition:
+            while not self._state.attn_to_ffn:
+                _wait_for_item(
+                    self._state.condition,
+                    deadline,
+                    "timed out waiting for dummy AFD attention output",
+                )
+            return self._state.attn_to_ffn.popleft()
 
     def send_ffn_output(
         self,
@@ -107,12 +187,45 @@ class DummyAFDConnector(AFDConnectorBase):
             raise ValueError(
                 f"ffn_output shape {ffn_output.shape!r} does not match metadata",
             )
+        with self._state.condition:
+            self._state.ffn_to_attn.append((ffn_output, metadata))
+            self._state.condition.notify_all()
 
 
 def _zeros_like(value: Any) -> Any:
     if hasattr(value, "new_zeros") and hasattr(value, "shape"):
         return value.new_zeros(value.shape)
     return value
+
+
+def _deadline(timeout_ms: int | None) -> float | None:
+    if timeout_ms is None:
+        return None
+    return time.monotonic() + timeout_ms / 1000
+
+
+def _wait_for_item(
+    condition: threading.Condition,
+    deadline: float | None,
+    timeout_message: str,
+) -> None:
+    if deadline is None:
+        condition.wait()
+        return
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(timeout_message)
+    condition.wait(remaining)
+
+
+def _discard_queued_attention_event(
+    queue: deque[tuple[Any, AFDConnectorMetadata]],
+    hidden_states: Any,
+) -> None:
+    for item in tuple(queue):
+        if item[0] is hidden_states:
+            queue.remove(item)
+            break
 
 
 __all__ = ["DummyAFDConnector"]

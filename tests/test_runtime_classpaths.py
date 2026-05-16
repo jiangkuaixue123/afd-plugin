@@ -28,10 +28,10 @@ def test_runtime_class_paths_resolve(qualname):
     assert cls.__module__.startswith("afd_plugin.runtime")
 
 
-def test_phase1_placeholders_fail_if_instantiated():
+def test_phase3_ffn_worker_requires_vllm_when_instantiated_without_runtime():
     cls = resolve_class_from_qualname(FFN_WORKER_FQCN)
 
-    with pytest.raises(NotImplementedError, match="Phase 1 class-path placeholder"):
+    with pytest.raises(RuntimeError, match="requires an importable vLLM runtime"):
         cls()
 
 
