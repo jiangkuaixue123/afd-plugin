@@ -39,6 +39,12 @@ class AFDConnectorBase(ABC):
     def is_initialized(self) -> bool:
         raise NotImplementedError
 
+    def get_connector_rank(self) -> int:
+        return self.rank
+
+    def get_connector_local_rank(self) -> int:
+        return self.local_rank
+
     @abstractmethod
     def send_attn_output(
         self,

@@ -9,7 +9,10 @@ from typing import Any
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.attention_model_runner import fail_if_ubatching_enabled
+from afd_plugin.runtime.attention_model_runner import (
+    fail_if_cuda_graph_enabled,
+    fail_if_ubatching_enabled,
+)
 
 _LoRAModelRunnerMixin, _LoRAModelRunnerMixin_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.lora_model_runner_mixin",
@@ -38,6 +41,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         if not self.afd_config.enabled:
             raise ValueError("AFD FFN runtime requires enabled=true")
         fail_if_ubatching_enabled(vllm_config)
+        fail_if_cuda_graph_enabled(vllm_config)
 
         rank, local_rank = _resolve_world_ranks()
         self.connector = AFDConnectorFactory.create_connector(

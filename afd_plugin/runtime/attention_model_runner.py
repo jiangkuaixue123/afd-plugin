@@ -33,6 +33,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if not self.afd_config.enabled:
             raise ValueError("AFD Attention runtime requires enabled=true")
         fail_if_ubatching_enabled(self.vllm_config)
+        fail_if_cuda_graph_enabled(self.vllm_config)
         rank, local_rank = _resolve_world_ranks()
         self.afd_connector = AFDConnectorFactory.create_connector(
             rank,
@@ -40,6 +41,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             self.vllm_config,
             self.afd_config,
         )
+        self.afd_connector.init_afd_connector()
         self._is_warmup = False
         self._afd_pending_metadata: AFDMetadata | None = None
 
@@ -141,6 +143,14 @@ def fail_if_ubatching_enabled(vllm_config: object) -> None:
         raise RuntimeError("AFD + ubatching/DBO is deferred to Phase 5")
 
 
+def fail_if_cuda_graph_enabled(vllm_config: object) -> None:
+    model_config = getattr(vllm_config, "model_config", None)
+    if getattr(model_config, "enforce_eager", True) is False:
+        raise RuntimeError(
+            "AFD CUDA graph support is deferred to Phase 6; pass --enforce-eager",
+        )
+
+
 def _resolve_world_ranks() -> tuple[int, int]:
     try:
         from vllm.distributed.parallel_state import get_world_group
@@ -151,4 +161,8 @@ def _resolve_world_ranks() -> tuple[int, int]:
         return 0, 0
 
 
-__all__ = ["AFDAttentionModelRunner", "fail_if_ubatching_enabled"]
+__all__ = [
+    "AFDAttentionModelRunner",
+    "fail_if_cuda_graph_enabled",
+    "fail_if_ubatching_enabled",
+]

@@ -42,9 +42,26 @@ Phase 3 has started for the FFN side:
 - The dummy connector now supports an in-process Attention -> FFN -> Attention
   round trip for CPU-safe smoke tests.
 
-Phase 3 is still an MVP: FFN serving should use `--headless`; scheduler-driven
-FFN execution fails fast, and real P2P, ubatching/DBO, and CUDA graph support
-remain deferred to later phases.
+Phase 4 has started the P2P connector migration:
+
+- `p2pconnector` is registered in the plugin connector factory.
+- A CPU-safe topology helper defines the Phase 4 rank mapping:
+  FFN ranks first, Attention ranks second, with each FFN owning one or more
+  consecutive Attention ranks.
+- The P2P connector lazily initializes vLLM/PyTorch distributed state, PyNCCL
+  subgroups, DP metadata send/recv, and hidden-state send/recv paths.
+- `extra_config["afd_size"]` remains supported for compatibility with the
+  original AFD branch, while canonical plugin config continues to use
+  `num_attention_servers` and `num_ffn_servers`.
+- A DeepSeekV2 AFD E2E wrapper is registered lazily for server-side smoke
+  testing. This wrapper loads full model weights on both Attention and FFN
+  sides, and only splits the forward path across the connector.
+
+Phase 4 is still in progress: FFN serving should use `--headless`;
+scheduler-driven FFN execution fails fast, and GPU-gated multi-process P2P
+round-trip tests, role-based weight pruning, ubatching/DBO, and CUDA graph
+support remain deferred. AFD runtimes currently fail fast unless
+`--enforce-eager` is used.
 
 Example config shape:
 
@@ -57,6 +74,23 @@ Example config shape:
     "num_afd_stages": 3,
     "num_attention_servers": 1,
     "num_ffn_servers": 1
+  }
+}
+```
+
+P2P config shape:
+
+```json
+{
+  "afd": {
+    "enabled": true,
+    "role": "attention",
+    "connector": "p2pconnector",
+    "host": "127.0.0.1",
+    "port": 1239,
+    "num_attention_servers": 2,
+    "num_ffn_servers": 1,
+    "afd_server_rank": 0
   }
 }
 ```
