@@ -43,6 +43,19 @@ except PackageNotFoundError:
 _logger = logging.getLogger(__name__)
 _registered = False
 
+_DEEPSEEK_MODEL_REGISTRATIONS = {
+    "DeepseekForCausalLM": "afd_plugin.models.deepseek_v2:AFDDeepseekForCausalLM",
+    "DeepseekV2ForCausalLM": (
+        "afd_plugin.models.deepseek_v2:AFDDeepseekV2ForCausalLM"
+    ),
+    "DeepseekV3ForCausalLM": (
+        "afd_plugin.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
+    ),
+    "GlmMoeDsaForCausalLM": (
+        "afd_plugin.models.deepseek_v2:AFDGlmMoeDsaForCausalLM"
+    ),
+}
+
 
 def register_afd() -> None:
     """Entry point for ``vllm.general_plugins``.
@@ -74,6 +87,11 @@ def register_afd() -> None:
             exc_info=True,
         )
 
+    from vllm.model_executor.models import ModelRegistry
+
+    for model_arch, model_cls in _DEEPSEEK_MODEL_REGISTRATIONS.items():
+        ModelRegistry.register_model(model_arch, model_cls)
+
     _registered = True
 
 
@@ -86,5 +104,6 @@ __all__ = [
     "assert_compatible_afd_stack",
     "parse_afd_config",
     "__version__",
+    "_DEEPSEEK_MODEL_REGISTRATIONS",
     "register_afd",
 ]

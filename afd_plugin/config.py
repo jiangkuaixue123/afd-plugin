@@ -79,6 +79,7 @@ class AFDConfig:
             self.enabled,
             self.connector,
             self.role,
+            self.extra_config.get("afd_size"),
             self.num_afd_stages,
             self.num_attention_servers,
             self.num_ffn_servers,
@@ -229,6 +230,15 @@ def validate_afd_config(
             "AFD connector must be one of "
             f"{SUPPORTED_AFD_CONNECTORS!r}, got {config.connector!r}",
         )
+    p2p_sizes: tuple[int, int] | None = None
+    if config.connector == "p2pconnector":
+        from afd_plugin.distributed import (
+            topology_from_config,
+            validate_p2p_topology,
+        )
+
+        validate_p2p_topology(config)
+        p2p_sizes = topology_from_config(config)
     if not config.host:
         raise ValueError("AFD host must be non-empty")
     if not 0 < config.port < 65536:
@@ -248,9 +258,9 @@ def validate_afd_config(
         )
 
     if config.role == "attention":
-        server_count = config.num_attention_servers
+        server_count = p2p_sizes[0] if p2p_sizes else config.num_attention_servers
     else:
-        server_count = config.num_ffn_servers
+        server_count = p2p_sizes[1] if p2p_sizes else config.num_ffn_servers
     if not 0 <= config.afd_server_rank < server_count:
         raise ValueError(
             "afd_server_rank must be within this role's server count "

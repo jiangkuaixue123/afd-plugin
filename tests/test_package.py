@@ -15,6 +15,14 @@ def test_register_afd_is_idempotent():
     afd_plugin.register_afd()
 
 
+def test_deepseek_afd_model_registration_paths_are_lazy_strings():
+    registrations = afd_plugin._DEEPSEEK_MODEL_REGISTRATIONS
+
+    assert registrations["DeepseekV2ForCausalLM"] == (
+        "afd_plugin.models.deepseek_v2:AFDDeepseekV2ForCausalLM"
+    )
+
+
 def test_entry_point_is_registered():
     entry_points = importlib.metadata.entry_points(group="vllm.general_plugins")
     matches = [ep for ep in entry_points if ep.name == "afd"]

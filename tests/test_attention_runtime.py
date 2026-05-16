@@ -6,7 +6,10 @@ import pytest
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors import AFDConnectorFactory
-from afd_plugin.runtime.attention_model_runner import AFDAttentionModelRunner
+from afd_plugin.runtime.attention_model_runner import (
+    AFDAttentionModelRunner,
+    fail_if_cuda_graph_enabled,
+)
 
 
 def test_attention_runner_builds_single_stage_metadata():
@@ -54,3 +57,12 @@ def test_attention_runner_rejects_ubatching_in_phase2():
 
     with pytest.raises(RuntimeError, match="ubatching"):
         runner._send_dp_metadata(None, [object(), object()])
+
+
+def test_attention_runtime_rejects_cuda_graph_until_phase6():
+    vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=False),
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA graph"):
+        fail_if_cuda_graph_enabled(vllm_config)
