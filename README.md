@@ -11,7 +11,8 @@ Phase 1 established the CPU-safe plugin skeleton:
 
 - Python package metadata for `vllm-afd-plugin`.
 - `vllm.general_plugins` entry point: `afd = afd_plugin:register_afd`.
-- Idempotent `register_afd()` with no monkey patches.
+- Idempotent `register_afd()`. Current FFN daemon support applies a narrow,
+  isolated EngineCore compat patch under `afd_plugin.compat.patches`.
 - Plugin-owned `AFDConfig` parsed from `additional_config["afd"]`.
 - Validation helpers for role, connector, topology, and worker class paths.
 - No plugin-owned executable entrypoint package; both Attention and FFN sides
@@ -57,11 +58,13 @@ Phase 4 has started the P2P connector migration:
   testing. This wrapper loads full model weights on both Attention and FFN
   sides, and only splits the forward path across the connector.
 
-Phase 4 is still in progress: FFN serving should use `--headless`;
-scheduler-driven FFN execution fails fast, and GPU-gated multi-process P2P
-round-trip tests, role-based weight pruning, ubatching/DBO, and CUDA graph
-support remain deferred. AFD runtimes currently fail fast unless
-`--enforce-eager` is used.
+Phase 4 is still in progress: FFN serving now works through ordinary
+`vllm serve` and does not require `--headless` or
+`--disable-hybrid-kv-cache-manager`. Scheduler-driven FFN execution still fails
+fast, and role-based weight pruning, ubatching/DBO, and CUDA graph support
+remain deferred. AFD runtimes currently fail fast unless `--enforce-eager` is
+used. Opt-in GPU E2E coverage exists for eager `1A1F` and `2A2F` DeepSeekV2
+P2P runs.
 
 Example config shape:
 
@@ -101,3 +104,12 @@ P2P config shape:
 uv run pytest
 uv run ruff check .
 ```
+
+Opt-in GPU E2E tests:
+
+```bash
+AFD_GPU_E2E_MODEL=/path/to/DeepSeek-V2-Lite uv run pytest -q -m gpu
+```
+
+The GPU tests default to `AFD_GPU_E2E_GPUS=0,1,2,3`, run eager `1A1F` and
+`2A2F`, and shell out to `tests/e2e_deepseek_v2_afd.py`.

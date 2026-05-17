@@ -15,8 +15,8 @@ while keeping the Attention and FFN runtime adapters intact.
 - Preserve `extra_config["afd_size"]` compatibility for original-style values
   such as `4A2F`.
 - Provide a DeepSeekV2 E2E model wrapper that loads full weights on both roles
-  and splits only the forward path. This is for first server-side 1A1F smoke
-  testing, not the final memory-efficient model implementation.
+  and splits only the forward path. This covers first server-side eager `1A1F`
+  and `2A2F` smoke testing, not the final memory-efficient model implementation.
 - Continue to fail fast for AFD + ubatching/DBO; that belongs to Phase 5.
 
 ## Rank Mapping
@@ -42,7 +42,8 @@ FFN-owned subgroup.
 
 - Role-based weight pruning is not implemented; both sides load full
   DeepSeekV2 weights.
-- GPU-gated multi-process round-trip tests are still pending.
+- GPU-gated multi-process round-trip tests exist for eager `1A1F` and `2A2F`
+  and are opt-in through `AFD_GPU_E2E_MODEL`.
 - CUDA graph capture is not supported by this connector version; server runs
   must pass `--enforce-eager`.
 - Ubatching/DBO support remains Phase 5.

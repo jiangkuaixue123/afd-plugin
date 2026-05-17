@@ -48,8 +48,8 @@ def init_afd_process_group(
     from torch.distributed import Backend
     from torch.distributed.distributed_c10d import (
         PrefixStore,
-        _world,
         _new_process_group_helper,
+        _world,
     )
     from torch.distributed.rendezvous import rendezvous
     from vllm.distributed import parallel_state
