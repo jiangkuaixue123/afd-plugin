@@ -63,7 +63,11 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             # metadata. Keep native DBO behavior enabled for those runs without
             # doing AFD side-effecting communication.
             trace_ubatch_slices(ubatch_slices, source="wrapper_native_no_afd")
-            return super().__call__(*args, **kwargs)
+            self._afd_use_native_ubatch_metadata = True
+            try:
+                return super().__call__(*args, **kwargs)
+            finally:
+                self._afd_use_native_ubatch_metadata = False
 
         ubatch_metadata = self._make_ubatch_metadata(
             ubatch_slices=ubatch_slices,
@@ -108,6 +112,21 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         )
         afd_metadata = parent_additional_kwargs.get("afd_metadata")
         if afd_metadata is None:
+            if getattr(self, "_afd_use_native_ubatch_metadata", False):
+                return _UBatchWrapper._make_ubatch_metadata(
+                    self,
+                    ubatch_slices,
+                    attn_metadata,
+                    slot_mapping,
+                    input_ids,
+                    positions,
+                    inputs_embeds,
+                    intermediate_tensors,
+                    compute_stream,
+                    dp_metadata,
+                    batch_descriptor,
+                    cudagraph_runtime_mode,
+                )
             raise RuntimeError(
                 "AFDUBatchWrapper requires "
                 "ForwardContext.additional_kwargs['afd_metadata']",
