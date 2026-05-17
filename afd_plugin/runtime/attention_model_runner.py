@@ -269,6 +269,8 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             num_reqs=values["num_reqs"],
             force_uniform_decode=values.get("force_uniform_decode"),
         )
+        if int(values["num_tokens"]) < int(getattr(parallel_config, "num_ubatches", 1)):
+            return False
         return _check_ubatch_thresholds(
             parallel_config,
             int(values["num_tokens"]),
