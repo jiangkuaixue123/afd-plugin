@@ -192,6 +192,10 @@ def test_attention_runner_enables_decode_ubatching_for_afd_dp1_thresholds():
     )
 
 
+def test_attention_runner_inherits_native_dummy_run_microbatching():
+    assert "_dummy_run" not in AFDAttentionModelRunner.__dict__
+
+
 def test_attention_runtime_rejects_cuda_graph_until_phase6():
     vllm_config = SimpleNamespace(
         model_config=SimpleNamespace(enforce_eager=False),

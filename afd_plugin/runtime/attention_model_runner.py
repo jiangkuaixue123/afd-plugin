@@ -237,10 +237,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             cudagraph_stats,
         )
 
-    def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
-        kwargs["allow_microbatching"] = False
-        return super()._dummy_run(*args, **kwargs)
-
     def _should_ubatch_without_vllm_dp(self, *args: Any, **kwargs: Any) -> bool:
         parallel_config = getattr(self.vllm_config, "parallel_config", None)
         if parallel_config is None:
