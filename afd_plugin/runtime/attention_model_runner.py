@@ -228,6 +228,19 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             num_tokens_across_dp,
             cudagraph_stats,
         ) = result
+        values = _batch_execution_values(args, kwargs)
+        if should_ubatch and not _has_enough_tokens_for_ubatches(
+            self.vllm_config,
+            int(values.get("num_tokens", 0)),
+        ):
+            should_ubatch = False
+            return (
+                cudagraph_mode,
+                batch_descriptor,
+                should_ubatch,
+                num_tokens_across_dp,
+                cudagraph_stats,
+            )
         if should_ubatch:
             return result
         should_ubatch = self._should_ubatch_without_vllm_dp(*args, **kwargs)
@@ -250,18 +263,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if not bool(kwargs.get("allow_microbatching", True)):
             return False
 
-        names = [
-            "num_tokens",
-            "num_reqs",
-            "num_scheduled_tokens_np",
-            "max_num_scheduled_tokens",
-            "use_cascade_attn",
-            "allow_microbatching",
-            "force_eager",
-            "force_uniform_decode",
-        ]
-        values = dict(zip(names, args, strict=False))
-        values.update(kwargs)
+        values = _batch_execution_values(args, kwargs)
         uniform_decode = self._is_uniform_decode(
             max_num_scheduled_tokens=values["max_num_scheduled_tokens"],
             uniform_decode_query_len=self.uniform_decode_query_len,
@@ -269,7 +271,10 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             num_reqs=values["num_reqs"],
             force_uniform_decode=values.get("force_uniform_decode"),
         )
-        if int(values["num_tokens"]) < int(getattr(parallel_config, "num_ubatches", 1)):
+        if not _has_enough_tokens_for_ubatches(
+            self.vllm_config,
+            int(values["num_tokens"]),
+        ):
             return False
         return _check_ubatch_thresholds(
             parallel_config,
@@ -407,6 +412,31 @@ def _check_ubatch_thresholds(
                 getattr(parallel_config, "dbo_prefill_token_threshold", 512),
             )
         return num_tokens >= threshold
+
+
+def _batch_execution_values(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    names = [
+        "num_tokens",
+        "num_reqs",
+        "num_scheduled_tokens_np",
+        "max_num_scheduled_tokens",
+        "use_cascade_attn",
+        "allow_microbatching",
+        "force_eager",
+        "force_uniform_decode",
+    ]
+    values = dict(zip(names, args, strict=False))
+    values.update(kwargs)
+    return values
+
+
+def _has_enough_tokens_for_ubatches(vllm_config: object, num_tokens: int) -> bool:
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    num_ubatches = int(getattr(parallel_config, "num_ubatches", 1))
+    return int(num_tokens) >= max(num_ubatches, 1)
 
 
 @contextmanager

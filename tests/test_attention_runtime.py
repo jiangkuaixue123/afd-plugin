@@ -8,6 +8,7 @@ from afd_plugin.config import AFDConfig
 from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.runtime.attention_model_runner import (
     AFDAttentionModelRunner,
+    _has_enough_tokens_for_ubatches,
     _with_dp_derived_afd_rank,
     fail_if_cuda_graph_enabled,
     fail_if_unsupported_ubatching,
@@ -198,6 +199,15 @@ def test_attention_runner_enables_decode_ubatching_for_afd_dp1_thresholds():
         max_num_scheduled_tokens=1,
         use_cascade_attn=False,
     )
+
+
+def test_attention_runner_rejects_empty_native_ubatches():
+    vllm_config = SimpleNamespace(
+        parallel_config=SimpleNamespace(num_ubatches=2),
+    )
+
+    assert not _has_enough_tokens_for_ubatches(vllm_config, 1)
+    assert _has_enough_tokens_for_ubatches(vllm_config, 2)
 
 
 def test_attention_runner_inherits_native_dummy_run_microbatching():
