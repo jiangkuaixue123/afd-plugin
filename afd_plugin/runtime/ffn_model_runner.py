@@ -15,6 +15,7 @@ from afd_plugin.runtime.attention_model_runner import (
     fail_if_cuda_graph_enabled,
     fail_if_unsupported_ubatching,
 )
+from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
 
 _LoRAModelRunnerMixin, _LoRAModelRunnerMixin_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.lora_model_runner_mixin",
@@ -56,6 +57,14 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         self.model: Any | None = None
         self.model_memory_usage = 0
         self.num_layers = _resolve_num_hidden_layers(self.model_config)
+        afd_trace(
+            "ffn_runner_init",
+            role=self.afd_config.role,
+            rank=rank,
+            local_rank=local_rank,
+            afd_server_rank=self.afd_config.afd_server_rank,
+            num_layers=self.num_layers,
+        )
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -133,12 +142,33 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         rank_ffn_output = None
         num_layers = max(int(self.num_layers or 0), 1)
         stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
+        afd_trace(
+            "ffn_forward_begin",
+            num_layers=num_layers,
+            stages=stage_ids,
+            dp_metadata=dp_metadata_summary(dp_metadata_list),
+            is_graph_capturing=is_graph_capturing,
+        )
         with _ffn_forward_context(
             getattr(self, "vllm_config", None),
         ) as forward_context:
             for layer_idx in range(num_layers):
                 for stage_idx in stage_ids:
+                    afd_trace(
+                        "ffn_layer_stage_recv_begin",
+                        layer_idx=layer_idx,
+                        stage_idx=stage_idx,
+                    )
                     hidden_states, metadata = self._recv_attn_output(stage_idx)
+                    afd_trace(
+                        "ffn_layer_stage_recv_done",
+                        layer_idx=layer_idx,
+                        stage_idx=stage_idx,
+                        metadata_layer_idx=getattr(metadata, "layer_idx", None),
+                        metadata_stage_idx=getattr(metadata, "stage_idx", None),
+                        metadata_ubatch_idx=getattr(metadata, "ubatch_idx", None),
+                        tensor=tensor_summary(hidden_states),
+                    )
                     metadata.layer_idx = layer_idx
                     if forward_context is not None:
                         forward_context.dp_metadata = dp_metadata_list.get(
@@ -150,8 +180,27 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                         for work in recv_handle_list:
                             work.wait()
                         metadata.recv_handle_list = None
+                    afd_trace(
+                        "ffn_layer_stage_compute_begin",
+                        layer_idx=layer_idx,
+                        stage_idx=stage_idx,
+                        tensor=tensor_summary(hidden_states),
+                    )
                     rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
+                    afd_trace(
+                        "ffn_layer_stage_compute_done",
+                        layer_idx=layer_idx,
+                        stage_idx=stage_idx,
+                        tensor=tensor_summary(rank_ffn_output),
+                    )
                     self.connector.send_ffn_output(rank_ffn_output, metadata)
+                    afd_trace(
+                        "ffn_layer_stage_send_done",
+                        layer_idx=layer_idx,
+                        stage_idx=stage_idx,
+                        tensor=tensor_summary(rank_ffn_output),
+                    )
+        afd_trace("ffn_forward_done", stages=stage_ids)
         return rank_ffn_output
 
     def _execute_eager_mode(self, hidden_states: Any, layer_idx: int) -> Any:
@@ -176,10 +225,20 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         update = getattr(self.connector, "update_state_from_dp_metadata", None)
         if not callable(update):
             return
+        afd_trace(
+            "ffn_update_connector_state_begin",
+            dp_metadata=dp_metadata_summary(dp_metadata_list),
+            is_graph_capturing=is_graph_capturing,
+        )
         try:
             update(dp_metadata_list, is_graph_capturing=is_graph_capturing)
         except TypeError:
             update(dp_metadata_list, is_graph_capturing)
+        afd_trace(
+            "ffn_update_connector_state_done",
+            dp_metadata=dp_metadata_summary(dp_metadata_list),
+            is_graph_capturing=is_graph_capturing,
+        )
 
     def update_config(self, overrides: dict[str, Any]) -> None:
         for config_name, config_overrides in overrides.items():
