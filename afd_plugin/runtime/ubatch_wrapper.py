@@ -32,6 +32,10 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 "AFDUBatchWrapper requires an importable vLLM runtime",
             ) from _UBatchWrapper_IMPORT_ERROR
         super().__init__(*args, **kwargs)
+        self._afd_context_provider: Any | None = None
+
+    def configure_afd_context_provider(self, provider: Any) -> None:
+        self._afd_context_provider = provider
 
     @staticmethod
     def _create_sm_control_context(vllm_config: object) -> object:
@@ -58,16 +62,10 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             getattr(forward_context, "additional_kwargs", None) or {},
         )
         if "afd_metadata" not in parent_additional_kwargs:
-            # vLLM profile/dummy runs do not flow through
-            # AFDAttentionModelRunner._model_forward(), so they have no AFD
-            # metadata. Keep native DBO behavior enabled for those runs without
-            # doing AFD side-effecting communication.
-            trace_ubatch_slices(ubatch_slices, source="wrapper_native_no_afd")
-            self._afd_use_native_ubatch_metadata = True
-            try:
-                return super().__call__(*args, **kwargs)
-            finally:
-                self._afd_use_native_ubatch_metadata = False
+            self._install_dummy_afd_metadata(forward_context, ubatch_slices)
+            parent_additional_kwargs = dict(
+                getattr(forward_context, "additional_kwargs", None) or {},
+            )
 
         ubatch_metadata = self._make_ubatch_metadata(
             ubatch_slices=ubatch_slices,
@@ -87,6 +85,30 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         )
         with self.sm_control:
             return self._run_ubatches(ubatch_metadata, self.runnable)
+
+    def _install_dummy_afd_metadata(
+        self,
+        forward_context: Any,
+        ubatch_slices: Any,
+    ) -> None:
+        provider = self._afd_context_provider
+        if provider is None:
+            trace_ubatch_slices(ubatch_slices, source="wrapper_native_no_afd")
+            self._afd_use_native_ubatch_metadata = True
+            return
+
+        num_tokens_unpadded = sum(int(ub.num_tokens) for ub in ubatch_slices)
+        afd_metadata = provider._build_afd_metadata(
+            ubatch_slices,
+            num_tokens_unpadded,
+        )
+        forward_context.additional_kwargs["afd_metadata"] = afd_metadata
+        provider._afd_pending_metadata = afd_metadata
+        provider._send_dp_metadata(
+            getattr(forward_context, "dp_metadata", None),
+            ubatch_slices,
+        )
+        trace_ubatch_slices(ubatch_slices, source="wrapper_dummy_afd_metadata")
 
     def _make_ubatch_metadata(
         self,
@@ -113,20 +135,23 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         afd_metadata = parent_additional_kwargs.get("afd_metadata")
         if afd_metadata is None:
             if getattr(self, "_afd_use_native_ubatch_metadata", False):
-                return _UBatchWrapper._make_ubatch_metadata(
-                    self,
-                    ubatch_slices,
-                    attn_metadata,
-                    slot_mapping,
-                    input_ids,
-                    positions,
-                    inputs_embeds,
-                    intermediate_tensors,
-                    compute_stream,
-                    dp_metadata,
-                    batch_descriptor,
-                    cudagraph_runtime_mode,
-                )
+                try:
+                    return _UBatchWrapper._make_ubatch_metadata(
+                        self,
+                        ubatch_slices,
+                        attn_metadata,
+                        slot_mapping,
+                        input_ids,
+                        positions,
+                        inputs_embeds,
+                        intermediate_tensors,
+                        compute_stream,
+                        dp_metadata,
+                        batch_descriptor,
+                        cudagraph_runtime_mode,
+                    )
+                finally:
+                    self._afd_use_native_ubatch_metadata = False
             raise RuntimeError(
                 "AFDUBatchWrapper requires "
                 "ForwardContext.additional_kwargs['afd_metadata']",

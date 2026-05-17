@@ -154,6 +154,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
 
     def _install_afd_ubatch_wrapper(self) -> None:
         if isinstance(self.model, AFDUBatchWrapper):
+            self.model.configure_afd_context_provider(self)
             return
 
         runtime_mode = _resolve_cudagraph_mode_none()
@@ -167,6 +168,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             runtime_mode,
             self.device,
         )
+        self.model.configure_afd_context_provider(self)
 
     def _ensure_dp_metadata(self, dp_metadata: Any) -> Any:
         if dp_metadata is not None:
