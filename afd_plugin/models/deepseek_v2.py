@@ -18,6 +18,7 @@ from vllm.model_executor.models import deepseek_v2 as native
 
 from afd_plugin.connectors import AFDConnectorMetadata
 from afd_plugin.models import get_afd_metadata_from_forward_context
+from afd_plugin.runtime.dbo import maybe_apply_dbo_yield
 from afd_plugin.tracing import afd_trace, tensor_summary
 
 
@@ -295,6 +296,10 @@ class AFDDeepseekV2Model(native.DeepseekV2Model):
                 ubatch_idx=ubatch_idx,
                 transaction_id=transaction_id,
                 tensor=tensor_summary(hidden_states),
+            )
+            hidden_states = maybe_apply_dbo_yield(
+                hidden_states,
+                role="attention",
             )
 
         afd_trace(
