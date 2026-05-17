@@ -74,6 +74,10 @@ class AFDDeepseekV2Model(native.DeepseekV2Model):
     def __init__(self, *, vllm_config: object, prefix: str = "") -> None:
         torch.nn.Module.__init__(self)
 
+        self.vllm_config = vllm_config
+        self.compilation_config = vllm_config.compilation_config
+        self.do_not_compile = True
+
         config = vllm_config.model_config.hf_config
         quant_config = vllm_config.quant_config
         self.config = config

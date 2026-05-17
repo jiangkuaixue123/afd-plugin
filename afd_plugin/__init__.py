@@ -87,6 +87,16 @@ def register_afd() -> None:
             exc_info=True,
         )
 
+    try:
+        from afd_plugin.compat.patches import apply_engine_core_patch
+
+        apply_engine_core_patch()
+    except Exception:
+        _logger.debug(
+            "AFD plugin: EngineCore patch could not be applied",
+            exc_info=True,
+        )
+
     from vllm.model_executor.models import ModelRegistry
 
     for model_arch, model_cls in _DEEPSEEK_MODEL_REGISTRATIONS.items():

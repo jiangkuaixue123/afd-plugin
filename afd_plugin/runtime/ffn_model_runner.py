@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from afd_plugin.config import AFDConfig, parse_afd_config
@@ -129,11 +130,23 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
 
         rank_ffn_output = None
         num_layers = max(int(self.num_layers or 0), 1)
-        for layer_idx in range(num_layers):
-            hidden_states, metadata = self.connector.recv_attn_output()
-            metadata.layer_idx = layer_idx
-            rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
-            self.connector.send_ffn_output(rank_ffn_output, metadata)
+        with _ffn_forward_context(
+            getattr(self, "vllm_config", None),
+        ) as forward_context:
+            for layer_idx in range(num_layers):
+                hidden_states, metadata = self.connector.recv_attn_output()
+                metadata.layer_idx = layer_idx
+                if forward_context is not None:
+                    forward_context.dp_metadata = dp_metadata_list.get(
+                        getattr(metadata, "stage_idx", 0),
+                    )
+                recv_handle_list = getattr(metadata, "recv_handle_list", None)
+                if recv_handle_list is not None:
+                    for work in recv_handle_list:
+                        work.wait()
+                    metadata.recv_handle_list = None
+                rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
+                self.connector.send_ffn_output(rank_ffn_output, metadata)
         return rank_ffn_output
 
     def _execute_eager_mode(self, hidden_states: Any, layer_idx: int) -> Any:
@@ -229,6 +242,18 @@ def _resolve_world_ranks() -> tuple[int, int]:
         return int(group.rank), int(group.local_rank)
     except Exception:
         return 0, 0
+
+
+@contextmanager
+def _ffn_forward_context(vllm_config: object):
+    try:
+        from vllm.forward_context import get_forward_context, set_forward_context
+    except Exception:
+        yield None
+        return
+
+    with set_forward_context(attn_metadata=None, vllm_config=vllm_config):
+        yield get_forward_context()
 
 
 def _resolve_num_hidden_layers(model_config: object | None) -> int:
