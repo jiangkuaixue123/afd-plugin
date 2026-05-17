@@ -23,6 +23,7 @@ from afd_plugin.distributed import (
     resolve_hidden_size,
     resolve_num_hidden_layers,
 )
+from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
 
 
 class _TensorMetadata(NamedTuple):
@@ -71,6 +72,18 @@ class P2PAFDConnector(AFDConnectorBase):
         self.p2p_pg: Any | None = None
         self.a2e_pynccl: Any | None = None
         self.e2a_pynccl: Any | None = None
+        afd_trace(
+            "p2p_init",
+            role=afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            local_rank=self.local_rank,
+            attn_size=self.attn_size,
+            ffn_size=self.ffn_size,
+            group_size=len(self.mapping.subgroup_ranks),
+            group_rank=self.mapping.rank_in_subgroup,
+            dp_dsts=self.dst_list,
+        )
 
     def close(self) -> None:
         for communicator_name in ("a2e_pynccl", "e2a_pynccl"):
@@ -161,6 +174,21 @@ class P2PAFDConnector(AFDConnectorBase):
                 dtype,
                 torch.Size([num_tokens, self.hidden_size]),
             )
+        afd_trace(
+            "p2p_update_state_from_dp_metadata",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            dp_rank=dp_rank,
+            stages=sorted(int(stage_idx) for stage_idx in dp_metadata_list),
+            dp_metadata=dp_metadata_summary(dp_metadata_list),
+            tensor_metadata={
+                stage_idx: tuple(metadata.size)
+                for stage_idx, metadata in self._tensor_metadata_list.items()
+            },
+            is_graph_capturing=is_graph_capturing,
+            is_warmup=is_warmup,
+        )
 
         model_config = getattr(self.vllm_config, "model_config", None)
         if self.afd_config.role == "ffn" and not getattr(
@@ -193,6 +221,13 @@ class P2PAFDConnector(AFDConnectorBase):
         import torch
 
         if self.p2p_pg is None:
+            afd_trace(
+                "p2p_send_dp_metadata_skip_no_group",
+                role=self.afd_config.role,
+                world_rank=self.world_rank,
+                p2p_rank=self.p2p_rank,
+                dp_metadata=dp_metadata_summary(dp_metadata_list),
+            )
             return
         device = torch.device(f"cuda:{self.local_rank}")
         send_data = (dp_metadata_list, is_graph_capturing, is_warmup)
@@ -206,8 +241,26 @@ class P2PAFDConnector(AFDConnectorBase):
         )
 
         for dst in self.dst_list:
+            afd_trace(
+                "p2p_send_dp_metadata_begin",
+                role=self.afd_config.role,
+                world_rank=self.world_rank,
+                p2p_rank=self.p2p_rank,
+                dst=dst,
+                bytes=int(size_tensor.item()),
+                dp_metadata=dp_metadata_summary(dp_metadata_list),
+                is_graph_capturing=is_graph_capturing,
+                is_warmup=is_warmup,
+            )
             torch.distributed.send(size_tensor, dst=dst, group=self.p2p_pg)
             torch.distributed.send(object_tensor, dst=dst, group=self.p2p_pg)
+            afd_trace(
+                "p2p_send_dp_metadata_done",
+                role=self.afd_config.role,
+                world_rank=self.world_rank,
+                p2p_rank=self.p2p_rank,
+                dst=dst,
+            )
 
     def recv_dp_metadata_list(
         self,
@@ -222,11 +275,26 @@ class P2PAFDConnector(AFDConnectorBase):
         src = self.p2p_rank % self.min_size + self.ffn_size
         device = torch.device(f"cuda:{self.local_rank}")
         size_tensor = torch.empty(1, dtype=torch.long, device=device)
+        afd_trace(
+            "p2p_recv_dp_metadata_size_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            src=src,
+        )
         rank_size = torch.distributed.recv(size_tensor, src=src, group=self.p2p_pg)
         object_tensor = torch.empty(
             int(size_tensor.item()),
             dtype=torch.uint8,
             device=device,
+        )
+        afd_trace(
+            "p2p_recv_dp_metadata_body_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            src=src,
+            bytes=int(size_tensor.item()),
         )
         rank_object = torch.distributed.recv(object_tensor, src=src, group=self.p2p_pg)
         if rank_object != rank_size:
@@ -238,6 +306,16 @@ class P2PAFDConnector(AFDConnectorBase):
         else:
             data, is_graph_capturing = obj
             is_warmup = False
+        afd_trace(
+            "p2p_recv_dp_metadata_done",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            src=src,
+            dp_metadata=dp_metadata_summary(data),
+            is_graph_capturing=is_graph_capturing,
+            is_warmup=is_warmup,
+        )
         return data, is_graph_capturing, is_warmup
 
     def send_attn_output(
@@ -251,6 +329,16 @@ class P2PAFDConnector(AFDConnectorBase):
                 f"AFD metadata token count {metadata.total_tokens}",
             )
         metadata.direction = "attention_to_ffn"
+        afd_trace(
+            "p2p_send_attn_output",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            layer_idx=metadata.layer_idx,
+            stage_idx=metadata.stage_idx,
+            ubatch_idx=metadata.ubatch_idx,
+            tensor=tensor_summary(hidden_states),
+        )
         self._send_hidden_states(hidden_states, 0, self.a2e_group, self.a2e_pynccl)
 
     def recv_ffn_output(self, handle: Any = None, **kwargs: Any) -> Any:
@@ -259,13 +347,30 @@ class P2PAFDConnector(AFDConnectorBase):
         ubatch_idx = kwargs.get("ubatch_idx")
         if ubatch_idx is None:
             ubatch_idx = self._current_ubatch_idx()
-        return self._recv_hidden_states(
+        afd_trace(
+            "p2p_recv_ffn_output_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            ubatch_idx=ubatch_idx,
+            expected_shape=tuple(self._tensor_metadata_list[int(ubatch_idx)].size),
+        )
+        output = self._recv_hidden_states(
             0,
             self.e2a_group,
             self.e2a_pynccl,
             self._tensor_metadata_list[int(ubatch_idx)],
             ref_tensor=ref_tensor,
         )
+        afd_trace(
+            "p2p_recv_ffn_output_done",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            ubatch_idx=ubatch_idx,
+            tensor=tensor_summary(output),
+        )
+        return output
 
     def recv_attn_output(
         self,
@@ -278,6 +383,15 @@ class P2PAFDConnector(AFDConnectorBase):
         ubatch_idx = 0 if ubatch_idx is None else int(ubatch_idx)
         tensor_metadata = self._tensor_metadata_list[ubatch_idx]
         hidden_states_list: list[Any] = []
+        afd_trace(
+            "p2p_recv_attn_output_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            ubatch_idx=ubatch_idx,
+            expected_shape=tuple(tensor_metadata.size),
+            peer_count=max(self.group_size - 1, 0),
+        )
 
         for src in range(1, self.group_size):
             ref_tensor = None
@@ -295,6 +409,15 @@ class P2PAFDConnector(AFDConnectorBase):
                     ref_tensor=ref_tensor,
                 ),
             )
+            afd_trace(
+                "p2p_recv_attn_output_part_done",
+                role=self.afd_config.role,
+                world_rank=self.world_rank,
+                p2p_rank=self.p2p_rank,
+                ubatch_idx=ubatch_idx,
+                src=src,
+                tensor=tensor_summary(hidden_states_list[-1]),
+            )
 
         if not hidden_states_list:
             raise RuntimeError("P2P FFN rank has no Attention peers")
@@ -311,6 +434,15 @@ class P2PAFDConnector(AFDConnectorBase):
             device=tensor_metadata.device,
             ubatch_idx=ubatch_idx,
         )
+        afd_trace(
+            "p2p_recv_attn_output_done",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            ubatch_idx=ubatch_idx,
+            tensor=tensor_summary(hidden_states),
+            seq_lens=metadata.seq_lens,
+        )
         return hidden_states, metadata
 
     def send_ffn_output(
@@ -323,6 +455,17 @@ class P2PAFDConnector(AFDConnectorBase):
                 f"ffn_output shape {ffn_output.shape!r} does not match metadata",
             )
         metadata.direction = "ffn_to_attention"
+        afd_trace(
+            "p2p_send_ffn_output",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            layer_idx=metadata.layer_idx,
+            stage_idx=metadata.stage_idx,
+            ubatch_idx=metadata.ubatch_idx,
+            ratio=self.ratio,
+            tensor=tensor_summary(ffn_output),
+        )
         if self.ratio == 1:
             self._send_hidden_states(ffn_output, 1, self.e2a_group, self.e2a_pynccl)
             return
@@ -371,10 +514,27 @@ class P2PAFDConnector(AFDConnectorBase):
 
         import torch
 
+        afd_trace(
+            "p2p_send_hidden_states_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            group_rank=getattr(process_group, "rank", None),
+            group_world_size=getattr(process_group, "world_size", None),
+            dst=dst,
+            tensor=tensor_summary(hidden_states),
+        )
         communicator.send(
             hidden_states,
             dst,
             stream=torch.cuda.current_stream(hidden_states.device),
+        )
+        afd_trace(
+            "p2p_send_hidden_states_done",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            dst=dst,
         )
 
     def _recv_hidden_states(
@@ -403,10 +563,28 @@ class P2PAFDConnector(AFDConnectorBase):
                 dtype=tensor_metadata.dtype,
                 device=tensor_metadata.device,
             )
+        afd_trace(
+            "p2p_recv_hidden_states_begin",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            group_rank=getattr(process_group, "rank", None),
+            group_world_size=getattr(process_group, "world_size", None),
+            src=src,
+            tensor=tensor_summary(hidden_states),
+        )
         communicator.recv(
             hidden_states,
             src,
             stream=torch.cuda.current_stream(hidden_states.device),
+        )
+        afd_trace(
+            "p2p_recv_hidden_states_done",
+            role=self.afd_config.role,
+            world_rank=self.world_rank,
+            p2p_rank=self.p2p_rank,
+            src=src,
+            tensor=tensor_summary(hidden_states),
         )
         return hidden_states
 

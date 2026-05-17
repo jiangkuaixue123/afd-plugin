@@ -20,6 +20,7 @@ from afd_plugin.runtime.ubatch_wrapper import (
     build_ubatch_dp_metadata_list,
     trace_ubatch_slices,
 )
+from afd_plugin.tracing import afd_trace, dp_metadata_summary
 
 _GPUModelRunner, _GPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.gpu_model_runner",
@@ -120,8 +121,28 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             should_send = bool(is_top_rank(rank))
 
         send = getattr(self.afd_connector, "send_dp_metadata_list", None)
+        afd_trace(
+            "attn_send_dp_metadata_decision",
+            rank=rank,
+            should_send=should_send,
+            stages=sorted(int(stage_idx) for stage_idx in dp_metadata_list),
+            dp_metadata=dp_metadata_summary(dp_metadata_list),
+            is_warmup=self._is_warmup,
+        )
         if should_send and callable(send):
+            afd_trace(
+                "attn_send_dp_metadata_begin",
+                rank=rank,
+                dp_metadata=dp_metadata_summary(dp_metadata_list),
+                is_warmup=self._is_warmup,
+            )
             send(dp_metadata_list, is_warmup=self._is_warmup)
+            afd_trace(
+                "attn_send_dp_metadata_done",
+                rank=rank,
+                dp_metadata=dp_metadata_summary(dp_metadata_list),
+                is_warmup=self._is_warmup,
+            )
 
     def load_model(self, *args: Any, **kwargs: Any) -> Any:
         use_ubatching = _is_ubatching_enabled(self.vllm_config)
