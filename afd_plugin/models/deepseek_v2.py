@@ -226,6 +226,13 @@ class AFDDeepseekV2Model(native.DeepseekV2Model):
                 device=hidden_states.device,
                 num_of_stages=getattr(afd_metadata, "num_of_stages", 1),
                 afd_tokens_lens=getattr(afd_metadata, "afd_tokens_lens", []),
+                ubatch_idx=getattr(afd_metadata, "ubatch_idx", stage_idx),
+                transaction_id=getattr(afd_metadata, "transaction_id", None),
+                afd_tokens_unpadded_lens=getattr(
+                    afd_metadata,
+                    "afd_tokens_unpadded_lens",
+                    [],
+                ),
             )
             afd_connector.send_attn_output(hidden_states, metadata)
 

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
 from afd_plugin.config import AFDConfig, parse_afd_config
@@ -13,6 +15,11 @@ from afd_plugin.connectors import (
     AFDSingleDPMetadata,
 )
 from afd_plugin.runtime._optional import optional_class
+from afd_plugin.runtime.ubatch_wrapper import (
+    AFDUBatchWrapper,
+    build_ubatch_dp_metadata_list,
+    trace_ubatch_slices,
+)
 
 _GPUModelRunner, _GPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.gpu_model_runner",
@@ -36,8 +43,12 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self.afd_config = self.parse_config(self.vllm_config)
         if not self.afd_config.enabled:
             raise ValueError("AFD Attention runtime requires enabled=true")
-        fail_if_ubatching_enabled(self.vllm_config)
+        fail_if_unsupported_ubatching(self.vllm_config)
         fail_if_cuda_graph_enabled(self.vllm_config)
+        self.afd_config = _with_dp_derived_afd_rank(
+            self.vllm_config,
+            self.afd_config,
+        )
         rank, local_rank = _resolve_world_ranks()
         self.afd_connector = AFDConnectorFactory.create_connector(
             rank,
@@ -48,6 +59,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self.afd_connector.init_afd_connector()
         self._is_warmup = False
         self._afd_pending_metadata: AFDMetadata | None = None
+        self._afd_transaction_counter = 0
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -59,14 +71,20 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         num_tokens_unpadded: int,
     ) -> AFDMetadata:
         if ubatch_slices and len(ubatch_slices) > 1:
+            trace_ubatch_slices(ubatch_slices, source="attention_metadata")
             afd_tokens_start_loc = [ub.token_slice.start for ub in ubatch_slices]
             afd_reqs_start_loc = [ub.request_slice.start for ub in ubatch_slices]
             afd_tokens_lens = [ub.num_tokens for ub in ubatch_slices]
+            afd_tokens_unpadded_lens = [
+                int(getattr(ub, "num_tokens_unpadded", ub.num_tokens))
+                for ub in ubatch_slices
+            ]
             num_of_stages = len(ubatch_slices)
         else:
             afd_tokens_start_loc = [0]
             afd_reqs_start_loc = [0]
             afd_tokens_lens = [num_tokens_unpadded]
+            afd_tokens_unpadded_lens = [num_tokens_unpadded]
             num_of_stages = 1
 
         return AFDMetadata(
@@ -76,14 +94,21 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             afd_connector=self.afd_connector,
             afd_tokens_lens=afd_tokens_lens,
             num_of_stages=num_of_stages,
+            transaction_id=self._next_afd_transaction_id(),
+            afd_tokens_unpadded_lens=afd_tokens_unpadded_lens,
         )
 
     def _send_dp_metadata(self, dp_metadata: Any, ubatch_slices: Any) -> None:
         if ubatch_slices and len(ubatch_slices) > 1:
-            raise RuntimeError("AFD + ubatching is deferred to Phase 5")
-
-        dp_metadata = self._ensure_dp_metadata(dp_metadata)
-        dp_metadata_list = {0: dp_metadata}
+            dp_metadata_list = {
+                idx: metadata
+                for idx, metadata in enumerate(
+                    build_ubatch_dp_metadata_list(self.vllm_config, ubatch_slices),
+                )
+            }
+        else:
+            dp_metadata = self._ensure_dp_metadata(dp_metadata)
+            dp_metadata_list = {0: dp_metadata}
         update = getattr(self.afd_connector, "update_state_from_dp_metadata", None)
         if callable(update):
             update(dp_metadata_list, is_warmup=self._is_warmup)
@@ -97,6 +122,30 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         send = getattr(self.afd_connector, "send_dp_metadata_list", None)
         if should_send and callable(send):
             send(dp_metadata_list, is_warmup=self._is_warmup)
+
+    def load_model(self, *args: Any, **kwargs: Any) -> Any:
+        use_ubatching = _is_ubatching_enabled(self.vllm_config)
+        with _use_afd_ubatch_wrapper_during_load(use_ubatching):
+            result = super().load_model(*args, **kwargs)
+        if use_ubatching:
+            self._install_afd_ubatch_wrapper()
+        return result
+
+    def _install_afd_ubatch_wrapper(self) -> None:
+        if isinstance(self.model, AFDUBatchWrapper):
+            return
+
+        runtime_mode = _resolve_cudagraph_mode_none()
+        native_wrapper_cls = _resolve_native_ubatch_wrapper()
+        model = self.model
+        if native_wrapper_cls is not None and isinstance(model, native_wrapper_cls):
+            model = model.unwrap()
+        self.model = AFDUBatchWrapper(
+            model,
+            self.vllm_config,
+            runtime_mode,
+            self.device,
+        )
 
     def _ensure_dp_metadata(self, dp_metadata: Any) -> Any:
         if dp_metadata is not None:
@@ -147,6 +196,66 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         )
         return super()._build_attention_metadata(*args, **kwargs)
 
+    def _determine_batch_execution_and_padding(self, *args: Any, **kwargs: Any) -> Any:
+        result = super()._determine_batch_execution_and_padding(*args, **kwargs)
+        (
+            cudagraph_mode,
+            batch_descriptor,
+            should_ubatch,
+            num_tokens_across_dp,
+            cudagraph_stats,
+        ) = result
+        if should_ubatch:
+            return result
+        should_ubatch = self._should_ubatch_without_vllm_dp(*args, **kwargs)
+        return (
+            cudagraph_mode,
+            batch_descriptor,
+            should_ubatch,
+            num_tokens_across_dp,
+            cudagraph_stats,
+        )
+
+    def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["allow_microbatching"] = False
+        return super()._dummy_run(*args, **kwargs)
+
+    def _should_ubatch_without_vllm_dp(self, *args: Any, **kwargs: Any) -> bool:
+        parallel_config = getattr(self.vllm_config, "parallel_config", None)
+        if parallel_config is None:
+            return False
+        if int(getattr(parallel_config, "data_parallel_size", 1)) > 1:
+            return False
+        if not bool(getattr(parallel_config, "use_ubatching", False)):
+            return False
+        if not bool(kwargs.get("allow_microbatching", True)):
+            return False
+
+        names = [
+            "num_tokens",
+            "num_reqs",
+            "num_scheduled_tokens_np",
+            "max_num_scheduled_tokens",
+            "use_cascade_attn",
+            "allow_microbatching",
+            "force_eager",
+            "force_uniform_decode",
+        ]
+        values = dict(zip(names, args, strict=False))
+        values.update(kwargs)
+        uniform_decode = self._is_uniform_decode(
+            max_num_scheduled_tokens=values["max_num_scheduled_tokens"],
+            uniform_decode_query_len=self.uniform_decode_query_len,
+            num_tokens=values["num_tokens"],
+            num_reqs=values["num_reqs"],
+            force_uniform_decode=values.get("force_uniform_decode"),
+        )
+        return _check_ubatch_thresholds(
+            parallel_config,
+            int(values["num_tokens"]),
+            bool(uniform_decode),
+        )
+
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
         from vllm.forward_context import get_forward_context
 
@@ -162,17 +271,25 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if callable(parent_shutdown):
             parent_shutdown()
 
+    def _next_afd_transaction_id(self) -> str:
+        counter = getattr(self, "_afd_transaction_counter", 0)
+        self._afd_transaction_counter = counter + 1
+        return f"afd-{counter}"
 
-def fail_if_ubatching_enabled(vllm_config: object) -> None:
+
+def fail_if_unsupported_ubatching(vllm_config: object) -> None:
     parallel_config = getattr(vllm_config, "parallel_config", None)
     if parallel_config is None:
         return
-    if getattr(parallel_config, "use_ubatching", False) or getattr(
-        parallel_config,
-        "enable_dbo",
-        False,
-    ):
-        raise RuntimeError("AFD + ubatching/DBO is deferred to Phase 5")
+    num_ubatches = int(getattr(parallel_config, "num_ubatches", 1))
+    if _is_ubatching_enabled(vllm_config) and num_ubatches != 2:
+        raise RuntimeError(
+            "AFD Phase 5 currently supports exactly two ubatches; "
+            f"got num_ubatches={num_ubatches}",
+        )
+
+
+fail_if_ubatching_enabled = fail_if_unsupported_ubatching
 
 
 def fail_if_cuda_graph_enabled(vllm_config: object) -> None:
@@ -193,8 +310,109 @@ def _resolve_world_ranks() -> tuple[int, int]:
         return 0, 0
 
 
+def _with_dp_derived_afd_rank(
+    vllm_config: object,
+    afd_config: AFDConfig,
+) -> AFDConfig:
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    if parallel_config is None:
+        return afd_config
+    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+    if dp_size <= 1:
+        return afd_config
+    dp_rank = int(getattr(parallel_config, "data_parallel_rank", 0))
+    role_size = (
+        afd_config.num_attention_servers
+        if afd_config.role == "attention"
+        else afd_config.num_ffn_servers
+    )
+    role_rank = afd_config.afd_server_rank + dp_rank
+    if role_rank >= role_size:
+        raise ValueError(
+            "AFD role rank derived from data_parallel_rank is out of range: "
+            f"base={afd_config.afd_server_rank}, dp_rank={dp_rank}, "
+            f"role_size={role_size}",
+        )
+    return replace(afd_config, afd_server_rank=role_rank)
+
+
+def _is_ubatching_enabled(vllm_config: object) -> bool:
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    if parallel_config is None:
+        return False
+    return bool(
+        getattr(parallel_config, "use_ubatching", False)
+        or getattr(parallel_config, "enable_dbo", False)
+        or int(getattr(parallel_config, "ubatch_size", 1)) > 1
+    )
+
+
+def _resolve_native_ubatch_wrapper() -> type[Any] | None:
+    try:
+        from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
+
+        return UBatchWrapper
+    except Exception:
+        return None
+
+
+def _resolve_cudagraph_mode_none() -> Any:
+    try:
+        from vllm.config import CUDAGraphMode
+
+        return CUDAGraphMode.NONE
+    except Exception:
+        return None
+
+
+def _check_ubatch_thresholds(
+    parallel_config: object,
+    num_tokens: int,
+    uniform_decode: bool,
+) -> bool:
+    try:
+        from vllm.v1.worker.ubatch_utils import check_ubatch_thresholds
+
+        return bool(
+            check_ubatch_thresholds(parallel_config, num_tokens, uniform_decode),
+        )
+    except Exception:
+        if not bool(getattr(parallel_config, "use_ubatching", False)):
+            return False
+        if uniform_decode:
+            threshold = int(getattr(parallel_config, "dbo_decode_token_threshold", 32))
+        else:
+            threshold = int(
+                getattr(parallel_config, "dbo_prefill_token_threshold", 512),
+            )
+        return num_tokens >= threshold
+
+
+@contextmanager
+def _use_afd_ubatch_wrapper_during_load(enabled: bool):
+    if not enabled:
+        yield
+        return
+    try:
+        import vllm.v1.worker.gpu_model_runner as gpu_model_runner
+    except Exception:
+        yield
+        return
+
+    original = getattr(gpu_model_runner, "UBatchWrapper", None)
+    gpu_model_runner.UBatchWrapper = AFDUBatchWrapper
+    try:
+        yield
+    finally:
+        if original is None:
+            delattr(gpu_model_runner, "UBatchWrapper")
+        else:
+            gpu_model_runner.UBatchWrapper = original
+
+
 __all__ = [
     "AFDAttentionModelRunner",
     "fail_if_cuda_graph_enabled",
     "fail_if_ubatching_enabled",
+    "fail_if_unsupported_ubatching",
 ]

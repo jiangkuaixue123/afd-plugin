@@ -11,8 +11,9 @@ from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.runtime._optional import optional_class
 from afd_plugin.runtime.attention_model_runner import (
+    _with_dp_derived_afd_rank,
     fail_if_cuda_graph_enabled,
-    fail_if_ubatching_enabled,
+    fail_if_unsupported_ubatching,
 )
 
 _LoRAModelRunnerMixin, _LoRAModelRunnerMixin_IMPORT_ERROR = optional_class(
@@ -41,8 +42,9 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         self.afd_config = self.parse_config(vllm_config)
         if not self.afd_config.enabled:
             raise ValueError("AFD FFN runtime requires enabled=true")
-        fail_if_ubatching_enabled(vllm_config)
+        fail_if_unsupported_ubatching(vllm_config)
         fail_if_cuda_graph_enabled(vllm_config)
+        self.afd_config = _with_dp_derived_afd_rank(vllm_config, self.afd_config)
 
         rank, local_rank = _resolve_world_ranks()
         self.connector = AFDConnectorFactory.create_connector(
@@ -130,23 +132,26 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
 
         rank_ffn_output = None
         num_layers = max(int(self.num_layers or 0), 1)
+        stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
         with _ffn_forward_context(
             getattr(self, "vllm_config", None),
         ) as forward_context:
             for layer_idx in range(num_layers):
-                hidden_states, metadata = self.connector.recv_attn_output()
-                metadata.layer_idx = layer_idx
-                if forward_context is not None:
-                    forward_context.dp_metadata = dp_metadata_list.get(
-                        getattr(metadata, "stage_idx", 0),
-                    )
-                recv_handle_list = getattr(metadata, "recv_handle_list", None)
-                if recv_handle_list is not None:
-                    for work in recv_handle_list:
-                        work.wait()
-                    metadata.recv_handle_list = None
-                rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
-                self.connector.send_ffn_output(rank_ffn_output, metadata)
+                for stage_idx in stage_ids:
+                    hidden_states, metadata = self._recv_attn_output(stage_idx)
+                    metadata.layer_idx = layer_idx
+                    if forward_context is not None:
+                        forward_context.dp_metadata = dp_metadata_list.get(
+                            getattr(metadata, "stage_idx", stage_idx),
+                        )
+                        forward_context.additional_kwargs["afd_metadata"] = metadata
+                    recv_handle_list = getattr(metadata, "recv_handle_list", None)
+                    if recv_handle_list is not None:
+                        for work in recv_handle_list:
+                            work.wait()
+                        metadata.recv_handle_list = None
+                    rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
+                    self.connector.send_ffn_output(rank_ffn_output, metadata)
         return rank_ffn_output
 
     def _execute_eager_mode(self, hidden_states: Any, layer_idx: int) -> Any:
@@ -155,6 +160,12 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         if callable(compute):
             return compute(hidden_states, layer_idx)
         return hidden_states
+
+    def _recv_attn_output(self, stage_idx: int) -> tuple[Any, Any]:
+        try:
+            return self.connector.recv_attn_output(ubatch_idx=stage_idx)
+        except TypeError:
+            return self.connector.recv_attn_output()
 
     def _update_connector_state(
         self,

@@ -6,10 +6,12 @@ from afd_plugin.runtime.attention_model_runner import AFDAttentionModelRunner
 from afd_plugin.runtime.attention_worker import AFDAttentionWorker
 from afd_plugin.runtime.ffn_model_runner import GPUFFNModelRunner
 from afd_plugin.runtime.ffn_worker import AFDFFNWorker
+from afd_plugin.runtime.ubatch_wrapper import AFDUBatchWrapper
 
 __all__ = [
     "AFDAttentionModelRunner",
     "AFDAttentionWorker",
     "AFDFFNWorker",
+    "AFDUBatchWrapper",
     "GPUFFNModelRunner",
 ]

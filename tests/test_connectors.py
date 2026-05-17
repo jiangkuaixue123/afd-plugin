@@ -84,3 +84,60 @@ def test_connector_metadata_validates_sequence_lengths():
             dtype="bf16",
             device="cuda:0",
         )
+
+
+def test_dummy_connector_matches_out_of_order_ubatch_responses():
+    attention_connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        SimpleNamespace(),
+        AFDConfig(enabled=True, role="attention"),
+    )
+    ffn_connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        SimpleNamespace(),
+        AFDConfig(enabled=True, role="ffn"),
+    )
+    metadata_0 = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=0,
+        seq_len=3,
+        dtype="bf16",
+        device="cpu",
+        ubatch_idx=0,
+        transaction_id="batch-1",
+    )
+    metadata_1 = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=1,
+        seq_len=3,
+        dtype="bf16",
+        device="cpu",
+        ubatch_idx=1,
+        transaction_id="batch-1",
+    )
+
+    attention_connector.send_attn_output(_FakeTensor(), metadata_0)
+    attention_connector.send_attn_output(_FakeTensor(), metadata_1)
+    hidden_1, recv_metadata_1 = ffn_connector.recv_attn_output(
+        timeout_ms=100,
+        ubatch_idx=1,
+    )
+    hidden_0, recv_metadata_0 = ffn_connector.recv_attn_output(
+        timeout_ms=100,
+        ubatch_idx=0,
+    )
+    ffn_connector.send_ffn_output(("ffn-1", hidden_1.shape), recv_metadata_1)
+    ffn_connector.send_ffn_output(("ffn-0", hidden_0.shape), recv_metadata_0)
+
+    assert recv_metadata_1.message_key.ubatch_idx == 1
+    assert recv_metadata_0.message_key.ubatch_idx == 0
+    assert attention_connector.recv_ffn_output(timeout_ms=100, ubatch_idx=0) == (
+        "ffn-0",
+        (3, 8),
+    )
+    assert attention_connector.recv_ffn_output(timeout_ms=100, ubatch_idx=1) == (
+        "ffn-1",
+        (3, 8),
+    )

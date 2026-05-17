@@ -1,0 +1,315 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
+"""AFD-owned vLLM ubatch wrapper.
+
+This module stays import-safe without vLLM. Runtime imports are intentionally
+inside methods that only run after vLLM has loaded the native ubatching stack.
+"""
+
+from __future__ import annotations
+
+import os
+from contextlib import nullcontext
+from typing import Any
+
+from afd_plugin.connectors import AFDMetadata, AFDSingleDPMetadata
+from afd_plugin.runtime._optional import optional_class
+
+_UBatchWrapper, _UBatchWrapper_IMPORT_ERROR = optional_class(
+    "vllm.v1.worker.gpu_ubatch_wrapper",
+    "UBatchWrapper",
+)
+
+
+class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
+    """Thin AFD-aware subclass of vLLM's native ``UBatchWrapper``."""
+
+    vllm_base_import_error = _UBatchWrapper_IMPORT_ERROR
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if _UBatchWrapper_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "AFDUBatchWrapper requires an importable vLLM runtime",
+            ) from _UBatchWrapper_IMPORT_ERROR
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def _create_sm_control_context(vllm_config: object) -> object:
+        if _is_afd_enabled(vllm_config):
+            return nullcontext()
+        return _UBatchWrapper._create_sm_control_context(vllm_config)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        from vllm.config import CUDAGraphMode
+        from vllm.forward_context import get_forward_context
+
+        forward_context = get_forward_context()
+        ubatch_slices = forward_context.ubatch_slices
+        if ubatch_slices is None:
+            return super().__call__(*args, **kwargs)
+
+        cudagraph_runtime_mode = forward_context.cudagraph_runtime_mode
+        if cudagraph_runtime_mode is CUDAGraphMode.FULL:
+            raise RuntimeError(
+                "AFD ubatching CUDA graph support is deferred to Phase 6",
+            )
+        trace_ubatch_slices(ubatch_slices, source="wrapper")
+        parent_additional_kwargs = dict(
+            getattr(forward_context, "additional_kwargs", None) or {},
+        )
+        if "afd_metadata" not in parent_additional_kwargs:
+            raise RuntimeError(
+                "AFDUBatchWrapper requires "
+                "ForwardContext.additional_kwargs['afd_metadata']",
+            )
+
+        ubatch_metadata = self._make_ubatch_metadata(
+            ubatch_slices=ubatch_slices,
+            attn_metadata=forward_context.attn_metadata,
+            slot_mapping=forward_context.slot_mapping,
+            input_ids=kwargs["input_ids"],
+            positions=kwargs["positions"],
+            inputs_embeds=kwargs["inputs_embeds"],
+            intermediate_tensors=kwargs["intermediate_tensors"],
+            compute_stream=_current_cuda_stream(),
+            dp_metadata=build_ubatch_dp_metadata_list(
+                self.vllm_config,
+                ubatch_slices,
+            ),
+            batch_descriptor=forward_context.batch_descriptor,
+            cudagraph_runtime_mode=CUDAGraphMode.NONE,
+        )
+        with self.sm_control:
+            return self._run_ubatches(ubatch_metadata, self.runnable)
+
+    def _make_ubatch_metadata(
+        self,
+        ubatch_slices: Any,
+        attn_metadata: Any,
+        slot_mapping: Any,
+        input_ids: Any,
+        positions: Any,
+        inputs_embeds: Any,
+        intermediate_tensors: Any,
+        compute_stream: Any,
+        dp_metadata: list[Any],
+        batch_descriptor: Any,
+        cudagraph_runtime_mode: Any,
+    ) -> list[Any]:
+        from vllm.forward_context import create_forward_context, get_forward_context
+        from vllm.v1.worker.gpu_ubatch_wrapper import UbatchMetadata
+        from vllm.v1.worker.ubatching import make_ubatch_contexts
+
+        parent_forward_context = get_forward_context()
+        parent_additional_kwargs = dict(
+            getattr(parent_forward_context, "additional_kwargs", None) or {},
+        )
+        afd_metadata = parent_additional_kwargs.get("afd_metadata")
+        if afd_metadata is None:
+            raise RuntimeError(
+                "AFDUBatchWrapper requires "
+                "ForwardContext.additional_kwargs['afd_metadata']",
+            )
+
+        forward_contexts = []
+        has_slot_mapping = slot_mapping and isinstance(slot_mapping, list)
+        for idx, _ubatch_slice in enumerate(ubatch_slices):
+            ubatch_afd_metadata = build_ubatch_afd_metadata(
+                afd_metadata,
+                ubatch_slices,
+                idx,
+            )
+            forward_contexts.append(
+                create_forward_context(
+                    attn_metadata[idx] if attn_metadata is not None else None,
+                    self.vllm_config,
+                    dp_metadata=dp_metadata[idx],
+                    batch_descriptor=batch_descriptor,
+                    cudagraph_runtime_mode=cudagraph_runtime_mode,
+                    slot_mapping=slot_mapping[idx] if has_slot_mapping else None,
+                    additional_kwargs=build_ubatch_additional_kwargs(
+                        parent_additional_kwargs,
+                        ubatch_afd_metadata,
+                    ),
+                ),
+            )
+
+        ubatch_ctxs = make_ubatch_contexts(
+            num_micro_batches=len(ubatch_slices),
+            comm_stream=self.comm_stream,
+            compute_stream=compute_stream,
+            forward_contexts=forward_contexts,
+            ready_barrier=self.ready_barrier,
+        )
+
+        ubatch_metadata: list[Any] = []
+        for idx, ubatch_slice in enumerate(ubatch_slices):
+            (
+                sliced_input_ids,
+                sliced_positions,
+                sliced_inputs_embeds,
+                sliced_intermediate_tensors,
+            ) = self._slice_model_inputs(
+                ubatch_slice.token_slice,
+                input_ids,
+                positions,
+                inputs_embeds,
+                intermediate_tensors,
+            )
+            ubatch_metadata.append(
+                UbatchMetadata(
+                    context=ubatch_ctxs[idx],
+                    input_ids=sliced_input_ids,
+                    positions=sliced_positions,
+                    inputs_embeds=sliced_inputs_embeds,
+                    intermediate_tensors=sliced_intermediate_tensors,
+                    num_tokens=ubatch_slice.num_tokens,
+                ),
+            )
+
+        return ubatch_metadata
+
+
+def build_ubatch_afd_metadata(
+    afd_metadata: AFDMetadata,
+    ubatch_slices: Any,
+    ubatch_idx: int,
+) -> AFDMetadata:
+    """Clone parent AFD metadata for one vLLM ubatch."""
+
+    if ubatch_idx < 0 or ubatch_idx >= len(ubatch_slices):
+        raise IndexError(f"ubatch_idx {ubatch_idx} out of range")
+
+    ubatch_slice = ubatch_slices[ubatch_idx]
+    clone = afd_metadata.clone()
+    clone.ubatch_idx = ubatch_idx
+    clone.afd_stage_idx = ubatch_idx
+    clone.num_of_stages = len(ubatch_slices)
+    clone.afd_tokens_start_loc = [int(ubatch_slice.token_slice.start)]
+    clone.afd_reqs_start_loc = [int(ubatch_slice.request_slice.start)]
+    clone.afd_tokens_lens = [int(ubatch_slice.num_tokens)]
+    clone.afd_tokens_unpadded_lens = [
+        _resolve_ubatch_unpadded_tokens(afd_metadata, ubatch_slice, ubatch_idx),
+    ]
+    return clone
+
+
+def build_ubatch_additional_kwargs(
+    parent_additional_kwargs: dict[str, Any],
+    afd_metadata: AFDMetadata,
+) -> dict[str, Any]:
+    child_kwargs = dict(parent_additional_kwargs)
+    child_kwargs["afd_metadata"] = afd_metadata
+    return child_kwargs
+
+
+def build_ubatch_dp_metadata_list(
+    vllm_config: object,
+    ubatch_slices: Any,
+) -> list[Any]:
+    """Create DP metadata for each ubatch.
+
+    For DP=1 we use the plugin-owned metadata object to stay independent of
+    vLLM internals. For DP>1 we delegate to vLLM's native ``DPMetadata.make``.
+    """
+
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+    if dp_size <= 1:
+        return [
+            AFDSingleDPMetadata(
+                num_tokens_across_dp_cpu=_cpu_int_tensor([ubatch_slice.num_tokens]),
+                max_tokens_across_dp_cpu=_cpu_int_tensor([ubatch_slice.num_tokens]),
+            )
+            for ubatch_slice in ubatch_slices
+        ]
+
+    import torch
+    from vllm.forward_context import DPMetadata
+
+    ubatch_dp_metadata = []
+    for ubatch_slice in ubatch_slices:
+        num_tokens_across_dp_cpu = torch.tensor(
+            [ubatch_slice.num_tokens] * dp_size,
+            device="cpu",
+            dtype=torch.int32,
+        )
+        ubatch_dp_metadata.append(
+            DPMetadata.make(
+                parallel_config,
+                ubatch_slice.num_tokens,
+                num_tokens_across_dp_cpu,
+            ),
+        )
+    return ubatch_dp_metadata
+
+
+def _resolve_ubatch_unpadded_tokens(
+    afd_metadata: AFDMetadata,
+    ubatch_slice: Any,
+    ubatch_idx: int,
+) -> int:
+    unpadded_lens = getattr(afd_metadata, "afd_tokens_unpadded_lens", None) or []
+    if ubatch_idx < len(unpadded_lens):
+        return int(unpadded_lens[ubatch_idx])
+    return int(getattr(ubatch_slice, "num_tokens", 0))
+
+
+def _cpu_int_tensor(values: list[int]) -> Any:
+    try:
+        import torch
+
+        return torch.tensor(values, dtype=torch.int32, device="cpu")
+    except Exception:
+        return values
+
+
+def _current_cuda_stream() -> Any:
+    import torch
+
+    return torch.cuda.current_stream()
+
+
+def trace_ubatch_slices(ubatch_slices: Any, *, source: str) -> None:
+    if os.environ.get("AFD_UBATCH_TRACE") != "1":
+        return
+    token_slices = [
+        (int(ubatch_slice.token_slice.start), int(ubatch_slice.token_slice.stop))
+        for ubatch_slice in ubatch_slices
+    ]
+    request_slices = [
+        (int(ubatch_slice.request_slice.start), int(ubatch_slice.request_slice.stop))
+        for ubatch_slice in ubatch_slices
+    ]
+    token_lens = [int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices]
+    kind = "decode" if token_lens and all(length == 1 for length in token_lens) else (
+        "prefill_or_mixed"
+    )
+    print(
+        "AFD_UBATCH_TRACE "
+        f"source={source} "
+        f"kind={kind} "
+        f"num_ubatches={len(ubatch_slices)} "
+        f"token_slices={token_slices} "
+        f"request_slices={request_slices} "
+        f"token_lens={token_lens}",
+        flush=True,
+    )
+
+
+def _is_afd_enabled(vllm_config: object) -> bool:
+    try:
+        from afd_plugin.config import parse_afd_config
+
+        return parse_afd_config(vllm_config).enabled
+    except Exception:
+        return False
+
+
+__all__ = [
+    "AFDUBatchWrapper",
+    "build_ubatch_additional_kwargs",
+    "build_ubatch_afd_metadata",
+    "build_ubatch_dp_metadata_list",
+    "trace_ubatch_slices",
+]
