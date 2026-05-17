@@ -58,10 +58,12 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             getattr(forward_context, "additional_kwargs", None) or {},
         )
         if "afd_metadata" not in parent_additional_kwargs:
-            raise RuntimeError(
-                "AFDUBatchWrapper requires "
-                "ForwardContext.additional_kwargs['afd_metadata']",
-            )
+            # vLLM profile/dummy runs do not flow through
+            # AFDAttentionModelRunner._model_forward(), so they have no AFD
+            # metadata. Keep native DBO behavior enabled for those runs without
+            # doing AFD side-effecting communication.
+            trace_ubatch_slices(ubatch_slices, source="wrapper_native_no_afd")
+            return super().__call__(*args, **kwargs)
 
         ubatch_metadata = self._make_ubatch_metadata(
             ubatch_slices=ubatch_slices,
