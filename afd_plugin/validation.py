@@ -11,10 +11,9 @@ from afd_plugin.config import AFDConfig, parse_afd_config
 
 ATTENTION_WORKER_FQCN: Final[str] = "afd_plugin.runtime.AFDAttentionWorker"
 FFN_WORKER_FQCN: Final[str] = "afd_plugin.runtime.AFDFFNWorker"
-ATTENTION_MODEL_RUNNER_FQCN: Final[str] = (
-    "afd_plugin.runtime.AFDAttentionModelRunner"
-)
+ATTENTION_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.runtime.AFDAttentionModelRunner"
 FFN_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.runtime.GPUFFNModelRunner"
+UBATCH_WRAPPER_FQCN: Final[str] = "afd_plugin.runtime.AFDUBatchWrapper"
 
 
 def normalize_qualname(value: str) -> str:
@@ -110,6 +109,7 @@ __all__ = [
     "ATTENTION_WORKER_FQCN",
     "FFN_MODEL_RUNNER_FQCN",
     "FFN_WORKER_FQCN",
+    "UBATCH_WRAPPER_FQCN",
     "assert_compatible_afd_stack",
     "expected_worker_qualname",
     "normalize_qualname",

@@ -7,6 +7,7 @@ from afd_plugin.validation import (
     ATTENTION_WORKER_FQCN,
     FFN_MODEL_RUNNER_FQCN,
     FFN_WORKER_FQCN,
+    UBATCH_WRAPPER_FQCN,
     resolve_class_from_qualname,
 )
 
@@ -18,6 +19,7 @@ from afd_plugin.validation import (
         ATTENTION_MODEL_RUNNER_FQCN,
         FFN_WORKER_FQCN,
         FFN_MODEL_RUNNER_FQCN,
+        UBATCH_WRAPPER_FQCN,
         "afd_plugin.runtime:AFDAttentionWorker",
     ],
 )

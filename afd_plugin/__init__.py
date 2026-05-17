@@ -17,6 +17,7 @@ def __getattr__(name: str):
         "AFDAttentionModelRunner",
         "AFDAttentionWorker",
         "AFDFFNWorker",
+        "AFDUBatchWrapper",
         "GPUFFNModelRunner",
     }:
         from afd_plugin import runtime
@@ -88,12 +89,16 @@ def register_afd() -> None:
         )
 
     try:
-        from afd_plugin.compat.patches import apply_engine_core_patch
+        from afd_plugin.compat.patches import (
+            apply_config_validation_patch,
+            apply_engine_core_patch,
+        )
 
+        apply_config_validation_patch()
         apply_engine_core_patch()
     except Exception:
         _logger.debug(
-            "AFD plugin: EngineCore patch could not be applied",
+            "AFD plugin: compatibility patches could not be applied",
             exc_info=True,
         )
 

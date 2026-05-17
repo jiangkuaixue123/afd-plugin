@@ -23,6 +23,17 @@ class FFNNeedForwardData:
     is_dummy_run: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AFDMessageKey:
+    """Stable identity for one AFD connector message."""
+
+    transaction_id: str
+    ubatch_idx: int
+    afd_stage_idx: int
+    direction: str
+    layer_idx: int
+
+
 @dataclass(slots=True)
 class AFDSingleDPMetadata:
     """Minimal DPMetadata-compatible payload for attention DP=1."""
@@ -113,12 +124,18 @@ class AFDConnectorMetadata:
     ffn_need_forward_data: FFNNeedForwardData | None = None
     num_of_stages: int = 1
     afd_tokens_lens: list[int] = field(default_factory=list)
+    ubatch_idx: int | None = None
+    transaction_id: str | None = None
+    direction: str = "attention_to_ffn"
+    afd_tokens_unpadded_lens: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.seq_lens:
             raise ValueError("seq_lens cannot be empty")
         if any(length <= 0 for length in self.seq_lens):
             raise ValueError("all sequence lengths must be positive")
+        if self.ubatch_idx is None:
+            self.ubatch_idx = self.stage_idx
 
     @property
     def total_tokens(self) -> int:
@@ -136,6 +153,16 @@ class AFDConnectorMetadata:
     def is_multi_sequence(self) -> bool:
         return self.num_sequences > 1
 
+    @property
+    def message_key(self) -> AFDMessageKey:
+        return AFDMessageKey(
+            transaction_id=self.transaction_id or self.request_id or "default",
+            ubatch_idx=int(self.ubatch_idx or 0),
+            afd_stage_idx=int(self.stage_idx),
+            direction=self.direction,
+            layer_idx=int(self.layer_idx),
+        )
+
     @classmethod
     def create_attention_metadata(
         cls,
@@ -149,6 +176,9 @@ class AFDConnectorMetadata:
         ffn_need_forward_data: FFNNeedForwardData | None = None,
         num_of_stages: int = 1,
         afd_tokens_lens: list[int] | None = None,
+        ubatch_idx: int | None = None,
+        transaction_id: str | None = None,
+        afd_tokens_unpadded_lens: list[int] | None = None,
     ) -> AFDConnectorMetadata:
         return cls(
             layer_idx=layer_idx,
@@ -161,6 +191,9 @@ class AFDConnectorMetadata:
             timestamp=time.time(),
             num_of_stages=num_of_stages,
             afd_tokens_lens=list(afd_tokens_lens or ()),
+            ubatch_idx=ubatch_idx,
+            transaction_id=transaction_id,
+            afd_tokens_unpadded_lens=list(afd_tokens_unpadded_lens or ()),
         )
 
     @classmethod
@@ -173,6 +206,8 @@ class AFDConnectorMetadata:
         dtype: Any,
         device: Any,
         request_id: str | None = None,
+        ubatch_idx: int | None = None,
+        transaction_id: str | None = None,
     ) -> AFDConnectorMetadata:
         return cls(
             layer_idx=layer_idx,
@@ -182,6 +217,9 @@ class AFDConnectorMetadata:
             device=device,
             request_id=request_id,
             timestamp=time.time(),
+            ubatch_idx=ubatch_idx,
+            transaction_id=transaction_id,
+            direction="ffn_to_attention",
         )
 
     def get_split_indices(self) -> list[int]:
@@ -206,13 +244,22 @@ class AFDMetadata:
     afd_connector: Any
     afd_tokens_lens: list[int]
     num_of_stages: int
+    ubatch_idx: int = 0
+    transaction_id: str | None = None
+    afd_tokens_unpadded_lens: list[int] = field(default_factory=list)
 
     def clone(self) -> AFDMetadata:
-        return copy.copy(self)
+        cloned = copy.copy(self)
+        cloned.afd_tokens_start_loc = list(self.afd_tokens_start_loc)
+        cloned.afd_reqs_start_loc = list(self.afd_reqs_start_loc)
+        cloned.afd_tokens_lens = list(self.afd_tokens_lens)
+        cloned.afd_tokens_unpadded_lens = list(self.afd_tokens_unpadded_lens)
+        return cloned
 
 
 __all__ = [
     "AFDConnectorMetadata",
+    "AFDMessageKey",
     "AFDMetadata",
     "AFDSingleDPMetadata",
     "FFNNeedForwardData",

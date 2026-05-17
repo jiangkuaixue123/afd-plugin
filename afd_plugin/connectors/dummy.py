@@ -126,6 +126,7 @@ class DummyAFDConnector(AFDConnectorBase):
             )
         if not metadata.is_single_sequence:
             raise ValueError("attention side metadata must describe one sequence")
+        metadata.direction = "attention_to_ffn"
         self.events.append((hidden_states, metadata))
         with self._state.condition:
             self._state.attn_to_ffn.append((hidden_states, metadata))
@@ -135,21 +136,28 @@ class DummyAFDConnector(AFDConnectorBase):
     def recv_ffn_output(self, handle: Any = None, **kwargs: Any) -> Any:
         del handle
         timeout_ms = kwargs.get("timeout_ms")
+        ubatch_idx = kwargs.get("ubatch_idx")
         if timeout_ms is not None:
             deadline = _deadline(timeout_ms)
             with self._state.condition:
-                while not self._state.ffn_to_attn:
+                while not _has_matching_ubatch(self._state.ffn_to_attn, ubatch_idx):
                     _wait_for_item(
                         self._state.condition,
                         deadline,
                         "timed out waiting for dummy AFD FFN output",
                     )
-                ffn_output, _ = self._state.ffn_to_attn.popleft()
+                ffn_output, _ = _pop_matching_ubatch(
+                    self._state.ffn_to_attn,
+                    ubatch_idx,
+                )
                 return ffn_output
 
         with self._state.condition:
-            if self._state.ffn_to_attn:
-                ffn_output, _ = self._state.ffn_to_attn.popleft()
+            if _has_matching_ubatch(self._state.ffn_to_attn, ubatch_idx):
+                ffn_output, _ = _pop_matching_ubatch(
+                    self._state.ffn_to_attn,
+                    ubatch_idx,
+                )
                 return ffn_output
 
         ref_tensor = kwargs.get("ref_tensor")
@@ -165,16 +173,15 @@ class DummyAFDConnector(AFDConnectorBase):
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
     ) -> tuple[Any, AFDConnectorMetadata]:
-        del ubatch_idx
         deadline = _deadline(timeout_ms)
         with self._state.condition:
-            while not self._state.attn_to_ffn:
+            while not _has_matching_ubatch(self._state.attn_to_ffn, ubatch_idx):
                 _wait_for_item(
                     self._state.condition,
                     deadline,
                     "timed out waiting for dummy AFD attention output",
                 )
-            return self._state.attn_to_ffn.popleft()
+            return _pop_matching_ubatch(self._state.attn_to_ffn, ubatch_idx)
 
     def send_ffn_output(
         self,
@@ -187,6 +194,7 @@ class DummyAFDConnector(AFDConnectorBase):
             raise ValueError(
                 f"ffn_output shape {ffn_output.shape!r} does not match metadata",
             )
+        metadata.direction = "ffn_to_attention"
         with self._state.condition:
             self._state.ffn_to_attn.append((ffn_output, metadata))
             self._state.condition.notify_all()
@@ -226,6 +234,38 @@ def _discard_queued_attention_event(
         if item[0] is hidden_states:
             queue.remove(item)
             break
+
+
+def _has_matching_ubatch(
+    queue: deque[tuple[Any, AFDConnectorMetadata]],
+    ubatch_idx: int | None,
+) -> bool:
+    if ubatch_idx is None:
+        return bool(queue)
+    return any(
+        _metadata_ubatch_idx(metadata) == int(ubatch_idx) for _, metadata in queue
+    )
+
+
+def _pop_matching_ubatch(
+    queue: deque[tuple[Any, AFDConnectorMetadata]],
+    ubatch_idx: int | None,
+) -> tuple[Any, AFDConnectorMetadata]:
+    if ubatch_idx is None:
+        return queue.popleft()
+    expected = int(ubatch_idx)
+    for item in tuple(queue):
+        if _metadata_ubatch_idx(item[1]) == expected:
+            queue.remove(item)
+            return item
+    raise IndexError(f"no dummy AFD message for ubatch_idx={expected}")
+
+
+def _metadata_ubatch_idx(metadata: AFDConnectorMetadata) -> int:
+    value = getattr(metadata, "ubatch_idx", None)
+    if value is None:
+        value = getattr(metadata, "stage_idx", 0)
+    return int(value)
 
 
 __all__ = ["DummyAFDConnector"]

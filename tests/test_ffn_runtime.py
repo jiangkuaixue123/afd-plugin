@@ -19,8 +19,14 @@ class _FakeConnector:
     def update_state_from_dp_metadata(self, dp_metadata_list, is_graph_capturing):
         self.dp_metadata_updates.append((dict(dp_metadata_list), is_graph_capturing))
 
-    def recv_attn_output(self):
-        return self.attn_outputs.popleft()
+    def recv_attn_output(self, ubatch_idx=None):
+        if ubatch_idx is None:
+            return self.attn_outputs.popleft()
+        for item in tuple(self.attn_outputs):
+            if getattr(item[1], "ubatch_idx", item[1].stage_idx) == ubatch_idx:
+                self.attn_outputs.remove(item)
+                return item
+        raise IndexError(ubatch_idx)
 
     def send_ffn_output(self, ffn_output, metadata):
         self.ffn_outputs.append((ffn_output, metadata))
@@ -38,6 +44,17 @@ def _metadata():
         seq_len=1,
         dtype="bf16",
         device="cpu",
+    )
+
+
+def _metadata_for_stage(stage_idx):
+    return AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=stage_idx,
+        seq_len=1,
+        dtype="bf16",
+        device="cpu",
+        ubatch_idx=stage_idx,
     )
 
 
@@ -69,6 +86,34 @@ def test_ffn_runner_passthrough_without_model_compute_hook():
     runner.execute_model(dp_metadata_list={0: "dp"})
 
     assert runner.connector.ffn_outputs == [("hidden", metadata)]
+
+
+def test_ffn_runner_processes_each_ubatch_for_each_layer():
+    runner = object.__new__(GPUFFNModelRunner)
+    runner.connector = _FakeConnector()
+    runner.model = _FakeModel()
+    runner.num_layers = 2
+    metadata_0_layer_0 = _metadata_for_stage(0)
+    metadata_1_layer_0 = _metadata_for_stage(1)
+    metadata_0_layer_1 = _metadata_for_stage(0)
+    metadata_1_layer_1 = _metadata_for_stage(1)
+    runner.connector.attn_outputs.extend(
+        [
+            ("hidden-1-l0", metadata_1_layer_0),
+            ("hidden-0-l0", metadata_0_layer_0),
+            ("hidden-1-l1", metadata_1_layer_1),
+            ("hidden-0-l1", metadata_0_layer_1),
+        ],
+    )
+
+    runner.execute_model(dp_metadata_list={0: "dp0", 1: "dp1"})
+
+    assert runner.connector.ffn_outputs == [
+        ("ffn(hidden-0-l0, layer=0)", metadata_0_layer_0),
+        ("ffn(hidden-1-l0, layer=0)", metadata_1_layer_0),
+        ("ffn(hidden-0-l1, layer=1)", metadata_0_layer_1),
+        ("ffn(hidden-1-l1, layer=1)", metadata_1_layer_1),
+    ]
 
 
 def test_ffn_runner_requires_dp_metadata_list():
