@@ -13,7 +13,7 @@ hidden states 和 metadata。
 - 不新增 `vllm fserver` 子命令。
 - 不保留 plugin-owned executable entrypoint 目录；当前仓库不需要
   `afd_plugin.entrypoints`。
-- 第一版不 patch vLLM `EngineCore`。
+- 对 vLLM `EngineCore` 使用隔离的 compat patch，专门支持 FFN daemon 模式。
 - 第一版不使用自定义 `scheduler-cls` 驱动执行。
 - FFN 侧不接收普通 OpenAI/vLLM request。
 - FFN 侧不做 KV cache 管理。
@@ -22,12 +22,12 @@ hidden states 和 metadata。
 
 ## 启动方式
 
-FFN 侧通过 `vllm serve` 启动，推荐使用 `--headless`，避免 OpenAI API server
-接收误发请求：
+FFN 侧通过普通 `vllm serve` 启动。当前 EngineCore compat patch 已经让 FFN role
+跳过正常 request/KV-cache 初始化路径，因此不需要 `--headless`，也不需要
+`--disable-hybrid-kv-cache-manager`：
 
 ```bash
 vllm serve <model> \
-  --headless \
   --worker-cls afd_plugin.runtime.AFDFFNWorker \
   --additional-config '{
     "afd": {
@@ -40,6 +40,10 @@ vllm serve <model> \
     }
   }'
 ```
+
+`--headless` 仍可作为部署隔离或排障选项使用，但不是 FFN 启动条件。
+`--disable-hybrid-kv-cache-manager` 是早期验证 workaround，当前不应作为标准命令
+的一部分。
 
 第一版不传 `--scheduler-cls`。默认 scheduler 只作为 vLLM `EngineCore` 初始化后的
 空转组件存在，不驱动 FFN 执行。
@@ -90,7 +94,7 @@ vllm serve <model> \
 FFN 侧不是 request-driven，而是 connector-driven：
 
 ```text
-vllm serve --headless
+vllm serve
   -> EngineCore 初始化
   -> 创建 AFDFFNWorker
   -> AFDFFNWorker 创建 GPUFFNModelRunner
@@ -130,7 +134,7 @@ OpenAI request
 - scheduler interface 不是稳定 public API，早引入会增加维护成本。
 - FFN 侧没有普通 request，因此自定义 scheduler 的收益有限。
 
-只有当默认 scheduler 在 headless/no-request/empty-KV 场景下仍产生不可接受的
+只有当默认 scheduler 在 no-request/empty-KV 场景下仍产生不可接受的
 副作用时，才重新讨论 `AFDFFNScheduler`。
 
 ## KV Cache 方针
@@ -156,19 +160,22 @@ def get_kv_cache_spec(self) -> dict:
 
 ## EngineCore 方针
 
-第一版不 patch `EngineCore`。
+当前实现 patch `EngineCore`，patch 位于 `afd_plugin.compat.patches.engine_core`。
+这是 FFN daemon 模式的受控兼容层，不修改 vLLM 源码树。
 
 原始 AFD in-tree 实现对 `EngineCore` 做了侵入式修改，用于 FFN role 下跳过普通
-request loop 并显式触发 `start_ffn_server_loop`。external plugin 第一版改为：
+request loop 并显式触发 `start_ffn_server_loop`。external plugin 的当前方案是：
 
-- 通过 `AFDFFNWorker.get_kv_cache_spec()` 避免 KV cache 管理；
-- 通过 `AFDFFNWorker.initialize_from_config()` 启动 loop；
-- 通过 `--headless` 避免 API server 接收请求；
-- 默认 `EngineCore.run_busy_loop()` 可以继续空转等待请求。
+- 非 FFN config 完全走原生 `EngineCore` 路径；
+- FFN config 下跳过正常 scheduler/KV cache 初始化，避免
+  `HybridKVCacheCoordinator` 对 attention groups 的假设；
+- 对插件延迟加载场景，patch `_initialize_kv_caches()`，返回空 KV cache config；
+- `run_busy_loop()` 通过 executor RPC 启停 `start_ffn_server_loop` /
+  `stop_ffn_server_loop`；
+- shutdown 时停止 FFN loop 并释放 executor。
 
-如果验证发现默认 `EngineCore` 生命周期无法保持 FFN daemon 正常运行，或必须在
-engine core 进程中触发额外 RPC，才把 EngineCore shim/patch 放入
-`afd_plugin/compat/patches/` 重新讨论。
+这个 patch 是幂等的，并通过 CPU-safe unit tests 覆盖。远程 eager `1A1F` 和
+`2A2F` 验证均不需要 `--headless` 或 `--disable-hybrid-kv-cache-manager`。
 
 ## Connector Loop
 
@@ -207,14 +214,13 @@ execute_ffn_step(dp_metadata_list=...)
 - `--worker-cls` 确实是 FFN worker
 - connector 名称合法
 - topology 字段存在且可解析
-- FFN serve 是否使用 `--headless`，未使用时至少 warning
 - vLLM 版本为已验证的 `v0.19.1`
 
 `AFDFFNWorker.execute_model(...)` 被调用时应 fail fast，错误信息应说明：
 
 - FFN worker 不接受 vLLM scheduled requests；
 - FFN 执行由 AFD connector 驱动；
-- 请确认 FFN serve 是否使用 headless，并且普通请求是否被误发到 FFN 端口。
+- 请确认普通请求没有被误发到 FFN 端口。
 
 ## 第一版最小实现范围
 
@@ -234,9 +240,9 @@ P2P connector、CUDA graph capture、复杂拓扑、异构 A/F 比例和 profili
 
 ## 待验证问题
 
-- vLLM `EngineCore` 在空 KV cache spec 下是否完全跳过 memory profiling。
-- `initialize_from_config()` 是否是启动 FFN loop 的最佳 hook。
-- `--headless` 在目标部署中是否足够避免 FFN 端接收普通请求。
+- EngineCore patch 是否还需要覆盖更多目标 vLLM patch-level 版本。
+- worker `initialize_from_config()` 是否仍应作为 FFN connector 初始化 fallback。
+- FFN 端口暴露时是否需要部署层隔离，避免普通请求误发到 FFN endpoint。
 - 默认 scheduler 空转是否有额外资源或日志副作用。
 - `GPUFFNModelRunner` 从原始 AFD commit 迁移后，哪些 import 需要 compat helper。
 - FFN loop 的异常如何传递回 vLLM worker/engine 进程，避免 silent failure。
