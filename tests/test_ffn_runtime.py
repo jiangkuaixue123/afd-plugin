@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.connectors import AFDConnectorMetadata
-from afd_plugin.runtime.ffn_model_runner import GPUFFNModelRunner
+from afd_plugin.runtime.ffn_model_runner import (
+    GPUFFNModelRunner,
+    _set_moe_layer_index,
+)
 from afd_plugin.runtime.ffn_worker import AFDFFNWorker
 
 
@@ -121,6 +124,21 @@ def test_ffn_runner_requires_dp_metadata_list():
 
     with pytest.raises(RuntimeError, match="requires dp_metadata_list"):
         runner.execute_model()
+
+
+def test_set_moe_layer_index_resets_for_current_layer():
+    forward_context = SimpleNamespace(
+        all_moe_layers=[
+            "model.layers.1.mlp.experts",
+            "model.layers.2.mlp.experts",
+            "model.layers.3.mlp.experts",
+        ],
+        moe_layer_index=99,
+    )
+
+    _set_moe_layer_index(forward_context, 2)
+
+    assert forward_context.moe_layer_index == 1
 
 
 def test_ffn_worker_scheduler_execute_model_fails_fast():

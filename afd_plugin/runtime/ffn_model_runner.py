@@ -175,6 +175,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                             getattr(metadata, "stage_idx", stage_idx),
                         )
                         forward_context.additional_kwargs["afd_metadata"] = metadata
+                        _set_moe_layer_index(forward_context, layer_idx)
                     recv_handle_list = getattr(metadata, "recv_handle_list", None)
                     if recv_handle_list is not None:
                         for work in recv_handle_list:
@@ -335,6 +336,18 @@ def _resolve_num_hidden_layers(model_config: object | None) -> int:
     if value is None:
         return 1
     return int(value)
+
+
+def _set_moe_layer_index(forward_context: object, layer_idx: int) -> None:
+    all_moe_layers = getattr(forward_context, "all_moe_layers", None)
+    if not all_moe_layers:
+        return
+
+    target = f".layers.{int(layer_idx)}."
+    for idx, layer_name in enumerate(all_moe_layers):
+        if target in f".{layer_name}.":
+            forward_context.moe_layer_index = idx
+            return
 
 
 __all__ = ["GPUFFNModelRunner"]
