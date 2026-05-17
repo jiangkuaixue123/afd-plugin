@@ -6,6 +6,7 @@ from afd_plugin.connectors.base import AFDConnectorBase
 from afd_plugin.connectors.factory import AFDConnectorFactory
 from afd_plugin.connectors.metadata import (
     AFDConnectorMetadata,
+    AFDMessageKey,
     AFDMetadata,
     AFDSingleDPMetadata,
     FFNNeedForwardData,
@@ -15,6 +16,7 @@ __all__ = [
     "AFDConnectorBase",
     "AFDConnectorFactory",
     "AFDConnectorMetadata",
+    "AFDMessageKey",
     "AFDMetadata",
     "AFDSingleDPMetadata",
     "FFNNeedForwardData",

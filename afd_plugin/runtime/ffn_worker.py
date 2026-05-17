@@ -8,7 +8,7 @@ import threading
 from typing import Any
 
 from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.attention_model_runner import fail_if_ubatching_enabled
+from afd_plugin.runtime.attention_model_runner import fail_if_unsupported_ubatching
 from afd_plugin.runtime.ffn_model_runner import GPUFFNModelRunner
 from afd_plugin.validation import assert_compatible_afd_stack
 
@@ -53,7 +53,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
                 "GPUModelRunner interface; unset VLLM_USE_V2_MODEL_RUNNER",
             )
 
-        fail_if_ubatching_enabled(self.vllm_config)
+        fail_if_unsupported_ubatching(self.vllm_config)
 
         super().init_device()
         native_model_runner = self.model_runner
