@@ -51,6 +51,35 @@ def test_p2p_connector_can_be_constructed_without_runtime_initialization():
     assert connector.dst_list == [0]
 
 
+def test_p2p_connector_uses_dp_rank_as_role_rank_for_native_dp():
+    connector = AFDConnectorFactory.create_connector(
+        1,
+        1,
+        SimpleNamespace(
+            model_config=SimpleNamespace(
+                dtype="bf16",
+                enforce_eager=True,
+                hf_config=SimpleNamespace(hidden_size=16, num_hidden_layers=2),
+            ),
+            parallel_config=SimpleNamespace(
+                data_parallel_size=2,
+                data_parallel_rank=1,
+            ),
+        ),
+        AFDConfig(
+            enabled=True,
+            role="attention",
+            connector="p2pconnector",
+            num_attention_servers=2,
+            num_ffn_servers=2,
+        ),
+    )
+
+    assert connector.mapping.role_rank == 1
+    assert connector.world_rank == 3
+    assert connector.p2p_rank == 3
+
+
 def test_p2p_topology_supports_afd_size_alias():
     config = AFDConfig_from_mapping(
         {

@@ -209,3 +209,12 @@ afd-plugin/
 - 每个包含真实行为的 phase 都要配套添加测试。GPU test 应是 opt-in，或在缺少
   CUDA/vLLM runtime dependency 时干净 skip。
 - 除非有 AFD-specific 的理由，否则遵循 `../dllm-plugin` 的风格和 packaging 约定。
+
+## 远程 GPU 验证
+
+- 远程 L20X GPU 服务器上的 `afd-plugin` 代码目录为
+  `/home/jcz/sources/afd-plugin`。
+- 需要验证本地代码分支时，先从当前分支拉出临时测试分支并 push 到远程仓库，
+  再登录远程 L20X 服务器，在 `/home/jcz/sources/afd-plugin` 中 pull/checkout
+  该测试分支进行验证。
+- 远程验证完成后，删除本地和远程的临时测试分支，避免测试分支长期残留。

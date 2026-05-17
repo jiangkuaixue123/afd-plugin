@@ -48,7 +48,10 @@ class P2PAFDConnector(AFDConnectorBase):
     ) -> None:
         super().__init__(rank, local_rank, vllm_config, afd_config)
         self._initialized = False
-        self.mapping = build_rank_mapping(afd_config)
+        self.mapping = build_rank_mapping(
+            afd_config,
+            role_rank=_resolve_role_rank(rank, vllm_config, afd_config),
+        )
         self.world_rank = self.mapping.world_rank
         self.p2p_rank = self.mapping.p2p_rank
         self.attn_size = self.mapping.attention_size
@@ -437,6 +440,18 @@ def _num_tokens_for_dp_rank(dp_metadata: Any, dp_rank: int) -> int:
     token_count = token_counts[dp_rank]
     item = getattr(token_count, "item", None)
     return int(item() if callable(item) else token_count)
+
+
+def _resolve_role_rank(
+    world_group_rank: int,
+    vllm_config: object,
+    afd_config: AFDConfig,
+) -> int:
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+    if dp_size > 1:
+        return int(getattr(parallel_config, "data_parallel_rank", world_group_rank))
+    return int(afd_config.afd_server_rank)
 
 
 __all__ = ["P2PAFDConnector"]
