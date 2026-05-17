@@ -48,6 +48,7 @@ def init_afd_process_group(
     from torch.distributed import Backend
     from torch.distributed.distributed_c10d import (
         PrefixStore,
+        _world,
         _new_process_group_helper,
     )
     from torch.distributed.rendezvous import rendezvous
@@ -79,15 +80,18 @@ def init_afd_process_group(
         timeout=timeout,
     )
 
+    group_ranks = {i: i for i in range(world_size)}
+    _world.pg_group_ranks[process_group] = group_ranks
+
     try:
         world = parallel_state.get_world_group()
-        world.pg_group_ranks[process_group] = {i: i for i in range(world_size)}
+        world.pg_group_ranks[process_group] = group_ranks
     except Exception:
         if torch.distributed.is_initialized():
             default_group = torch.distributed.distributed_c10d._get_default_group()
             pg_group_ranks = getattr(default_group, "pg_group_ranks", None)
             if pg_group_ranks is not None:
-                pg_group_ranks[process_group] = {i: i for i in range(world_size)}
+                pg_group_ranks[process_group] = group_ranks
 
     return process_group
 

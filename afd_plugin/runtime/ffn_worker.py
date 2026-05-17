@@ -99,6 +99,10 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         if self._ffn_thread is not None and self._ffn_thread.is_alive():
             return
 
+        connector = getattr(self.model_runner, "connector", None)
+        if connector is not None and not getattr(connector, "is_initialized", False):
+            self.model_runner.initialize_afd_connector()
+
         self._ffn_shutdown_event = threading.Event()
         self._ffn_loop_error = None
 

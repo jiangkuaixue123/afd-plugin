@@ -2,8 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """Isolated monkey-patch namespace.
 
-Phase 1 intentionally applies no vLLM patches. Future patches must remain
-idempotent, version-guarded, documented, and tested.
+Patches in this package must remain idempotent, version-aware, documented, and
+covered by CPU-safe tests whenever possible.
 """
 
-__all__: list[str] = []
+from afd_plugin.compat.patches.engine_core import apply_engine_core_patch
+
+__all__ = ["apply_engine_core_patch"]

@@ -7,7 +7,11 @@ from __future__ import annotations
 from typing import Any
 
 from afd_plugin.config import AFDConfig, parse_afd_config
-from afd_plugin.connectors import AFDConnectorFactory, AFDMetadata
+from afd_plugin.connectors import (
+    AFDConnectorFactory,
+    AFDMetadata,
+    AFDSingleDPMetadata,
+)
 from afd_plugin.runtime._optional import optional_class
 
 _GPUModelRunner, _GPUModelRunner_IMPORT_ERROR = optional_class(
@@ -78,10 +82,11 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if ubatch_slices and len(ubatch_slices) > 1:
             raise RuntimeError("AFD + ubatching is deferred to Phase 5")
 
+        dp_metadata = self._ensure_dp_metadata(dp_metadata)
         dp_metadata_list = {0: dp_metadata}
         update = getattr(self.afd_connector, "update_state_from_dp_metadata", None)
         if callable(update):
-            update(dp_metadata_list, self._is_warmup)
+            update(dp_metadata_list, is_warmup=self._is_warmup)
 
         should_send = True
         rank = getattr(self.afd_connector, "world_rank", None)
@@ -92,6 +97,33 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         send = getattr(self.afd_connector, "send_dp_metadata_list", None)
         if should_send and callable(send):
             send(dp_metadata_list, is_warmup=self._is_warmup)
+
+    def _ensure_dp_metadata(self, dp_metadata: Any) -> Any:
+        if dp_metadata is not None:
+            return dp_metadata
+
+        parallel_config = getattr(self.vllm_config, "parallel_config", None)
+        dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+        if dp_size != 1:
+            raise RuntimeError("AFD expected vLLM DPMetadata for attention DP > 1")
+
+        if self._afd_pending_metadata is None:
+            raise RuntimeError("AFD metadata is not available for DP metadata fallback")
+        if len(self._afd_pending_metadata.afd_tokens_lens) != 1:
+            raise RuntimeError("AFD DP=1 fallback only supports one stage")
+
+        import torch
+
+        num_tokens = int(self._afd_pending_metadata.afd_tokens_lens[0])
+        num_tokens_across_dp_cpu = torch.tensor(
+            [num_tokens],
+            dtype=torch.int32,
+            device="cpu",
+        )
+        return AFDSingleDPMetadata(
+            num_tokens_across_dp_cpu=num_tokens_across_dp_cpu,
+            max_tokens_across_dp_cpu=torch.max(num_tokens_across_dp_cpu),
+        )
 
     def _install_afd_metadata_on_forward_context(
         self,

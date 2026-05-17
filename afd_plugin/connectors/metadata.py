@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import copy
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +21,75 @@ class FFNNeedForwardData:
     with_prefill: bool
     total_num_scheduled_tokens: int | None
     is_dummy_run: bool = False
+
+
+@dataclass(slots=True)
+class AFDSingleDPMetadata:
+    """Minimal DPMetadata-compatible payload for attention DP=1."""
+
+    num_tokens_across_dp_cpu: Any
+    max_tokens_across_dp_cpu: Any | None = None
+    local_sizes: list[int] | None = None
+
+    @contextmanager
+    def sp_local_sizes(self, sequence_parallel_size: int) -> Iterator[list[int]]:
+        self.local_sizes = _compute_sp_num_tokens(
+            self.num_tokens_across_dp_cpu,
+            sequence_parallel_size,
+        )
+        try:
+            yield self.local_sizes
+        finally:
+            self.local_sizes = None
+
+    @contextmanager
+    def chunked_sizes(
+        self,
+        sequence_parallel_size: int,
+        max_chunk_size_per_rank: int,
+        chunk_idx: int,
+    ) -> Iterator[list[int]]:
+        sp_tokens = _compute_sp_num_tokens(
+            self.num_tokens_across_dp_cpu,
+            sequence_parallel_size,
+        )
+        self.local_sizes = [
+            max(
+                1,
+                min(
+                    max_chunk_size_per_rank,
+                    size - max_chunk_size_per_rank * chunk_idx,
+                ),
+            )
+            for size in sp_tokens
+        ]
+        try:
+            yield self.local_sizes
+        finally:
+            self.local_sizes = None
+
+
+def _compute_sp_num_tokens(
+    num_tokens_across_dp_cpu: Any,
+    sequence_parallel_size: int,
+) -> list[int]:
+    if hasattr(num_tokens_across_dp_cpu, "repeat_interleave"):
+        sp_tokens = (
+            num_tokens_across_dp_cpu + sequence_parallel_size - 1
+        ) // sequence_parallel_size
+        return sp_tokens.repeat_interleave(sequence_parallel_size).tolist()
+
+    if isinstance(num_tokens_across_dp_cpu, (int, float)):
+        values = [int(num_tokens_across_dp_cpu)]
+    else:
+        values = [int(value) for value in num_tokens_across_dp_cpu]
+    local_sizes: list[int] = []
+    for value in values:
+        local_sizes.extend(
+            [max(1, (value + sequence_parallel_size - 1) // sequence_parallel_size)]
+            * sequence_parallel_size,
+        )
+    return local_sizes
 
 
 @dataclass(slots=True)
@@ -143,5 +214,6 @@ class AFDMetadata:
 __all__ = [
     "AFDConnectorMetadata",
     "AFDMetadata",
+    "AFDSingleDPMetadata",
     "FFNNeedForwardData",
 ]
