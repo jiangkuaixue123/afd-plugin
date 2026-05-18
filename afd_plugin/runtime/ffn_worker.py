@@ -136,13 +136,27 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
             try:
                 (
                     dp_metadata_list,
-                    _is_attn_graph_capturing,
-                    _is_warmup,
+                    is_attn_graph_capturing,
+                    is_warmup,
                 ) = self.model_runner.connector.recv_dp_metadata_list(timeout_ms=100)
             except TimeoutError:
                 continue
 
-            self.model_runner.execute_model(dp_metadata_list=dp_metadata_list)
+            if (
+                self.model_runner.use_cuda_graph
+                and (is_warmup or is_attn_graph_capturing)
+            ):
+                self.model_runner.capture_model(
+                    dp_metadata_list=dp_metadata_list,
+                    is_warmup=is_warmup,
+                    is_attn_graph_capturing=is_attn_graph_capturing,
+                )
+            else:
+                self.model_runner.execute_model(
+                    dp_metadata_list=dp_metadata_list,
+                    is_graph_capturing=is_attn_graph_capturing,
+                    is_warmup=is_warmup,
+                )
 
             try:
                 import torch

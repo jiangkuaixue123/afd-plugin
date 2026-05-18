@@ -35,6 +35,8 @@ class _RecordingConnector:
     def __init__(self):
         self.dp_metadata_updates = []
         self.sent_dp_metadata_lists = []
+        self.dp_metadata_update_flags = []
+        self.sent_dp_metadata_flags = []
 
     def is_attn_top_min_size_rank(self, world_rank):
         return world_rank == self.world_rank
@@ -46,8 +48,8 @@ class _RecordingConnector:
         is_graph_capturing=False,
         is_warmup=False,
     ):
-        del is_graph_capturing, is_warmup
         self.dp_metadata_updates.append(dp_metadata_list)
+        self.dp_metadata_update_flags.append((is_graph_capturing, is_warmup))
 
     def send_dp_metadata_list(
         self,
@@ -56,8 +58,8 @@ class _RecordingConnector:
         is_graph_capturing=False,
         is_warmup=False,
     ):
-        del is_graph_capturing, is_warmup
         self.sent_dp_metadata_lists.append(dp_metadata_list)
+        self.sent_dp_metadata_flags.append((is_graph_capturing, is_warmup))
 
 
 def _parallel_config(**overrides):
@@ -93,6 +95,7 @@ def test_attention_runner_installs_afd_metadata_on_forward_context():
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
     runner._afd_transaction_counter = 0
     runner._afd_pending_metadata = runner._build_afd_metadata(None, 5)
     forward_context = SimpleNamespace(
@@ -107,6 +110,7 @@ def test_attention_runner_installs_afd_metadata_on_forward_context():
     assert forward_context.additional_kwargs["afd_metadata"].afd_tokens_lens == [5]
     assert runner.afd_connector.dp_metadata_updates == [{0: "dp"}]
     assert runner.afd_connector.sent_dp_metadata_lists == [{0: "dp"}]
+    assert runner.afd_connector.sent_dp_metadata_flags == [(False, False)]
 
 
 def test_attention_runner_sends_per_ubatch_dp_metadata():
@@ -117,6 +121,7 @@ def test_attention_runner_sends_per_ubatch_dp_metadata():
     )
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
     runner._afd_transaction_counter = 0
     runner._afd_pending_metadata = None
     ubatch_slices = [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)]
@@ -262,6 +267,7 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     )
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
     runner._afd_pending_metadata = None
     runner._afd_transaction_counter = 0
     forward_context = SimpleNamespace(
@@ -282,13 +288,43 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     assert runner.afd_connector.sent_dp_metadata_lists
 
 
-def test_attention_runtime_rejects_cuda_graph_until_phase6():
+def test_attention_runtime_rejects_unsupported_cuda_graph_modes():
     vllm_config = SimpleNamespace(
         model_config=SimpleNamespace(enforce_eager=False),
+        compilation_config=SimpleNamespace(cudagraph_mode="PIECEWISE"),
+        parallel_config=_parallel_config(),
     )
 
-    with pytest.raises(RuntimeError, match="CUDA graph"):
+    with pytest.raises(RuntimeError, match="FULL_DECODE_ONLY"):
         fail_if_cuda_graph_enabled(vllm_config)
+
+
+def test_attention_runtime_allows_full_decode_only_cuda_graph():
+    vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(enforce_eager=False),
+        compilation_config=SimpleNamespace(cudagraph_mode="FULL_DECODE_ONLY"),
+        parallel_config=_parallel_config(),
+    )
+
+    fail_if_cuda_graph_enabled(vllm_config)
+
+
+def test_attention_runner_forwards_capture_and_warmup_flags():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(),
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = True
+    runner._afd_is_graph_capturing = True
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = None
+
+    runner._send_dp_metadata("dp", None)
+
+    assert runner.afd_connector.dp_metadata_update_flags == [(True, True)]
+    assert runner.afd_connector.sent_dp_metadata_flags == [(True, True)]
 
 
 def test_afd_rank_derives_from_data_parallel_rank():

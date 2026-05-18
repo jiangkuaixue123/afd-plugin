@@ -12,8 +12,13 @@ from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.runtime._optional import optional_class
 from afd_plugin.runtime.attention_model_runner import (
     _with_dp_derived_afd_rank,
-    fail_if_cuda_graph_enabled,
     fail_if_unsupported_ubatching,
+)
+from afd_plugin.runtime.cuda_graph import (
+    AFDGraphRunMode,
+    graph_run_mode,
+    make_ffn_graph_key,
+    validate_cuda_graph_mode,
 )
 from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
 
@@ -44,7 +49,10 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         if not self.afd_config.enabled:
             raise ValueError("AFD FFN runtime requires enabled=true")
         fail_if_unsupported_ubatching(vllm_config)
-        fail_if_cuda_graph_enabled(vllm_config)
+        self.afd_cudagraph_policy = validate_cuda_graph_mode(
+            vllm_config,
+            role="ffn",
+        )
         self.afd_config = _with_dp_derived_afd_rank(vllm_config, self.afd_config)
 
         rank, local_rank = _resolve_world_ranks()
@@ -57,6 +65,11 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         self.model: Any | None = None
         self.model_memory_usage = 0
         self.num_layers = int(self.model_config.hf_config.num_hidden_layers)
+        self.use_cuda_graph = bool(
+            self.afd_cudagraph_policy.enable_ffn_graph_cache,
+        )
+        self._cuda_graphs: dict[tuple, dict[str, Any]] = {}
+        self._graph_memory_pool: Any | None = None
         afd_trace(
             "ffn_runner_init",
             role=self.afd_config.role,
@@ -64,6 +77,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             local_rank=local_rank,
             afd_server_rank=self.afd_config.afd_server_rank,
             num_layers=self.num_layers,
+            use_cuda_graph=self.use_cuda_graph,
         )
 
     @staticmethod
@@ -115,15 +129,43 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         *,
         dp_metadata_list: dict[int, Any] | None = None,
         is_graph_capturing: bool = False,
+        is_warmup: bool = False,
     ) -> None:
         del scheduler_output, intermediate_tensors
         if dp_metadata_list is None:
             raise RuntimeError("GPUFFNModelRunner requires dp_metadata_list")
+        graph_key = self._make_graph_key(dp_metadata_list)
+        cuda_graph_info = self._cuda_graphs.get(graph_key)
+        run_mode = graph_run_mode(
+            is_warmup=is_warmup,
+            is_graph_capturing=is_graph_capturing,
+            graph_enabled=bool(self.use_cuda_graph),
+            graph_exists=cuda_graph_info is not None,
+        )
+        afd_trace(
+            "ffn_execute_model",
+            graph_key=graph_key,
+            run_mode=run_mode.value,
+            is_graph_capturing=is_graph_capturing,
+            is_warmup=is_warmup,
+        )
+        if run_mode is AFDGraphRunMode.REPLAY:
+            cuda_graph_info["graph"].replay()
+            afd_trace("ffn_replay_cudagraph_done", graph_key=graph_key)
+            return None
+
+        if self.use_cuda_graph and run_mode is AFDGraphRunMode.EAGER:
+            afd_trace("ffn_cudagraph_miss_fallback", graph_key=graph_key)
+
         self._ffn_forward(
             dp_metadata_list=dp_metadata_list,
             is_graph_capturing=is_graph_capturing,
         )
         return None
+
+    @staticmethod
+    def _make_graph_key(dp_metadata_list: dict[int, Any]) -> tuple:
+        return make_ffn_graph_key(dp_metadata_list)
 
     def _ffn_forward(
         self,
@@ -249,13 +291,107 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             raise RuntimeError("Cannot reload weights before model is loaded")
         self.load_model()
 
-    def capture_model(self, *args: Any, **kwargs: Any) -> int:
-        del args, kwargs
-        return 0
+    def _dummy_run(
+        self,
+        cudagraph_runtime_mode: Any,
+        dp_metadata_list: dict[int, Any],
+        is_attn_graph_capturing: bool,
+    ) -> None:
+        mode_name = getattr(cudagraph_runtime_mode, "name", str(cudagraph_runtime_mode))
+        if mode_name.endswith(".FULL"):
+            mode_name = "FULL"
 
-    def _dummy_run(self, *args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        return None
+        if mode_name == "FULL":
+            import torch
+
+            if self._graph_memory_pool is None:
+                self._graph_memory_pool = torch.cuda.graph_pool_handle()
+            graph_key = self._make_graph_key(dp_metadata_list)
+            cudagraph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(cudagraph, pool=self._graph_memory_pool):
+                output = self._ffn_forward(
+                    dp_metadata_list=dp_metadata_list,
+                    is_graph_capturing=is_attn_graph_capturing,
+                )
+            self._cuda_graphs[graph_key] = {
+                "graph": cudagraph,
+                "input_hidden_states": output,
+                "output": output,
+            }
+            afd_trace("ffn_capture_cudagraph_done", graph_key=graph_key)
+        else:
+            self._ffn_forward(
+                dp_metadata_list=dp_metadata_list,
+                is_graph_capturing=is_attn_graph_capturing,
+            )
+
+    def capture_model(
+        self,
+        dp_metadata_list: dict[int, Any] | None = None,
+        is_warmup: bool = False,
+        is_attn_graph_capturing: bool = True,
+    ) -> int:
+        if not self.use_cuda_graph:
+            afd_trace("ffn_capture_cudagraph_skip_disabled")
+            return 0
+        if dp_metadata_list is None:
+            raise RuntimeError("GPUFFNModelRunner.capture_model requires metadata")
+
+        import time
+
+        import torch
+        from vllm.compilation.monitor import set_cudagraph_capturing_enabled
+        from vllm.config import CUDAGraphMode
+        from vllm.distributed.parallel_state import graph_capture
+
+        start_time = time.perf_counter()
+        start_free_gpu_memory = torch.cuda.mem_get_info()[0]
+        if self._graph_memory_pool is None:
+            self._graph_memory_pool = torch.cuda.graph_pool_handle()
+
+        set_cudagraph_capturing_enabled(True)
+        try:
+            with graph_capture(device=self.device):
+                if is_warmup:
+                    afd_trace(
+                        "ffn_capture_cudagraph_warmup",
+                        graph_key=self._make_graph_key(dp_metadata_list),
+                    )
+                    self._ffn_forward(
+                        dp_metadata_list=dp_metadata_list,
+                        is_graph_capturing=False,
+                    )
+                else:
+                    self._capture_graphs(
+                        cudagraph_runtime_mode=CUDAGraphMode.FULL,
+                        dp_metadata_list=dp_metadata_list,
+                        is_attn_graph_capturing=is_attn_graph_capturing,
+                    )
+        finally:
+            set_cudagraph_capturing_enabled(False)
+
+        end_free_gpu_memory = torch.cuda.mem_get_info()[0]
+        cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
+        afd_trace(
+            "ffn_capture_cudagraph_finished",
+            graph_key=self._make_graph_key(dp_metadata_list),
+            seconds=time.perf_counter() - start_time,
+            bytes=cuda_graph_size,
+        )
+        return int(cuda_graph_size)
+
+    def _capture_graphs(
+        self,
+        *,
+        cudagraph_runtime_mode: Any,
+        dp_metadata_list: dict[int, Any],
+        is_attn_graph_capturing: bool = True,
+    ) -> None:
+        self._dummy_run(
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+            dp_metadata_list=dp_metadata_list,
+            is_attn_graph_capturing=is_attn_graph_capturing,
+        )
 
     def _dummy_sampler_run(self, hidden_states: Any) -> None:
         del hidden_states
