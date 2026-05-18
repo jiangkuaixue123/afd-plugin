@@ -16,6 +16,7 @@ from afd_plugin.connectors import (
 )
 from afd_plugin.models.forward_context import use_afd_metadata_provider
 from afd_plugin.runtime._optional import optional_class
+from afd_plugin.runtime.cuda_graph import validate_cuda_graph_mode
 from afd_plugin.runtime.ubatch_wrapper import (
     AFDUBatchWrapper,
     build_ubatch_dp_metadata_list,
@@ -46,7 +47,10 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if not self.afd_config.enabled:
             raise ValueError("AFD Attention runtime requires enabled=true")
         fail_if_unsupported_ubatching(self.vllm_config)
-        fail_if_cuda_graph_enabled(self.vllm_config)
+        self.afd_cudagraph_policy = validate_cuda_graph_mode(
+            self.vllm_config,
+            role="attention",
+        )
         self.afd_config = _with_dp_derived_afd_rank(
             self.vllm_config,
             self.afd_config,
@@ -60,6 +64,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         )
         self.afd_connector.init_afd_connector()
         self._is_warmup = False
+        self._afd_is_graph_capturing = False
         self._afd_pending_metadata: AFDMetadata | None = None
         self._afd_transaction_counter = 0
 
@@ -109,8 +114,10 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             dp_metadata = self._ensure_dp_metadata(dp_metadata)
             dp_metadata_list = {0: dp_metadata}
         is_warmup = bool(self._is_warmup)
+        is_graph_capturing = bool(getattr(self, "_afd_is_graph_capturing", False))
         self.afd_connector.update_state_from_dp_metadata(
             dp_metadata_list,
+            is_graph_capturing=is_graph_capturing,
             is_warmup=is_warmup,
         )
 
@@ -125,6 +132,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             stages=sorted(int(stage_idx) for stage_idx in dp_metadata_list),
             dp_metadata=dp_metadata_summary(dp_metadata_list),
             is_warmup=is_warmup,
+            is_graph_capturing=is_graph_capturing,
         )
         if should_send:
             afd_trace(
@@ -132,9 +140,11 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
                 rank=rank,
                 dp_metadata=dp_metadata_summary(dp_metadata_list),
                 is_warmup=is_warmup,
+                is_graph_capturing=is_graph_capturing,
             )
             self.afd_connector.send_dp_metadata_list(
                 dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
                 is_warmup=is_warmup,
             )
             afd_trace(
@@ -142,6 +152,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
                 rank=rank,
                 dp_metadata=dp_metadata_summary(dp_metadata_list),
                 is_warmup=is_warmup,
+                is_graph_capturing=is_graph_capturing,
             )
 
     def load_model(self, *args: Any, **kwargs: Any) -> Any:
@@ -303,11 +314,84 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         """
 
         previous_metadata = self._afd_pending_metadata
+        previous_is_graph_capturing = getattr(
+            self,
+            "_afd_is_graph_capturing",
+            False,
+        )
+        self._afd_is_graph_capturing = bool(
+            kwargs.get("is_graph_capturing", False),
+        )
         try:
             with use_afd_metadata_provider(self):
                 return super()._dummy_run(*args, **kwargs)
         finally:
+            self._afd_is_graph_capturing = previous_is_graph_capturing
             self._afd_pending_metadata = previous_metadata
+
+    def _warmup_and_capture(self, *args: Any, **kwargs: Any) -> Any:
+        """Mirror vLLM warmup/capture while marking AFD warmup metadata.
+
+        The native implementation calls ``self._dummy_run`` for warmups and
+        formal capture. We keep that flow intact and only set ``_is_warmup``
+        around the warmup calls so FFN ranks can distinguish warmup metadata
+        from graph-capture metadata.
+        """
+
+        try:
+            from vllm.config import CUDAGraphMode
+        except Exception:
+            return super()._warmup_and_capture(*args, **kwargs)
+
+        names = [
+            "desc",
+            "cudagraph_runtime_mode",
+            "profile_seq_lens",
+            "allow_microbatching",
+            "num_warmups",
+        ]
+        values = dict(zip(names, args, strict=False))
+        values.update(kwargs)
+        desc = values.get("desc")
+        cudagraph_runtime_mode = values.get("cudagraph_runtime_mode")
+        if desc is None or cudagraph_runtime_mode is None:
+            return super()._warmup_and_capture(*args, **kwargs)
+
+        num_warmups = values.get("num_warmups")
+        if num_warmups is None:
+            num_warmups = self.compilation_config.cudagraph_num_of_warmups
+        allow_microbatching = bool(values.get("allow_microbatching", False))
+        profile_seq_lens = values.get("profile_seq_lens")
+        force_attention = cudagraph_runtime_mode == CUDAGraphMode.FULL
+
+        previous_is_warmup = bool(self._is_warmup)
+        try:
+            self._is_warmup = True
+            for _ in range(int(num_warmups)):
+                self._dummy_run(
+                    desc.num_tokens,
+                    cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                    force_attention=force_attention,
+                    uniform_decode=desc.uniform,
+                    allow_microbatching=allow_microbatching,
+                    skip_eplb=True,
+                    remove_lora=False,
+                    num_active_loras=desc.num_active_loras,
+                )
+        finally:
+            self._is_warmup = previous_is_warmup
+
+        self._dummy_run(
+            desc.num_tokens,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+            uniform_decode=desc.uniform,
+            allow_microbatching=allow_microbatching,
+            skip_eplb=True,
+            remove_lora=False,
+            num_active_loras=desc.num_active_loras,
+            is_graph_capturing=True,
+            profile_seq_lens=profile_seq_lens,
+        )
 
     def shutdown(self) -> None:
         self.afd_connector.close()
@@ -333,10 +417,7 @@ fail_if_ubatching_enabled = fail_if_unsupported_ubatching
 
 
 def fail_if_cuda_graph_enabled(vllm_config: object) -> None:
-    if vllm_config.model_config.enforce_eager is False:
-        raise RuntimeError(
-            "AFD CUDA graph support is deferred to Phase 6; pass --enforce-eager",
-        )
+    validate_cuda_graph_mode(vllm_config)
 
 
 def _resolve_world_ranks() -> tuple[int, int]:

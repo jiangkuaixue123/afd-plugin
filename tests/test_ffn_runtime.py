@@ -67,7 +67,22 @@ def _runner_with_connector_and_model(model, *, num_layers=1):
     runner.connector = _FakeConnector()
     runner.model = model
     runner.num_layers = num_layers
+    runner.use_cuda_graph = False
+    runner._cuda_graphs = {}
     return runner
+
+
+class _FakeDPMetadata:
+    def __init__(self, values):
+        self.num_tokens_across_dp_cpu = values
+
+
+class _FakeGraph:
+    def __init__(self):
+        self.replay_count = 0
+
+    def replay(self):
+        self.replay_count += 1
 
 
 def test_ffn_runner_executes_model_compute_ffn_output():
@@ -124,6 +139,45 @@ def test_ffn_runner_requires_dp_metadata_list():
 
     with pytest.raises(RuntimeError, match="requires dp_metadata_list"):
         runner.execute_model()
+
+
+def test_ffn_runner_makes_original_style_graph_key():
+    key = GPUFFNModelRunner._make_graph_key(
+        {
+            1: _FakeDPMetadata([5, 7]),
+            0: _FakeDPMetadata([2, 3]),
+        },
+    )
+
+    assert key == ((0, (2, 3)), (1, (5, 7)))
+
+
+def test_ffn_runner_replays_cuda_graph_when_key_exists():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    runner.use_cuda_graph = True
+    graph = _FakeGraph()
+    dp_metadata = {0: _FakeDPMetadata([1])}
+    runner._cuda_graphs = {
+        GPUFFNModelRunner._make_graph_key(dp_metadata): {"graph": graph},
+    }
+
+    runner.execute_model(dp_metadata_list=dp_metadata)
+
+    assert graph.replay_count == 1
+    assert runner.connector.ffn_outputs == []
+
+
+def test_ffn_runner_cuda_graph_miss_falls_back_to_eager():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    runner.use_cuda_graph = True
+    metadata = _metadata()
+    runner.connector.attn_outputs.append(("hidden", metadata))
+
+    runner.execute_model(dp_metadata_list={0: _FakeDPMetadata([1])})
+
+    assert runner.connector.ffn_outputs == [
+        ("ffn(hidden, layer=0)", metadata),
+    ]
 
 
 def test_set_moe_layer_index_resets_for_current_layer():

@@ -61,10 +61,11 @@ Phase 4 has started the P2P connector migration:
 Phase 4 is still in progress: FFN serving now works through ordinary
 `vllm serve` and does not require `--headless` or
 `--disable-hybrid-kv-cache-manager`. Scheduler-driven FFN execution still fails
-fast, and role-based weight pruning, ubatching/DBO, and CUDA graph support
-remain deferred. AFD runtimes currently fail fast unless `--enforce-eager` is
-used. Opt-in GPU E2E coverage exists for eager `1A1F` and `2A2F` DeepSeekV2
-P2P runs.
+fast, and role-based weight pruning remains deferred. Phase 5 has CPU-side
+ubatching metadata support. Phase 6 CUDA graph scaffolding is started and only
+allows vLLM `FULL_DECODE_ONLY`; other graph modes and ubatching plus CUDA graph
+fail fast. Opt-in GPU E2E coverage currently exists for eager `1A1F` and
+`2A2F` DeepSeekV2 P2P runs.
 
 P2P config shape:
 
