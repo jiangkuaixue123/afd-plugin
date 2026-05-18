@@ -20,8 +20,6 @@ from afd_plugin.distributed import (
     DefaultProcessGroupSwitcher,
     build_rank_mapping,
     init_afd_process_group,
-    resolve_hidden_size,
-    resolve_num_hidden_layers,
 )
 from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
 
@@ -49,9 +47,14 @@ class P2PAFDConnector(AFDConnectorBase):
     ) -> None:
         super().__init__(rank, local_rank, vllm_config, afd_config)
         self._initialized = False
+        parallel_config = vllm_config.parallel_config
+        if parallel_config.data_parallel_size > 1:
+            role_rank = int(parallel_config.data_parallel_rank)
+        else:
+            role_rank = int(afd_config.afd_server_rank)
         self.mapping = build_rank_mapping(
             afd_config,
-            role_rank=_resolve_role_rank(rank, vllm_config, afd_config),
+            role_rank=role_rank,
         )
         self.world_rank = self.mapping.world_rank
         self.p2p_rank = self.mapping.p2p_rank
@@ -60,8 +63,10 @@ class P2PAFDConnector(AFDConnectorBase):
         self.min_size = self.mapping.min_size
         self.ratio = self.mapping.ratio
         self.dst_list = list(self.mapping.dp_metadata_destinations)
-        self.num_hidden_layers = resolve_num_hidden_layers(vllm_config)
-        self.hidden_size = resolve_hidden_size(vllm_config)
+        self.num_hidden_layers = int(
+            vllm_config.model_config.hf_config.num_hidden_layers,
+        )
+        self.hidden_size = int(vllm_config.model_config.hf_config.hidden_size)
         self.dp_metadata_list: dict[int, Any] = {}
         self.is_graph_capturing = False
         self.is_warmup = False
@@ -161,12 +166,8 @@ class P2PAFDConnector(AFDConnectorBase):
         self.is_warmup = is_warmup
         self._tensor_metadata_list = {}
         device = torch.device(f"cuda:{self.local_rank}")
-        dtype = getattr(getattr(self.vllm_config, "model_config", None), "dtype", None)
-        if dtype is None:
-            raise ValueError("p2pconnector requires model_config.dtype")
-
-        parallel_config = getattr(self.vllm_config, "parallel_config", None)
-        dp_rank = int(getattr(parallel_config, "data_parallel_rank", 0))
+        dtype = self.vllm_config.model_config.dtype
+        dp_rank = int(self.vllm_config.parallel_config.data_parallel_rank)
         for stage_idx, dp_metadata in dp_metadata_list.items():
             num_tokens = _num_tokens_for_dp_rank(dp_metadata, dp_rank)
             self._tensor_metadata_list[int(stage_idx)] = _TensorMetadata(
@@ -190,11 +191,9 @@ class P2PAFDConnector(AFDConnectorBase):
             is_warmup=is_warmup,
         )
 
-        model_config = getattr(self.vllm_config, "model_config", None)
-        if self.afd_config.role == "ffn" and not getattr(
-            model_config,
-            "enforce_eager",
-            True,
+        if (
+            self.afd_config.role == "ffn"
+            and not self.vllm_config.model_config.enforce_eager
         ):
             for stage_idx, tensor_metadata in self._tensor_metadata_list.items():
                 for src_rank in range(1, self.group_size):
@@ -395,8 +394,7 @@ class P2PAFDConnector(AFDConnectorBase):
 
         for src in range(1, self.group_size):
             ref_tensor = None
-            model_config = getattr(self.vllm_config, "model_config", None)
-            if not getattr(model_config, "enforce_eager", True):
+            if not self.vllm_config.model_config.enforce_eager:
                 ref_tensor = self._recv_attn_buffers.get(
                     (ubatch_idx, src, tuple(tensor_metadata.size)),
                 )
@@ -594,18 +592,8 @@ class P2PAFDConnector(AFDConnectorBase):
             from vllm.forward_context import get_forward_context
 
             forward_context = get_forward_context()
-            additional_kwargs = getattr(forward_context, "additional_kwargs", {}) or {}
-            afd_metadata = additional_kwargs.get(
-                "afd_metadata",
-                getattr(forward_context, "afd_metadata", None),
-            )
-            return int(
-                getattr(
-                    afd_metadata,
-                    "ubatch_idx",
-                    getattr(afd_metadata, "afd_stage_idx", 0),
-                ),
-            )
+            afd_metadata = forward_context.additional_kwargs["afd_metadata"]
+            return int(afd_metadata.ubatch_idx)
         except Exception:
             return 0
 
@@ -621,29 +609,9 @@ def _matches_tensor_metadata(value: Any, tensor_metadata: _TensorMetadata) -> bo
 
 
 def _num_tokens_for_dp_rank(dp_metadata: Any, dp_rank: int) -> int:
-    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
-    if token_counts is None:
-        token_counts = getattr(dp_metadata, "num_tokens_across_dp", None)
-    if token_counts is None:
-        value = getattr(dp_metadata, "num_tokens", None)
-        if value is None:
-            raise ValueError("DP metadata does not expose token counts")
-        return int(value)
-    token_count = token_counts[dp_rank]
+    token_count = dp_metadata.num_tokens_across_dp_cpu[dp_rank]
     item = getattr(token_count, "item", None)
     return int(item() if callable(item) else token_count)
-
-
-def _resolve_role_rank(
-    world_group_rank: int,
-    vllm_config: object,
-    afd_config: AFDConfig,
-) -> int:
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
-    if dp_size > 1:
-        return int(getattr(parallel_config, "data_parallel_rank", world_group_rank))
-    return int(afd_config.afd_server_rank)
 
 
 __all__ = ["P2PAFDConnector"]

@@ -30,9 +30,14 @@ class _UbatchSlice:
 
 
 class _RecordingConnector:
+    world_rank = 1
+
     def __init__(self):
         self.dp_metadata_updates = []
         self.sent_dp_metadata_lists = []
+
+    def is_attn_top_min_size_rank(self, world_rank):
+        return world_rank == self.world_rank
 
     def update_state_from_dp_metadata(
         self,
@@ -55,9 +60,23 @@ class _RecordingConnector:
         self.sent_dp_metadata_lists.append(dp_metadata_list)
 
 
+def _parallel_config(**overrides):
+    values = {
+        "data_parallel_size": 1,
+        "data_parallel_rank": 0,
+        "use_ubatching": False,
+        "num_ubatches": 1,
+        "dbo_decode_token_threshold": 32,
+        "dbo_prefill_token_threshold": 512,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_attention_runner_builds_single_stage_metadata():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_connector = object()
+    runner._afd_transaction_counter = 0
 
     metadata = runner._build_afd_metadata(None, 7)
 
@@ -74,6 +93,7 @@ def test_attention_runner_installs_afd_metadata_on_forward_context():
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
+    runner._afd_transaction_counter = 0
     runner._afd_pending_metadata = runner._build_afd_metadata(None, 5)
     forward_context = SimpleNamespace(
         additional_kwargs={"platform_key": "platform_value"},
@@ -93,10 +113,11 @@ def test_attention_runner_sends_per_ubatch_dp_metadata():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.vllm_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(data_parallel_size=1),
+        parallel_config=_parallel_config(),
     )
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
+    runner._afd_transaction_counter = 0
     runner._afd_pending_metadata = None
     ubatch_slices = [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)]
 
@@ -109,6 +130,7 @@ def test_attention_runner_sends_per_ubatch_dp_metadata():
 def test_ubatch_metadata_clones_parent_and_preserves_additional_kwargs():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_connector = object()
+    runner._afd_transaction_counter = 0
     parent = runner._build_afd_metadata(
         [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)],
         8,
@@ -145,14 +167,14 @@ def test_ubatch_metadata_clones_parent_and_preserves_additional_kwargs():
 def test_phase5_allows_two_way_ubatching_but_rejects_other_counts():
     fail_if_unsupported_ubatching(
         SimpleNamespace(
-            parallel_config=SimpleNamespace(use_ubatching=True, num_ubatches=2)
+            parallel_config=_parallel_config(use_ubatching=True, num_ubatches=2),
         ),
     )
 
     with pytest.raises(RuntimeError, match="exactly two"):
         fail_if_unsupported_ubatching(
             SimpleNamespace(
-                parallel_config=SimpleNamespace(use_ubatching=True, num_ubatches=4),
+                parallel_config=_parallel_config(use_ubatching=True, num_ubatches=4),
             ),
         )
 
@@ -163,6 +185,7 @@ def test_attention_runner_enables_ubatching_for_afd_dp1_thresholds():
         parallel_config=SimpleNamespace(
             data_parallel_size=1,
             use_ubatching=True,
+            num_ubatches=2,
             dbo_decode_token_threshold=2,
             dbo_prefill_token_threshold=4,
         ),
@@ -193,6 +216,7 @@ def test_attention_runner_enables_decode_ubatching_for_afd_dp1_thresholds():
         parallel_config=SimpleNamespace(
             data_parallel_size=1,
             use_ubatching=True,
+            num_ubatches=2,
             dbo_decode_token_threshold=2,
             dbo_prefill_token_threshold=4,
         ),
@@ -219,7 +243,7 @@ def test_attention_runner_enables_decode_ubatching_for_afd_dp1_thresholds():
 
 def test_attention_runner_rejects_empty_native_ubatches():
     vllm_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(num_ubatches=2),
+        parallel_config=_parallel_config(num_ubatches=2),
     )
 
     assert not _has_enough_tokens_for_ubatches(vllm_config, 1)
@@ -234,7 +258,7 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.vllm_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
+        parallel_config=_parallel_config(),
     )
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
@@ -242,7 +266,7 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     runner._afd_transaction_counter = 0
     forward_context = SimpleNamespace(
         additional_kwargs={},
-        dp_metadata="dp",
+        dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
         ubatch_slices=None,
         batch_descriptor=SimpleNamespace(num_tokens=1),
     )
@@ -277,7 +301,7 @@ def test_afd_rank_derives_from_data_parallel_rank():
         afd_server_rank=0,
     )
     vllm_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(data_parallel_size=2, data_parallel_rank=1),
+        parallel_config=_parallel_config(data_parallel_size=2, data_parallel_rank=1),
     )
 
     ranked = _with_dp_derived_afd_rank(vllm_config, config)

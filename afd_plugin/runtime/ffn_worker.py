@@ -47,7 +47,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
             caller="AFDFFNWorker.init_device",
             expected_role="ffn",
         )
-        if getattr(self, "use_v2_model_runner", False):
+        if self.use_v2_model_runner:
             raise RuntimeError(
                 "AFD FFN runtime currently supports only the vLLM v1 "
                 "GPUModelRunner interface; unset VLLM_USE_V2_MODEL_RUNNER",
@@ -75,8 +75,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
     def initialize_from_config(self, kv_cache_config: Any) -> None:
         """Skip KV cache allocation and start the FFN connector loop."""
 
-        if hasattr(self, "cache_config") and hasattr(kv_cache_config, "num_blocks"):
-            self.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
+        self.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         self.model_runner.initialize_kv_cache(kv_cache_config)
         self.model_runner.initialize_afd_connector()
         self.start_ffn_server_loop()
@@ -99,8 +98,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         if self._ffn_thread is not None and self._ffn_thread.is_alive():
             return
 
-        connector = getattr(self.model_runner, "connector", None)
-        if connector is not None and not getattr(connector, "is_initialized", False):
+        connector = self.model_runner.connector
+        if not connector.is_initialized:
             self.model_runner.initialize_afd_connector()
 
         self._ffn_shutdown_event = threading.Event()
@@ -128,9 +127,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         try:
             import torch
 
-            device = getattr(self, "device", None)
-            if device is not None and getattr(device, "type", None) == "cuda":
-                torch.cuda.set_device(device)
+            if self.device.type == "cuda":
+                torch.cuda.set_device(self.device)
         except Exception:
             pass
 
@@ -149,7 +147,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
             try:
                 import torch
 
-                if getattr(getattr(self, "device", None), "type", None) == "cuda":
+                if self.device.type == "cuda":
                     torch.cuda.synchronize()
             except Exception:
                 pass
@@ -158,9 +156,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         event = self._ffn_shutdown_event
         if event is not None:
             event.set()
-        close = getattr(getattr(self, "model_runner", None), "shutdown", None)
-        if callable(close):
-            close()
+        self.model_runner.shutdown()
         thread = self._ffn_thread
         if thread is not None:
             thread.join(timeout=5)
@@ -169,9 +165,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
 
     def shutdown(self) -> None:
         self.stop_ffn_server_loop()
-        parent_shutdown = getattr(super(), "shutdown", None)
-        if callable(parent_shutdown):
-            parent_shutdown()
+        super().shutdown()
 
 
 __all__ = ["AFDFFNWorker"]

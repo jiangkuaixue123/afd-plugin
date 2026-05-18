@@ -58,14 +58,10 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 "AFD ubatching CUDA graph support is deferred to Phase 6",
             )
         trace_ubatch_slices(ubatch_slices, source="wrapper")
-        parent_additional_kwargs = dict(
-            getattr(forward_context, "additional_kwargs", None) or {},
-        )
+        parent_additional_kwargs = dict(forward_context.additional_kwargs)
         if "afd_metadata" not in parent_additional_kwargs:
             self._install_missing_afd_metadata(forward_context, ubatch_slices)
-            parent_additional_kwargs = dict(
-                getattr(forward_context, "additional_kwargs", None) or {},
-            )
+            parent_additional_kwargs = dict(forward_context.additional_kwargs)
 
         ubatch_metadata = self._make_ubatch_metadata(
             ubatch_slices=ubatch_slices,
@@ -105,7 +101,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         forward_context.additional_kwargs["afd_metadata"] = afd_metadata
         provider._afd_pending_metadata = afd_metadata
         provider._send_dp_metadata(
-            getattr(forward_context, "dp_metadata", None),
+            forward_context.dp_metadata,
             ubatch_slices,
         )
         trace_ubatch_slices(ubatch_slices, source="wrapper_missing_afd_metadata")
@@ -129,9 +125,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         from vllm.v1.worker.ubatching import make_ubatch_contexts
 
         parent_forward_context = get_forward_context()
-        parent_additional_kwargs = dict(
-            getattr(parent_forward_context, "additional_kwargs", None) or {},
-        )
+        parent_additional_kwargs = dict(parent_forward_context.additional_kwargs)
         afd_metadata = parent_additional_kwargs.get("afd_metadata")
         if afd_metadata is None:
             if getattr(self, "_afd_use_native_ubatch_metadata", False):
@@ -259,8 +253,8 @@ def build_ubatch_dp_metadata_list(
     vLLM internals. For DP>1 we delegate to vLLM's native ``DPMetadata.make``.
     """
 
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+    parallel_config = vllm_config.parallel_config
+    dp_size = int(parallel_config.data_parallel_size)
     if dp_size <= 1:
         return [
             AFDSingleDPMetadata(
@@ -295,10 +289,10 @@ def _resolve_ubatch_unpadded_tokens(
     ubatch_slice: Any,
     ubatch_idx: int,
 ) -> int:
-    unpadded_lens = getattr(afd_metadata, "afd_tokens_unpadded_lens", None) or []
+    unpadded_lens = afd_metadata.afd_tokens_unpadded_lens
     if ubatch_idx < len(unpadded_lens):
         return int(unpadded_lens[ubatch_idx])
-    return int(getattr(ubatch_slice, "num_tokens", 0))
+    return int(ubatch_slice.num_tokens)
 
 
 def _cpu_int_tensor(values: list[int]) -> Any:
