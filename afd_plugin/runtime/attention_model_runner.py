@@ -302,10 +302,11 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         vLLM uses ``execute_dummy_batch`` on idle DP ranks while another DP rank
         is serving a request. The native dummy path calls the model directly,
         bypassing ``_model_forward()``, so we provide AFD metadata lazily when
-        the plugin-owned model reads the current forward context.
+        the plugin-owned model reads the current forward context. Do not force
+        native attention metadata here: profiling dummy runs can happen before
+        vLLM initializes ``kv_cache_config``.
         """
 
-        args, kwargs = _force_dummy_attention_metadata(args, kwargs)
         previous_metadata = self._afd_pending_metadata
         try:
             with use_afd_metadata_provider(self):
@@ -482,20 +483,6 @@ def _forward_context_num_tokens(
     if num_tokens is not None:
         return max(1, int(num_tokens))
     return 1
-
-
-def _force_dummy_attention_metadata(
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    if len(args) >= 3:
-        mutable_args = list(args)
-        mutable_args[2] = True
-        return tuple(mutable_args), kwargs
-
-    kwargs = dict(kwargs)
-    kwargs["force_attention"] = True
-    return args, kwargs
 
 
 @contextmanager
