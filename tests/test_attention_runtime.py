@@ -6,8 +6,10 @@ import pytest
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors import AFDConnectorFactory
+from afd_plugin.models.forward_context import get_afd_metadata_from_forward_context
 from afd_plugin.runtime.attention_model_runner import (
     AFDAttentionModelRunner,
+    _force_dummy_attention_metadata,
     _has_enough_tokens_for_ubatches,
     _with_dp_derived_afd_rank,
     fail_if_cuda_graph_enabled,
@@ -211,7 +213,50 @@ def test_attention_runner_rejects_empty_native_ubatches():
 
 
 def test_attention_runner_inherits_native_dummy_run_microbatching():
-    assert "_dummy_run" not in AFDAttentionModelRunner.__dict__
+    assert "_dummy_run" in AFDAttentionModelRunner.__dict__
+
+
+def test_forward_context_provider_installs_missing_afd_metadata():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
+    )
+    runner.afd_connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        SimpleNamespace(),
+        runner.afd_config,
+    )
+    runner._is_warmup = False
+    runner._afd_pending_metadata = None
+    runner._afd_transaction_counter = 0
+    forward_context = SimpleNamespace(
+        additional_kwargs={},
+        dp_metadata="dp",
+        ubatch_slices=None,
+        batch_descriptor=SimpleNamespace(num_tokens=1),
+    )
+
+    from afd_plugin.models.forward_context import use_afd_metadata_provider
+
+    with use_afd_metadata_provider(runner):
+        metadata = get_afd_metadata_from_forward_context(forward_context)
+
+    assert metadata is not None
+    assert metadata.afd_tokens_lens == [1]
+    assert forward_context.additional_kwargs["afd_metadata"] is metadata
+    assert runner.afd_connector.sent_dp_metadata_lists
+
+
+def test_dummy_run_forces_attention_metadata():
+    args, kwargs = _force_dummy_attention_metadata((3,), {})
+    assert args == (3,)
+    assert kwargs["force_attention"] is True
+
+    args, kwargs = _force_dummy_attention_metadata((3, None, False), {})
+    assert args == (3, None, True)
+    assert kwargs == {}
 
 
 def test_attention_runtime_rejects_cuda_graph_until_phase6():

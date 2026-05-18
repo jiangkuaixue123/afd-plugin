@@ -14,6 +14,7 @@ from afd_plugin.connectors import (
     AFDMetadata,
     AFDSingleDPMetadata,
 )
+from afd_plugin.models.forward_context import use_afd_metadata_provider
 from afd_plugin.runtime._optional import optional_class
 from afd_plugin.runtime.ubatch_wrapper import (
     AFDUBatchWrapper,
@@ -111,8 +112,9 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             dp_metadata = self._ensure_dp_metadata(dp_metadata)
             dp_metadata_list = {0: dp_metadata}
         update = getattr(self.afd_connector, "update_state_from_dp_metadata", None)
+        is_warmup = bool(getattr(self, "_is_warmup", False))
         if callable(update):
-            update(dp_metadata_list, is_warmup=self._is_warmup)
+            update(dp_metadata_list, is_warmup=is_warmup)
 
         should_send = True
         rank = getattr(self.afd_connector, "world_rank", None)
@@ -127,21 +129,21 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             should_send=should_send,
             stages=sorted(int(stage_idx) for stage_idx in dp_metadata_list),
             dp_metadata=dp_metadata_summary(dp_metadata_list),
-            is_warmup=self._is_warmup,
+            is_warmup=is_warmup,
         )
         if should_send and callable(send):
             afd_trace(
                 "attn_send_dp_metadata_begin",
                 rank=rank,
                 dp_metadata=dp_metadata_summary(dp_metadata_list),
-                is_warmup=self._is_warmup,
+                is_warmup=is_warmup,
             )
-            send(dp_metadata_list, is_warmup=self._is_warmup)
+            send(dp_metadata_list, is_warmup=is_warmup)
             afd_trace(
                 "attn_send_dp_metadata_done",
                 rank=rank,
                 dp_metadata=dp_metadata_summary(dp_metadata_list),
-                is_warmup=self._is_warmup,
+                is_warmup=is_warmup,
             )
 
     def load_model(self, *args: Any, **kwargs: Any) -> Any:
@@ -201,6 +203,11 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self,
         forward_context: object,
     ) -> None:
+        if self._afd_pending_metadata is None:
+            self._afd_pending_metadata = self._build_afd_metadata(
+                getattr(forward_context, "ubatch_slices", None),
+                _forward_context_num_tokens(forward_context, self.vllm_config),
+            )
         if self._afd_pending_metadata is not None:
             forward_context.additional_kwargs["afd_metadata"] = (
                 self._afd_pending_metadata
@@ -288,6 +295,23 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         forward_context = get_forward_context()
         self._install_afd_metadata_on_forward_context(forward_context)
         return super()._model_forward(*args, **kwargs)
+
+    def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
+        """Run vLLM's DP dummy batch through the AFD model path.
+
+        vLLM uses ``execute_dummy_batch`` on idle DP ranks while another DP rank
+        is serving a request. The native dummy path calls the model directly,
+        bypassing ``_model_forward()``, so we provide AFD metadata lazily when
+        the plugin-owned model reads the current forward context.
+        """
+
+        args, kwargs = _force_dummy_attention_metadata(args, kwargs)
+        previous_metadata = self._afd_pending_metadata
+        try:
+            with use_afd_metadata_provider(self):
+                return super()._dummy_run(*args, **kwargs)
+        finally:
+            self._afd_pending_metadata = previous_metadata
 
     def shutdown(self) -> None:
         close = getattr(getattr(self, "afd_connector", None), "close", None)
@@ -437,6 +461,41 @@ def _has_enough_tokens_for_ubatches(vllm_config: object, num_tokens: int) -> boo
     parallel_config = getattr(vllm_config, "parallel_config", None)
     num_ubatches = int(getattr(parallel_config, "num_ubatches", 1))
     return int(num_tokens) >= max(num_ubatches, 1)
+
+
+def _forward_context_num_tokens(
+    forward_context: object,
+    vllm_config: object,
+) -> int:
+    dp_metadata = getattr(forward_context, "dp_metadata", None)
+    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    dp_rank = int(getattr(parallel_config, "data_parallel_rank", 0))
+    if token_counts is not None:
+        try:
+            return max(1, int(token_counts[dp_rank]))
+        except Exception:
+            pass
+
+    batch_descriptor = getattr(forward_context, "batch_descriptor", None)
+    num_tokens = getattr(batch_descriptor, "num_tokens", None)
+    if num_tokens is not None:
+        return max(1, int(num_tokens))
+    return 1
+
+
+def _force_dummy_attention_metadata(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    if len(args) >= 3:
+        mutable_args = list(args)
+        mutable_args[2] = True
+        return tuple(mutable_args), kwargs
+
+    kwargs = dict(kwargs)
+    kwargs["force_attention"] = True
+    return args, kwargs
 
 
 @contextmanager
