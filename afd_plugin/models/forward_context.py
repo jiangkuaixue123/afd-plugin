@@ -4,7 +4,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+_afd_metadata_provider: ContextVar[Any | None] = ContextVar(
+    "afd_metadata_provider",
+    default=None,
+)
 
 
 def get_afd_metadata_from_forward_context(forward_context: object | None = None) -> Any:
@@ -21,7 +29,29 @@ def get_afd_metadata_from_forward_context(forward_context: object | None = None)
         forward_context = get_forward_context()
 
     additional_kwargs = getattr(forward_context, "additional_kwargs", None) or {}
-    return additional_kwargs.get("afd_metadata")
+    metadata = additional_kwargs.get("afd_metadata")
+    if metadata is not None:
+        return metadata
+
+    provider = _afd_metadata_provider.get()
+    install = getattr(provider, "_install_afd_metadata_on_forward_context", None)
+    if callable(install):
+        install(forward_context)
+        additional_kwargs = getattr(forward_context, "additional_kwargs", None) or {}
+        return additional_kwargs.get("afd_metadata")
+    return None
 
 
-__all__ = ["get_afd_metadata_from_forward_context"]
+@contextmanager
+def use_afd_metadata_provider(provider: Any) -> Iterator[None]:
+    token = _afd_metadata_provider.set(provider)
+    try:
+        yield
+    finally:
+        _afd_metadata_provider.reset(token)
+
+
+__all__ = [
+    "get_afd_metadata_from_forward_context",
+    "use_afd_metadata_provider",
+]
