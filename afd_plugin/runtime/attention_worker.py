@@ -40,7 +40,7 @@ class AFDAttentionWorker(_GPUWorker):  # type: ignore[misc, valid-type]
             caller="AFDAttentionWorker.init_device",
             expected_role="attention",
         )
-        if getattr(self, "use_v2_model_runner", False):
+        if self.use_v2_model_runner:
             raise RuntimeError(
                 "AFD Attention runtime currently supports only the vLLM v1 "
                 "GPUModelRunner; unset VLLM_USE_V2_MODEL_RUNNER for Phase 2",

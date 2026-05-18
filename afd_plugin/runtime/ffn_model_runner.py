@@ -36,10 +36,10 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             ) from _LoRAModelRunnerMixin_IMPORT_ERROR
 
         self.vllm_config = vllm_config
-        self.model_config = getattr(vllm_config, "model_config", None)
-        self.load_config = getattr(vllm_config, "load_config", None)
+        self.model_config = vllm_config.model_config
+        self.load_config = vllm_config.load_config
         self.device = device
-        self.dtype = getattr(self.model_config, "dtype", None)
+        self.dtype = self.model_config.dtype
         self.afd_config = self.parse_config(vllm_config)
         if not self.afd_config.enabled:
             raise ValueError("AFD FFN runtime requires enabled=true")
@@ -56,7 +56,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         )
         self.model: Any | None = None
         self.model_memory_usage = 0
-        self.num_layers = _resolve_num_hidden_layers(self.model_config)
+        self.num_layers = int(self.model_config.hf_config.num_hidden_layers)
         afd_trace(
             "ffn_runner_init",
             role=self.afd_config.role,
@@ -81,9 +81,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
 
         del load_dummy_weights
         del kwargs
-        if self.model_config is None or self.load_config is None:
-            raise RuntimeError("GPUFFNModelRunner requires vLLM model/load config")
-
         from vllm.model_executor.model_loader import get_model_loader
         from vllm.utils.mem_utils import DeviceMemoryProfiler
 
@@ -149,9 +146,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             dp_metadata=dp_metadata_summary(dp_metadata_list),
             is_graph_capturing=is_graph_capturing,
         )
-        with _ffn_forward_context(
-            getattr(self, "vllm_config", None),
-        ) as forward_context:
+        with _ffn_forward_context(self.vllm_config) as forward_context:
             for layer_idx in range(num_layers):
                 for stage_idx in stage_ids:
                     afd_trace(
@@ -164,19 +159,19 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                         "ffn_layer_stage_recv_done",
                         layer_idx=layer_idx,
                         stage_idx=stage_idx,
-                        metadata_layer_idx=getattr(metadata, "layer_idx", None),
-                        metadata_stage_idx=getattr(metadata, "stage_idx", None),
-                        metadata_ubatch_idx=getattr(metadata, "ubatch_idx", None),
+                        metadata_layer_idx=metadata.layer_idx,
+                        metadata_stage_idx=metadata.stage_idx,
+                        metadata_ubatch_idx=metadata.ubatch_idx,
                         tensor=tensor_summary(hidden_states),
                     )
                     metadata.layer_idx = layer_idx
                     if forward_context is not None:
                         forward_context.dp_metadata = dp_metadata_list.get(
-                            getattr(metadata, "stage_idx", stage_idx),
+                            metadata.stage_idx,
                         )
                         forward_context.additional_kwargs["afd_metadata"] = metadata
                         _set_moe_layer_index(forward_context, layer_idx)
-                    recv_handle_list = getattr(metadata, "recv_handle_list", None)
+                    recv_handle_list = metadata.recv_handle_list
                     if recv_handle_list is not None:
                         for work in recv_handle_list:
                             work.wait()
@@ -223,18 +218,15 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         *,
         is_graph_capturing: bool,
     ) -> None:
-        update = getattr(self.connector, "update_state_from_dp_metadata", None)
-        if not callable(update):
-            return
         afd_trace(
             "ffn_update_connector_state_begin",
             dp_metadata=dp_metadata_summary(dp_metadata_list),
             is_graph_capturing=is_graph_capturing,
         )
-        try:
-            update(dp_metadata_list, is_graph_capturing=is_graph_capturing)
-        except TypeError:
-            update(dp_metadata_list, is_graph_capturing)
+        self.connector.update_state_from_dp_metadata(
+            dp_metadata_list,
+            is_graph_capturing=is_graph_capturing,
+        )
         afd_trace(
             "ffn_update_connector_state_done",
             dp_metadata=dp_metadata_summary(dp_metadata_list),
@@ -300,9 +292,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         return ()
 
     def shutdown(self) -> None:
-        close = getattr(getattr(self, "connector", None), "close", None)
-        if callable(close):
-            close()
+        self.connector.close()
 
 
 def _resolve_world_ranks() -> tuple[int, int]:
@@ -327,19 +317,8 @@ def _ffn_forward_context(vllm_config: object):
         yield get_forward_context()
 
 
-def _resolve_num_hidden_layers(model_config: object | None) -> int:
-    hf_config = getattr(model_config, "hf_config", None)
-    text_config = getattr(hf_config, "text_config", None)
-    value = getattr(text_config, "num_hidden_layers", None)
-    if value is None:
-        value = getattr(hf_config, "num_hidden_layers", None)
-    if value is None:
-        return 1
-    return int(value)
-
-
 def _set_moe_layer_index(forward_context: object, layer_idx: int) -> None:
-    all_moe_layers = getattr(forward_context, "all_moe_layers", None)
+    all_moe_layers = forward_context.all_moe_layers
     if not all_moe_layers:
         return
 

@@ -77,10 +77,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             afd_tokens_start_loc = [ub.token_slice.start for ub in ubatch_slices]
             afd_reqs_start_loc = [ub.request_slice.start for ub in ubatch_slices]
             afd_tokens_lens = [ub.num_tokens for ub in ubatch_slices]
-            afd_tokens_unpadded_lens = [
-                int(getattr(ub, "num_tokens_unpadded", ub.num_tokens))
-                for ub in ubatch_slices
-            ]
+            afd_tokens_unpadded_lens = [int(ub.num_tokens) for ub in ubatch_slices]
             num_of_stages = len(ubatch_slices)
         else:
             afd_tokens_start_loc = [0]
@@ -111,18 +108,16 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         else:
             dp_metadata = self._ensure_dp_metadata(dp_metadata)
             dp_metadata_list = {0: dp_metadata}
-        update = getattr(self.afd_connector, "update_state_from_dp_metadata", None)
-        is_warmup = bool(getattr(self, "_is_warmup", False))
-        if callable(update):
-            update(dp_metadata_list, is_warmup=is_warmup)
+        is_warmup = bool(self._is_warmup)
+        self.afd_connector.update_state_from_dp_metadata(
+            dp_metadata_list,
+            is_warmup=is_warmup,
+        )
 
         should_send = True
-        rank = getattr(self.afd_connector, "world_rank", None)
-        is_top_rank = getattr(self.afd_connector, "is_attn_top_min_size_rank", None)
-        if callable(is_top_rank) and rank is not None:
-            should_send = bool(is_top_rank(rank))
+        rank = self.afd_connector.world_rank
+        should_send = bool(self.afd_connector.is_attn_top_min_size_rank(rank))
 
-        send = getattr(self.afd_connector, "send_dp_metadata_list", None)
         afd_trace(
             "attn_send_dp_metadata_decision",
             rank=rank,
@@ -131,14 +126,17 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             dp_metadata=dp_metadata_summary(dp_metadata_list),
             is_warmup=is_warmup,
         )
-        if should_send and callable(send):
+        if should_send:
             afd_trace(
                 "attn_send_dp_metadata_begin",
                 rank=rank,
                 dp_metadata=dp_metadata_summary(dp_metadata_list),
                 is_warmup=is_warmup,
             )
-            send(dp_metadata_list, is_warmup=is_warmup)
+            self.afd_connector.send_dp_metadata_list(
+                dp_metadata_list,
+                is_warmup=is_warmup,
+            )
             afd_trace(
                 "attn_send_dp_metadata_done",
                 rank=rank,
@@ -176,8 +174,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if dp_metadata is not None:
             return dp_metadata
 
-        parallel_config = getattr(self.vllm_config, "parallel_config", None)
-        dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+        dp_size = int(self.vllm_config.parallel_config.data_parallel_size)
         if dp_size != 1:
             raise RuntimeError("AFD expected vLLM DPMetadata for attention DP > 1")
 
@@ -205,7 +202,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
     ) -> None:
         if self._afd_pending_metadata is None:
             self._afd_pending_metadata = self._build_afd_metadata(
-                getattr(forward_context, "ubatch_slices", None),
+                forward_context.ubatch_slices,
                 _forward_context_num_tokens(forward_context, self.vllm_config),
             )
         if self._afd_pending_metadata is not None:
@@ -213,8 +210,8 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
                 self._afd_pending_metadata
             )
         self._send_dp_metadata(
-            getattr(forward_context, "dp_metadata", None),
-            getattr(forward_context, "ubatch_slices", None),
+            forward_context.dp_metadata,
+            forward_context.ubatch_slices,
         )
 
     def _build_attention_metadata(self, *args: Any, **kwargs: Any) -> Any:
@@ -260,12 +257,10 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         )
 
     def _should_ubatch_without_vllm_dp(self, *args: Any, **kwargs: Any) -> bool:
-        parallel_config = getattr(self.vllm_config, "parallel_config", None)
-        if parallel_config is None:
+        parallel_config = self.vllm_config.parallel_config
+        if int(parallel_config.data_parallel_size) > 1:
             return False
-        if int(getattr(parallel_config, "data_parallel_size", 1)) > 1:
-            return False
-        if not bool(getattr(parallel_config, "use_ubatching", False)):
+        if not bool(parallel_config.use_ubatching):
             return False
         if not bool(kwargs.get("allow_microbatching", True)):
             return False
@@ -315,24 +310,18 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             self._afd_pending_metadata = previous_metadata
 
     def shutdown(self) -> None:
-        close = getattr(getattr(self, "afd_connector", None), "close", None)
-        if callable(close):
-            close()
-        parent_shutdown = getattr(super(), "shutdown", None)
-        if callable(parent_shutdown):
-            parent_shutdown()
+        self.afd_connector.close()
+        super().shutdown()
 
     def _next_afd_transaction_id(self) -> str:
-        counter = getattr(self, "_afd_transaction_counter", 0)
+        counter = self._afd_transaction_counter
         self._afd_transaction_counter = counter + 1
         return f"afd-{counter}"
 
 
 def fail_if_unsupported_ubatching(vllm_config: object) -> None:
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    if parallel_config is None:
-        return
-    num_ubatches = int(getattr(parallel_config, "num_ubatches", 1))
+    parallel_config = vllm_config.parallel_config
+    num_ubatches = int(parallel_config.num_ubatches)
     if _is_ubatching_enabled(vllm_config) and num_ubatches != 2:
         raise RuntimeError(
             "AFD Phase 5 currently supports exactly two ubatches; "
@@ -344,8 +333,7 @@ fail_if_ubatching_enabled = fail_if_unsupported_ubatching
 
 
 def fail_if_cuda_graph_enabled(vllm_config: object) -> None:
-    model_config = getattr(vllm_config, "model_config", None)
-    if getattr(model_config, "enforce_eager", True) is False:
+    if vllm_config.model_config.enforce_eager is False:
         raise RuntimeError(
             "AFD CUDA graph support is deferred to Phase 6; pass --enforce-eager",
         )
@@ -365,13 +353,11 @@ def _with_dp_derived_afd_rank(
     vllm_config: object,
     afd_config: AFDConfig,
 ) -> AFDConfig:
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    if parallel_config is None:
-        return afd_config
-    dp_size = int(getattr(parallel_config, "data_parallel_size", 1))
+    parallel_config = vllm_config.parallel_config
+    dp_size = int(parallel_config.data_parallel_size)
     if dp_size <= 1:
         return afd_config
-    dp_rank = int(getattr(parallel_config, "data_parallel_rank", 0))
+    dp_rank = int(parallel_config.data_parallel_rank)
     role_size = (
         afd_config.num_attention_servers
         if afd_config.role == "attention"
@@ -388,14 +374,7 @@ def _with_dp_derived_afd_rank(
 
 
 def _is_ubatching_enabled(vllm_config: object) -> bool:
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    if parallel_config is None:
-        return False
-    return bool(
-        getattr(parallel_config, "use_ubatching", False)
-        or getattr(parallel_config, "enable_dbo", False)
-        or int(getattr(parallel_config, "ubatch_size", 1)) > 1
-    )
+    return bool(vllm_config.parallel_config.use_ubatching)
 
 
 def _resolve_native_ubatch_wrapper() -> type[Any] | None:
@@ -428,14 +407,12 @@ def _check_ubatch_thresholds(
             check_ubatch_thresholds(parallel_config, num_tokens, uniform_decode),
         )
     except Exception:
-        if not bool(getattr(parallel_config, "use_ubatching", False)):
+        if not bool(parallel_config.use_ubatching):
             return False
         if uniform_decode:
-            threshold = int(getattr(parallel_config, "dbo_decode_token_threshold", 32))
+            threshold = int(parallel_config.dbo_decode_token_threshold)
         else:
-            threshold = int(
-                getattr(parallel_config, "dbo_prefill_token_threshold", 512),
-            )
+            threshold = int(parallel_config.dbo_prefill_token_threshold)
         return num_tokens >= threshold
 
 
@@ -459,8 +436,7 @@ def _batch_execution_values(
 
 
 def _has_enough_tokens_for_ubatches(vllm_config: object, num_tokens: int) -> bool:
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    num_ubatches = int(getattr(parallel_config, "num_ubatches", 1))
+    num_ubatches = int(vllm_config.parallel_config.num_ubatches)
     return int(num_tokens) >= max(num_ubatches, 1)
 
 
@@ -468,21 +444,12 @@ def _forward_context_num_tokens(
     forward_context: object,
     vllm_config: object,
 ) -> int:
-    dp_metadata = getattr(forward_context, "dp_metadata", None)
-    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    dp_rank = int(getattr(parallel_config, "data_parallel_rank", 0))
-    if token_counts is not None:
-        try:
-            return max(1, int(token_counts[dp_rank]))
-        except Exception:
-            pass
+    dp_metadata = forward_context.dp_metadata
+    dp_rank = int(vllm_config.parallel_config.data_parallel_rank)
+    if dp_metadata is not None:
+        return max(1, int(dp_metadata.num_tokens_across_dp_cpu[dp_rank]))
 
-    batch_descriptor = getattr(forward_context, "batch_descriptor", None)
-    num_tokens = getattr(batch_descriptor, "num_tokens", None)
-    if num_tokens is not None:
-        return max(1, int(num_tokens))
-    return 1
+    return max(1, int(forward_context.batch_descriptor.num_tokens))
 
 
 @contextmanager

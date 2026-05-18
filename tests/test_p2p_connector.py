@@ -18,7 +18,7 @@ def _fake_vllm_config():
             enforce_eager=True,
             hf_config=SimpleNamespace(hidden_size=16, num_hidden_layers=2),
         ),
-        parallel_config=SimpleNamespace(data_parallel_rank=0),
+        parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
     )
 
 

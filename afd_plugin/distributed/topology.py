@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 from afd_plugin.config import AFDConfig
 
@@ -155,35 +154,9 @@ def build_rank_mapping(
     )
 
 
-def resolve_hidden_size(vllm_config: object) -> int:
-    model_config = getattr(vllm_config, "model_config", None)
-    hf_config = getattr(model_config, "hf_config", None)
-    text_config = getattr(hf_config, "text_config", None)
-    hidden_size = getattr(text_config, "hidden_size", None)
-    if hidden_size is None:
-        hidden_size = getattr(hf_config, "hidden_size", None)
-    if hidden_size is None:
-        raise ValueError("p2pconnector requires model_config.hf_config.hidden_size")
-    return int(hidden_size)
-
-
-def resolve_num_hidden_layers(vllm_config: object) -> int:
-    model_config = getattr(vllm_config, "model_config", None)
-    hf_config = getattr(model_config, "hf_config", None)
-    text_config = getattr(hf_config, "text_config", None)
-    value: Any = getattr(text_config, "num_hidden_layers", None)
-    if value is None:
-        value = getattr(hf_config, "num_hidden_layers", None)
-    if value is None:
-        return 1
-    return int(value)
-
-
 __all__ = [
     "AFDRankMapping",
     "build_rank_mapping",
-    "resolve_hidden_size",
-    "resolve_num_hidden_layers",
     "topology_from_config",
     "validate_p2p_topology",
 ]

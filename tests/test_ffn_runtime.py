@@ -61,11 +61,17 @@ def _metadata_for_stage(stage_idx):
     )
 
 
-def test_ffn_runner_executes_model_compute_ffn_output():
+def _runner_with_connector_and_model(model, *, num_layers=1):
     runner = object.__new__(GPUFFNModelRunner)
+    runner.vllm_config = SimpleNamespace()
     runner.connector = _FakeConnector()
-    runner.model = _FakeModel()
-    runner.num_layers = 1
+    runner.model = model
+    runner.num_layers = num_layers
+    return runner
+
+
+def test_ffn_runner_executes_model_compute_ffn_output():
+    runner = _runner_with_connector_and_model(_FakeModel())
     metadata = _metadata()
     runner.connector.attn_outputs.append(("hidden", metadata))
 
@@ -79,10 +85,7 @@ def test_ffn_runner_executes_model_compute_ffn_output():
 
 
 def test_ffn_runner_passthrough_without_model_compute_hook():
-    runner = object.__new__(GPUFFNModelRunner)
-    runner.connector = _FakeConnector()
-    runner.model = SimpleNamespace()
-    runner.num_layers = 1
+    runner = _runner_with_connector_and_model(SimpleNamespace())
     metadata = _metadata()
     runner.connector.attn_outputs.append(("hidden", metadata))
 
@@ -92,10 +95,7 @@ def test_ffn_runner_passthrough_without_model_compute_hook():
 
 
 def test_ffn_runner_processes_each_ubatch_for_each_layer():
-    runner = object.__new__(GPUFFNModelRunner)
-    runner.connector = _FakeConnector()
-    runner.model = _FakeModel()
-    runner.num_layers = 2
+    runner = _runner_with_connector_and_model(_FakeModel(), num_layers=2)
     metadata_0_layer_0 = _metadata_for_stage(0)
     metadata_1_layer_0 = _metadata_for_stage(1)
     metadata_0_layer_1 = _metadata_for_stage(0)

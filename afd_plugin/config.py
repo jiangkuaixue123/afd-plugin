@@ -192,7 +192,9 @@ def parse_afd_config(
             expected_role=expected_role,
         )
 
-    additional_config = getattr(source, "additional_config", source)
+    additional_config = (
+        source if isinstance(source, Mapping) else source.additional_config
+    )
     if additional_config is None:
         afd_raw = None
     elif not isinstance(additional_config, Mapping):
