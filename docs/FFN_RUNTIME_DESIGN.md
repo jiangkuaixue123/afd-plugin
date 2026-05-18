@@ -33,9 +33,11 @@ vllm serve <model> \
     "afd": {
       "enabled": true,
       "role": "ffn",
-      "connector": "dummy",
+      "connector": "p2pconnector",
+      "host": "127.0.0.1",
+      "port": 1239,
       "num_afd_stages": 3,
-      "num_attention_servers": 1,
+      "num_attention_servers": 2,
       "num_ffn_servers": 1
     }
   }'
@@ -229,14 +231,14 @@ execute_ffn_step(dp_metadata_list=...)
 - `AFDFFNWorker` 继承 vLLM v1 `GPUWorker`
 - `GPUFFNModelRunner` 从原始 AFD commit 迁移
 - `additional_config["afd"]` 解析
-- dummy connector 路径
+- P2P connector 路径
 - 空 KV cache spec
 - `initialize_from_config()` 启动常驻 loop
 - `execute_model()` fail fast
 - shutdown 停止 loop
 
-P2P connector、CUDA graph capture、复杂拓扑、异构 A/F 比例和 profiling 可以在第一
-版 dummy connector 跑通后逐步补齐。
+CUDA graph capture、复杂拓扑、异构 A/F 比例和 profiling 可以在 P2P 基线稳定后逐步
+补齐。
 
 ## 待验证问题
 

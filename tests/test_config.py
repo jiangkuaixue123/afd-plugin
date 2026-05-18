@@ -21,7 +21,7 @@ def test_parse_canonical_additional_config_namespace():
             "afd": {
                 "enabled": True,
                 "role": "ffn",
-                "connector": "dummy",
+                "connector": "p2pconnector",
                 "num_afd_stages": "3",
                 "num_attention_servers": 2,
                 "num_ffn_servers": 2,
@@ -45,7 +45,7 @@ def test_parse_vllm_like_config_object():
             "afd": {
                 "enabled": True,
                 "role": "attention",
-                "connector": "dummy",
+                "connector": "p2pconnector",
             },
         },
     )

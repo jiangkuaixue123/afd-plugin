@@ -28,7 +28,7 @@ Phase 2 added the Attention-side MVP:
 - `AFDAttentionWorker` now injects `AFDAttentionModelRunner` while preserving
   the vLLM v1 GPU worker lifecycle.
 - `AFDAttentionModelRunner` parses `additional_config["afd"]`, initializes the
-  plugin-owned dummy connector, builds AFD metadata, and exposes it through
+  plugin-owned P2P connector, builds AFD metadata, and exposes it through
   `ForwardContext.additional_kwargs["afd_metadata"]`.
 - A minimal plugin-owned model helper can read AFD metadata from the forward
   context without patching `vllm.forward_context`.
@@ -37,11 +37,11 @@ Phase 3 has started for the FFN side:
 
 - `AFDFFNWorker` injects `GPUFFNModelRunner`, returns an empty KV cache spec,
   and starts a connector-driven FFN loop during worker initialization.
-- `GPUFFNModelRunner` consumes Attention-side hidden states from the dummy
+- `GPUFFNModelRunner` consumes Attention-side hidden states from the P2P
   connector, runs `model.compute_ffn_output()` when available, and returns
   outputs to the Attention side.
-- The dummy connector now supports an in-process Attention -> FFN -> Attention
-  round trip for CPU-safe smoke tests.
+- The legacy in-process dummy connector has been removed; CPU-safe tests now
+  use local fakes and metadata-level checks.
 
 Phase 4 has started the P2P connector migration:
 
@@ -65,21 +65,6 @@ fast, and role-based weight pruning, ubatching/DBO, and CUDA graph support
 remain deferred. AFD runtimes currently fail fast unless `--enforce-eager` is
 used. Opt-in GPU E2E coverage exists for eager `1A1F` and `2A2F` DeepSeekV2
 P2P runs.
-
-Example config shape:
-
-```json
-{
-  "afd": {
-    "enabled": true,
-    "role": "attention",
-    "connector": "dummy",
-    "num_afd_stages": 3,
-    "num_attention_servers": 1,
-    "num_ffn_servers": 1
-  }
-}
-```
 
 P2P config shape:
 

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.config import AFDConfig
-from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.models.forward_context import get_afd_metadata_from_forward_context
 from afd_plugin.runtime.attention_model_runner import (
     AFDAttentionModelRunner,
@@ -30,6 +29,32 @@ class _UbatchSlice:
         return self.token_slice.stop - self.token_slice.start
 
 
+class _RecordingConnector:
+    def __init__(self):
+        self.dp_metadata_updates = []
+        self.sent_dp_metadata_lists = []
+
+    def update_state_from_dp_metadata(
+        self,
+        dp_metadata_list,
+        *,
+        is_graph_capturing=False,
+        is_warmup=False,
+    ):
+        del is_graph_capturing, is_warmup
+        self.dp_metadata_updates.append(dp_metadata_list)
+
+    def send_dp_metadata_list(
+        self,
+        dp_metadata_list,
+        *,
+        is_graph_capturing=False,
+        is_warmup=False,
+    ):
+        del is_graph_capturing, is_warmup
+        self.sent_dp_metadata_lists.append(dp_metadata_list)
+
+
 def test_attention_runner_builds_single_stage_metadata():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_connector = object()
@@ -47,12 +72,7 @@ def test_attention_runner_builds_single_stage_metadata():
 def test_attention_runner_installs_afd_metadata_on_forward_context():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
-    runner.afd_connector = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        SimpleNamespace(),
-        runner.afd_config,
-    )
+    runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
     runner._afd_pending_metadata = runner._build_afd_metadata(None, 5)
     forward_context = SimpleNamespace(
@@ -75,12 +95,7 @@ def test_attention_runner_sends_per_ubatch_dp_metadata():
     runner.vllm_config = SimpleNamespace(
         parallel_config=SimpleNamespace(data_parallel_size=1),
     )
-    runner.afd_connector = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        SimpleNamespace(),
-        runner.afd_config,
-    )
+    runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
     runner._afd_pending_metadata = None
     ubatch_slices = [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)]
@@ -221,12 +236,7 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     runner.vllm_config = SimpleNamespace(
         parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
     )
-    runner.afd_connector = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        SimpleNamespace(),
-        runner.afd_config,
-    )
+    runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
     runner._afd_pending_metadata = None
     runner._afd_transaction_counter = 0

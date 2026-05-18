@@ -7,7 +7,7 @@ import afd_plugin
 
 def test_package_import_is_cpu_safe():
     assert afd_plugin.__version__
-    assert afd_plugin.AFDConfig().connector == "dummy"
+    assert afd_plugin.AFDConfig().connector == "p2pconnector"
 
 
 def test_register_afd_is_idempotent():

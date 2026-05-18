@@ -59,12 +59,6 @@ class AFDConnectorFactory:
 
 
 AFDConnectorFactory.register_connector(
-    "dummy",
-    "afd_plugin.connectors.dummy",
-    "DummyAFDConnector",
-)
-
-AFDConnectorFactory.register_connector(
     "p2pconnector",
     "afd_plugin.connectors.p2p",
     "P2PAFDConnector",
