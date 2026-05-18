@@ -13,7 +13,7 @@ AFD_ADDITIONAL_CONFIG_KEY: Final[str] = "afd"
 AFDRole = Literal["attention", "ffn"]
 
 SUPPORTED_AFD_ROLES: Final[tuple[str, ...]] = ("attention", "ffn")
-SUPPORTED_AFD_CONNECTORS: Final[tuple[str, ...]] = ("dummy", "p2pconnector")
+SUPPORTED_AFD_CONNECTORS: Final[tuple[str, ...]] = ("p2pconnector",)
 
 _ALIASES: Final[dict[str, str]] = {
     "afd_connector": "connector",
@@ -35,7 +35,7 @@ class AFDConfig:
 
     enabled: bool = False
     extra_config: dict[str, Any] = field(default_factory=dict)
-    connector: str = "dummy"
+    connector: str = "p2pconnector"
     role: AFDRole = "attention"
     port: int = 1239
     host: str = "127.0.0.1"

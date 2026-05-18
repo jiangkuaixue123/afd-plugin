@@ -62,7 +62,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             getattr(forward_context, "additional_kwargs", None) or {},
         )
         if "afd_metadata" not in parent_additional_kwargs:
-            self._install_dummy_afd_metadata(forward_context, ubatch_slices)
+            self._install_missing_afd_metadata(forward_context, ubatch_slices)
             parent_additional_kwargs = dict(
                 getattr(forward_context, "additional_kwargs", None) or {},
             )
@@ -86,7 +86,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         with self.sm_control:
             return self._run_ubatches(ubatch_metadata, self.runnable)
 
-    def _install_dummy_afd_metadata(
+    def _install_missing_afd_metadata(
         self,
         forward_context: Any,
         ubatch_slices: Any,
@@ -108,7 +108,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             getattr(forward_context, "dp_metadata", None),
             ubatch_slices,
         )
-        trace_ubatch_slices(ubatch_slices, source="wrapper_dummy_afd_metadata")
+        trace_ubatch_slices(ubatch_slices, source="wrapper_missing_afd_metadata")
 
     def _make_ubatch_metadata(
         self,

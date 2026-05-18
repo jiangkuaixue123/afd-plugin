@@ -24,9 +24,11 @@ vllm serve <model> \
     "afd": {
       "enabled": true,
       "role": "attention",
-      "connector": "dummy",
+      "connector": "p2pconnector",
+      "host": "127.0.0.1",
+      "port": 1239,
       "num_afd_stages": 3,
-      "num_attention_servers": 1,
+      "num_attention_servers": 2,
       "num_ffn_servers": 1
     }
   }'
@@ -167,13 +169,13 @@ Attention 侧模型逻辑不 patch vLLM 原生 model module。通过 vLLM ModelR
 - `AFDAttentionWorker` 继承 vLLM v1 `GPUWorker`
 - `AFDAttentionModelRunner` 继承 vLLM v1 `GPUModelRunner`
 - `additional_config["afd"]` 解析
-- dummy connector 路径
+- P2P connector 路径
 - AFD metadata 构造
 - forward context `additional_kwargs["afd_metadata"]`
 - normal `execute_model()` 路径中的 metadata 发送
 
-CUDA graph warmup/capture 路径、P2P connector、复杂 ubatching 和模型覆盖细节可以
-在第一版跑通 dummy connector 后逐步补齐。
+CUDA graph warmup/capture 路径、复杂 ubatching 和模型覆盖细节可以在 P2P 基线稳定后
+逐步补齐。
 
 ## 待验证问题
 

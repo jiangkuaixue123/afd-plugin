@@ -1,7 +1,7 @@
 # Phase 4 P2P Connector Design
 
-Phase 4 replaces the Phase 3 dummy connector transport with a real P2P backend
-while keeping the Attention and FFN runtime adapters intact.
+Phase 4 uses the real P2P backend while keeping the Attention and FFN runtime
+adapters intact. The earlier in-process dummy connector has been removed.
 
 ## Scope
 

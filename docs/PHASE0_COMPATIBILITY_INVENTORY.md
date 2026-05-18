@@ -149,9 +149,11 @@ vllm serve <model> \
     "afd": {
       "enabled": true,
       "role": "ffn",
-      "connector": "dummy",
+      "connector": "p2pconnector",
+      "host": "127.0.0.1",
+      "port": 1239,
       "num_afd_stages": 3,
-      "num_attention_servers": 1,
+      "num_attention_servers": 2,
       "num_ffn_servers": 1
     }
   }'
@@ -177,9 +179,11 @@ vllm serve <model> \
     "afd": {
       "enabled": true,
       "role": "attention",
-      "connector": "dummy",
+      "connector": "p2pconnector",
+      "host": "127.0.0.1",
+      "port": 1239,
       "num_afd_stages": 3,
-      "num_attention_servers": 1,
+      "num_attention_servers": 2,
       "num_ffn_servers": 1
     }
   }'
@@ -205,9 +209,11 @@ vllm serve <model> \
     "afd": {
       "enabled": true,
       "role": "ffn",
-      "connector": "dummy",
+      "connector": "p2pconnector",
+      "host": "127.0.0.1",
+      "port": 1239,
       "num_afd_stages": 3,
-      "num_attention_servers": 1,
+      "num_attention_servers": 2,
       "num_ffn_servers": 1
     }
   }'
