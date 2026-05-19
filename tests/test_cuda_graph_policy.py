@@ -12,11 +12,20 @@ from afd_plugin.runtime.cuda_graph import (
 )
 
 
-def _config(*, enforce_eager, cudagraph_mode=None, use_ubatching=False):
+def _config(
+    *,
+    enforce_eager,
+    cudagraph_mode=None,
+    use_ubatching=False,
+    num_ubatches=1,
+):
     return SimpleNamespace(
         model_config=SimpleNamespace(enforce_eager=enforce_eager),
         compilation_config=SimpleNamespace(cudagraph_mode=cudagraph_mode),
-        parallel_config=SimpleNamespace(use_ubatching=use_ubatching),
+        parallel_config=SimpleNamespace(
+            use_ubatching=use_ubatching,
+            num_ubatches=num_ubatches,
+        ),
     )
 
 
@@ -65,13 +74,29 @@ def test_cuda_graph_policy_rejects_non_full_decode_only_graph_modes(mode):
         )
 
 
-def test_cuda_graph_policy_rejects_ubatching_with_graph():
+def test_cuda_graph_policy_allows_two_way_ubatching_with_full_decode_only_graph():
+    policy = validate_cuda_graph_mode(
+        _config(
+            enforce_eager=False,
+            cudagraph_mode=FULL_DECODE_ONLY,
+            use_ubatching=True,
+            num_ubatches=2,
+        ),
+        role="attention",
+    )
+
+    assert policy.enabled is True
+    assert policy.allow_cuda_graph_with_ubatching is True
+
+
+def test_cuda_graph_policy_rejects_unsupported_ubatch_count_with_graph():
     with pytest.raises(RuntimeError, match="ubatching"):
         validate_cuda_graph_mode(
             _config(
                 enforce_eager=False,
                 cudagraph_mode=FULL_DECODE_ONLY,
                 use_ubatching=True,
+                num_ubatches=4,
             ),
             role="attention",
         )

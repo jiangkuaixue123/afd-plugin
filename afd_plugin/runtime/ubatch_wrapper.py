@@ -53,15 +53,48 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             return super().__call__(*args, **kwargs)
 
         cudagraph_runtime_mode = forward_context.cudagraph_runtime_mode
-        if cudagraph_runtime_mode is CUDAGraphMode.FULL:
-            raise RuntimeError(
-                "AFD ubatching CUDA graph support is deferred to Phase 6",
-            )
         trace_ubatch_slices(ubatch_slices, source="wrapper")
         parent_additional_kwargs = dict(forward_context.additional_kwargs)
         if "afd_metadata" not in parent_additional_kwargs:
             self._install_missing_afd_metadata(forward_context, ubatch_slices)
             parent_additional_kwargs = dict(forward_context.additional_kwargs)
+
+        num_tokens = sum(int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices)
+        dp_metadata = build_ubatch_dp_metadata_list(
+            self.vllm_config,
+            ubatch_slices,
+        )
+
+        if (
+            num_tokens not in self.cudagraphs
+            and cudagraph_runtime_mode is CUDAGraphMode.FULL
+        ):
+            ubatch_metadata = self._make_ubatch_metadata(
+                ubatch_slices=ubatch_slices,
+                attn_metadata=forward_context.attn_metadata,
+                slot_mapping=forward_context.slot_mapping,
+                input_ids=kwargs["input_ids"],
+                positions=kwargs["positions"],
+                inputs_embeds=kwargs["inputs_embeds"],
+                intermediate_tensors=kwargs["intermediate_tensors"],
+                compute_stream=_current_cuda_stream(),
+                dp_metadata=dp_metadata,
+                batch_descriptor=forward_context.batch_descriptor,
+                cudagraph_runtime_mode=CUDAGraphMode.NONE,
+            )
+            with self.sm_control:
+                return self._capture_ubatches(ubatch_metadata, self.runnable)
+
+        if (
+            num_tokens in self.cudagraphs
+            and cudagraph_runtime_mode is CUDAGraphMode.FULL
+        ):
+            from vllm.model_executor.offloader.base import get_offloader
+
+            get_offloader().sync_prev_onload()
+            cudagraph_metadata = self.cudagraphs[num_tokens]
+            cudagraph_metadata.cudagraph.replay()
+            return cudagraph_metadata.outputs
 
         ubatch_metadata = self._make_ubatch_metadata(
             ubatch_slices=ubatch_slices,
@@ -72,10 +105,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             inputs_embeds=kwargs["inputs_embeds"],
             intermediate_tensors=kwargs["intermediate_tensors"],
             compute_stream=_current_cuda_stream(),
-            dp_metadata=build_ubatch_dp_metadata_list(
-                self.vllm_config,
-                ubatch_slices,
-            ),
+            dp_metadata=dp_metadata,
             batch_descriptor=forward_context.batch_descriptor,
             cudagraph_runtime_mode=CUDAGraphMode.NONE,
         )
@@ -100,10 +130,11 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         )
         forward_context.additional_kwargs["afd_metadata"] = afd_metadata
         provider._afd_pending_metadata = afd_metadata
-        provider._send_dp_metadata(
-            forward_context.dp_metadata,
-            ubatch_slices,
-        )
+        if not bool(getattr(provider, "_afd_suppress_metadata_send", False)):
+            provider._send_dp_metadata(
+                forward_context.dp_metadata,
+                ubatch_slices,
+            )
         trace_ubatch_slices(ubatch_slices, source="wrapper_missing_afd_metadata")
 
     def _make_ubatch_metadata(

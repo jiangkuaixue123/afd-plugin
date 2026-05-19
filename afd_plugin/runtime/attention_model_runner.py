@@ -422,16 +422,24 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             # DP metadata transfer is a control-plane side effect.  The original
             # AFD path sends it before formal CUDA graph capture so the capture
             # contains only replayable model/data-plane work.
-            self._afd_pending_metadata = self._build_afd_metadata(
-                None,
-                int(desc.num_tokens),
-            )
             self._afd_is_graph_capturing = True
-            self._send_dp_metadata(
-                self._build_capture_dp_metadata(int(desc.num_tokens)),
-                None,
-            )
-            self._afd_suppress_metadata_send = True
+            if allow_microbatching:
+                # The AFD-aware ubatch wrapper builds the exact padded ubatch
+                # slices used by vLLM and sends per-stage DP metadata before it
+                # enters torch.cuda.graph(...).  Avoid sending a single-stage
+                # capture payload here.
+                self._afd_pending_metadata = None
+                self._afd_suppress_metadata_send = False
+            else:
+                self._afd_pending_metadata = self._build_afd_metadata(
+                    None,
+                    int(desc.num_tokens),
+                )
+                self._send_dp_metadata(
+                    self._build_capture_dp_metadata(int(desc.num_tokens)),
+                    None,
+                )
+                self._afd_suppress_metadata_send = True
             self._dummy_run(
                 desc.num_tokens,
                 cudagraph_runtime_mode=cudagraph_runtime_mode,
