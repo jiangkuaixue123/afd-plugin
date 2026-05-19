@@ -208,6 +208,26 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             max_tokens_across_dp_cpu=torch.max(num_tokens_across_dp_cpu),
         )
 
+    def _build_capture_dp_metadata(self, num_tokens: int) -> AFDSingleDPMetadata:
+        dp_size = int(self.vllm_config.parallel_config.data_parallel_size)
+        try:
+            import torch
+
+            num_tokens_across_dp_cpu = torch.full(
+                (dp_size,),
+                int(num_tokens),
+                dtype=torch.int32,
+                device="cpu",
+            )
+            max_tokens_across_dp_cpu = torch.max(num_tokens_across_dp_cpu)
+        except ModuleNotFoundError:
+            num_tokens_across_dp_cpu = [int(num_tokens)] * dp_size
+            max_tokens_across_dp_cpu = max(num_tokens_across_dp_cpu)
+        return AFDSingleDPMetadata(
+            num_tokens_across_dp_cpu=num_tokens_across_dp_cpu,
+            max_tokens_across_dp_cpu=max_tokens_across_dp_cpu,
+        )
+
     def _install_afd_metadata_on_forward_context(
         self,
         forward_context: object,
@@ -396,7 +416,10 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
                 int(desc.num_tokens),
             )
             self._afd_is_graph_capturing = True
-            self._send_dp_metadata(None, None)
+            self._send_dp_metadata(
+                self._build_capture_dp_metadata(int(desc.num_tokens)),
+                None,
+            )
             self._afd_suppress_metadata_send = True
             self._dummy_run(
                 desc.num_tokens,
