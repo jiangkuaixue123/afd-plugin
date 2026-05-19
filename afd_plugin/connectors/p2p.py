@@ -7,8 +7,6 @@ PyNCCL, and vLLM runtime imports are delayed until connector initialization or
 actual send/recv calls.
 """
 
-from __future__ import annotations
-
 import pickle
 from datetime import timedelta
 from typing import Any, NamedTuple
@@ -21,7 +19,23 @@ from afd_plugin.distributed import (
     build_rank_mapping,
     init_afd_process_group,
 )
-from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
+from afd_plugin.tracing import (
+    afd_trace as _raw_afd_trace,
+)
+from afd_plugin.tracing import (
+    dp_metadata_summary,
+    tensor_summary,
+)
+
+_AFD_COMMUNICATORS: dict[int, Any] = {}
+_AFD_COMM_ID_COUNTER = 0
+_AFD_CUSTOM_OPS_REGISTERED = False
+
+
+def _afd_trace(event: str, **fields: Any) -> None:
+    if _torch_is_compiling():
+        return
+    _raw_afd_trace(event, **fields)
 
 
 class _TensorMetadata(NamedTuple):
@@ -77,7 +91,9 @@ class P2PAFDConnector(AFDConnectorBase):
         self.p2p_pg: Any | None = None
         self.a2e_pynccl: Any | None = None
         self.e2a_pynccl: Any | None = None
-        afd_trace(
+        self.a2e_comm_id: int | None = None
+        self.e2a_comm_id: int | None = None
+        _afd_trace(
             "p2p_init",
             role=afd_config.role,
             world_rank=self.world_rank,
@@ -91,6 +107,11 @@ class P2PAFDConnector(AFDConnectorBase):
         )
 
     def close(self) -> None:
+        for comm_id_name in ("a2e_comm_id", "e2a_comm_id"):
+            comm_id = getattr(self, comm_id_name, None)
+            if comm_id is not None:
+                _unregister_comm(comm_id)
+                setattr(self, comm_id_name, None)
         for communicator_name in ("a2e_pynccl", "e2a_pynccl"):
             communicator = getattr(self, communicator_name, None)
             shutdown = getattr(communicator, "shutdown", None)
@@ -102,6 +123,8 @@ class P2PAFDConnector(AFDConnectorBase):
     def init_afd_connector(self) -> None:
         if self._initialized:
             return
+
+        _register_p2p_custom_ops()
 
         from torch.distributed.distributed_c10d import _get_default_group
         from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
@@ -131,10 +154,12 @@ class P2PAFDConnector(AFDConnectorBase):
                 group=self.a2e_group,
                 device=self.local_rank,
             )
+            self.a2e_comm_id = _register_comm(self.a2e_pynccl)
             self.e2a_pynccl = PyNcclCommunicator(
                 group=self.e2a_group,
                 device=self.local_rank,
             )
+            self.e2a_comm_id = _register_comm(self.e2a_pynccl)
 
         if self.mapping.participates_in_dp_metadata_group:
             self.p2p_pg = init_afd_process_group(
@@ -175,7 +200,7 @@ class P2PAFDConnector(AFDConnectorBase):
                 dtype,
                 torch.Size([num_tokens, self.hidden_size]),
             )
-        afd_trace(
+        _afd_trace(
             "p2p_update_state_from_dp_metadata",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -220,7 +245,7 @@ class P2PAFDConnector(AFDConnectorBase):
         import torch
 
         if self.p2p_pg is None:
-            afd_trace(
+            _afd_trace(
                 "p2p_send_dp_metadata_skip_no_group",
                 role=self.afd_config.role,
                 world_rank=self.world_rank,
@@ -240,7 +265,7 @@ class P2PAFDConnector(AFDConnectorBase):
         )
 
         for dst in self.dst_list:
-            afd_trace(
+            _afd_trace(
                 "p2p_send_dp_metadata_begin",
                 role=self.afd_config.role,
                 world_rank=self.world_rank,
@@ -253,7 +278,7 @@ class P2PAFDConnector(AFDConnectorBase):
             )
             torch.distributed.send(size_tensor, dst=dst, group=self.p2p_pg)
             torch.distributed.send(object_tensor, dst=dst, group=self.p2p_pg)
-            afd_trace(
+            _afd_trace(
                 "p2p_send_dp_metadata_done",
                 role=self.afd_config.role,
                 world_rank=self.world_rank,
@@ -274,7 +299,7 @@ class P2PAFDConnector(AFDConnectorBase):
         src = self.p2p_rank % self.min_size + self.ffn_size
         device = torch.device(f"cuda:{self.local_rank}")
         size_tensor = torch.empty(1, dtype=torch.long, device=device)
-        afd_trace(
+        _afd_trace(
             "p2p_recv_dp_metadata_size_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -287,7 +312,7 @@ class P2PAFDConnector(AFDConnectorBase):
             dtype=torch.uint8,
             device=device,
         )
-        afd_trace(
+        _afd_trace(
             "p2p_recv_dp_metadata_body_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -305,7 +330,7 @@ class P2PAFDConnector(AFDConnectorBase):
         else:
             data, is_graph_capturing = obj
             is_warmup = False
-        afd_trace(
+        _afd_trace(
             "p2p_recv_dp_metadata_done",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -322,13 +347,15 @@ class P2PAFDConnector(AFDConnectorBase):
         hidden_states: Any,
         metadata: AFDConnectorMetadata,
     ) -> None:
-        if not metadata.validate_tensor_shape(tuple(hidden_states.shape)):
+        if not _torch_is_compiling() and not metadata.validate_tensor_shape(
+            tuple(hidden_states.shape),
+        ):
             raise ValueError(
                 f"hidden_states shape {hidden_states.shape!r} does not match "
                 f"AFD metadata token count {metadata.total_tokens}",
             )
         metadata.direction = "attention_to_ffn"
-        afd_trace(
+        _afd_trace(
             "p2p_send_attn_output",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -338,7 +365,12 @@ class P2PAFDConnector(AFDConnectorBase):
             ubatch_idx=metadata.ubatch_idx,
             tensor=tensor_summary(hidden_states),
         )
-        self._send_hidden_states(hidden_states, 0, self.a2e_group, self.a2e_pynccl)
+        self._send_hidden_states(
+            hidden_states,
+            0,
+            self.a2e_group,
+            self.a2e_pynccl,
+        )
 
     def recv_ffn_output(self, handle: Any = None, **kwargs: Any) -> Any:
         del handle
@@ -346,7 +378,7 @@ class P2PAFDConnector(AFDConnectorBase):
         ubatch_idx = kwargs.get("ubatch_idx")
         if ubatch_idx is None:
             ubatch_idx = self._current_ubatch_idx()
-        afd_trace(
+        _afd_trace(
             "p2p_recv_ffn_output_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -361,7 +393,7 @@ class P2PAFDConnector(AFDConnectorBase):
             self._tensor_metadata_list[int(ubatch_idx)],
             ref_tensor=ref_tensor,
         )
-        afd_trace(
+        _afd_trace(
             "p2p_recv_ffn_output_done",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -382,7 +414,7 @@ class P2PAFDConnector(AFDConnectorBase):
         ubatch_idx = 0 if ubatch_idx is None else int(ubatch_idx)
         tensor_metadata = self._tensor_metadata_list[ubatch_idx]
         hidden_states_list: list[Any] = []
-        afd_trace(
+        _afd_trace(
             "p2p_recv_attn_output_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -407,7 +439,7 @@ class P2PAFDConnector(AFDConnectorBase):
                     ref_tensor=ref_tensor,
                 ),
             )
-            afd_trace(
+            _afd_trace(
                 "p2p_recv_attn_output_part_done",
                 role=self.afd_config.role,
                 world_rank=self.world_rank,
@@ -432,7 +464,7 @@ class P2PAFDConnector(AFDConnectorBase):
             device=tensor_metadata.device,
             ubatch_idx=ubatch_idx,
         )
-        afd_trace(
+        _afd_trace(
             "p2p_recv_attn_output_done",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -448,12 +480,14 @@ class P2PAFDConnector(AFDConnectorBase):
         ffn_output: Any,
         metadata: AFDConnectorMetadata,
     ) -> None:
-        if not metadata.validate_tensor_shape(tuple(ffn_output.shape)):
+        if not _torch_is_compiling() and not metadata.validate_tensor_shape(
+            tuple(ffn_output.shape),
+        ):
             raise ValueError(
                 f"ffn_output shape {ffn_output.shape!r} does not match metadata",
             )
         metadata.direction = "ffn_to_attention"
-        afd_trace(
+        _afd_trace(
             "p2p_send_ffn_output",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -512,7 +546,7 @@ class P2PAFDConnector(AFDConnectorBase):
 
         import torch
 
-        afd_trace(
+        _afd_trace(
             "p2p_send_hidden_states_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -522,18 +556,20 @@ class P2PAFDConnector(AFDConnectorBase):
             dst=dst,
             tensor=tensor_summary(hidden_states),
         )
-        communicator.send(
+        comm_id = self._comm_id_for_communicator(communicator)
+        torch.ops.vllm.afd_p2p_send(
             hidden_states,
-            dst,
-            stream=torch.cuda.current_stream(hidden_states.device),
+            int(dst),
+            int(comm_id),
         )
-        afd_trace(
+        _afd_trace(
             "p2p_send_hidden_states_done",
             role=self.afd_config.role,
             world_rank=self.world_rank,
             p2p_rank=self.p2p_rank,
             dst=dst,
         )
+        return
 
     def _recv_hidden_states(
         self,
@@ -561,7 +597,7 @@ class P2PAFDConnector(AFDConnectorBase):
                 dtype=tensor_metadata.dtype,
                 device=tensor_metadata.device,
             )
-        afd_trace(
+        _afd_trace(
             "p2p_recv_hidden_states_begin",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -571,12 +607,9 @@ class P2PAFDConnector(AFDConnectorBase):
             src=src,
             tensor=tensor_summary(hidden_states),
         )
-        communicator.recv(
-            hidden_states,
-            src,
-            stream=torch.cuda.current_stream(hidden_states.device),
-        )
-        afd_trace(
+        comm_id = self._comm_id_for_communicator(communicator)
+        torch.ops.vllm.afd_p2p_recv(hidden_states, int(src), int(comm_id))
+        _afd_trace(
             "p2p_recv_hidden_states_done",
             role=self.afd_config.role,
             world_rank=self.world_rank,
@@ -585,6 +618,13 @@ class P2PAFDConnector(AFDConnectorBase):
             tensor=tensor_summary(hidden_states),
         )
         return hidden_states
+
+    def _comm_id_for_communicator(self, communicator: Any) -> int:
+        if communicator is self.a2e_pynccl and self.a2e_comm_id is not None:
+            return self.a2e_comm_id
+        if communicator is self.e2a_pynccl and self.e2a_comm_id is not None:
+            return self.e2a_comm_id
+        raise RuntimeError("P2P communicator is not registered for AFD custom ops")
 
     @staticmethod
     def _current_ubatch_idx() -> int:
@@ -608,10 +648,109 @@ def _matches_tensor_metadata(value: Any, tensor_metadata: _TensorMetadata) -> bo
     )
 
 
+def _torch_is_compiling() -> bool:
+    try:
+        import torch
+
+        return bool(torch.compiler.is_compiling())
+    except Exception:
+        return False
+
+
 def _num_tokens_for_dp_rank(dp_metadata: Any, dp_rank: int) -> int:
     token_count = dp_metadata.num_tokens_across_dp_cpu[dp_rank]
     item = getattr(token_count, "item", None)
     return int(item() if callable(item) else token_count)
+
+
+def _register_comm(communicator: Any) -> int:
+    global _AFD_COMM_ID_COUNTER
+
+    comm_id = _AFD_COMM_ID_COUNTER
+    _AFD_COMMUNICATORS[comm_id] = communicator
+    _AFD_COMM_ID_COUNTER += 1
+    return comm_id
+
+
+def _unregister_comm(comm_id: int) -> None:
+    _AFD_COMMUNICATORS.pop(comm_id, None)
+
+
+def _register_p2p_custom_ops() -> None:
+    global _AFD_CUSTOM_OPS_REGISTERED
+
+    if _AFD_CUSTOM_OPS_REGISTERED:
+        return
+
+    import torch
+    from vllm.utils.torch_utils import direct_register_custom_op
+
+    def afd_p2p_send_impl(
+        tensor: torch.Tensor,
+        dst: int,
+        comm_id: int,
+    ) -> None:
+        communicator = _AFD_COMMUNICATORS.get(int(comm_id))
+        if communicator is None:
+            raise RuntimeError(f"AFD communicator id {comm_id} is not registered")
+        communicator.send(
+            tensor,
+            int(dst),
+            stream=torch.cuda.current_stream(tensor.device),
+        )
+        return None
+
+    def afd_p2p_send_fake(
+        tensor: torch.Tensor,
+        dst: int,
+        comm_id: int,
+    ) -> None:
+        del tensor, dst, comm_id
+        return None
+
+    def afd_p2p_recv_impl(out: torch.Tensor, src: int, comm_id: int) -> None:
+        communicator = _AFD_COMMUNICATORS.get(int(comm_id))
+        if communicator is None:
+            raise RuntimeError(f"AFD communicator id {comm_id} is not registered")
+        communicator.recv(
+            out,
+            int(src),
+            stream=torch.cuda.current_stream(out.device),
+        )
+
+    def afd_p2p_recv_fake(out: torch.Tensor, src: int, comm_id: int) -> None:
+        del out, src, comm_id
+        return None
+
+    def register_one(**kwargs: Any) -> None:
+        try:
+            direct_register_custom_op(**kwargs)
+        except RuntimeError as exc:
+            # The op may already exist if another AFD connector instance or the
+            # in-tree reference implementation registered it first in this
+            # process. Keep this module's communicator registry local and reuse
+            # the existing vLLM namespace op.
+            text = str(exc).lower()
+            if not any(
+                marker in text
+                for marker in ("already", "duplicate", "same name", "defined")
+            ):
+                raise
+
+    register_one(
+        op_name="afd_p2p_send",
+        op_func=afd_p2p_send_impl,
+        mutates_args=["tensor"],
+        fake_impl=afd_p2p_send_fake,
+    )
+    register_one(
+        op_name="afd_p2p_recv",
+        op_func=afd_p2p_recv_impl,
+        mutates_args=["out"],
+        fake_impl=afd_p2p_recv_fake,
+    )
+
+    _AFD_CUSTOM_OPS_REGISTERED = True
 
 
 __all__ = ["P2PAFDConnector"]

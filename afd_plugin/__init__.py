@@ -102,6 +102,16 @@ def register_afd() -> None:
             exc_info=True,
         )
 
+    try:
+        from afd_plugin.runtime.dbo import register_dbo_yield_custom_op
+
+        register_dbo_yield_custom_op()
+    except Exception:
+        _logger.debug(
+            "AFD plugin: DBO yield custom op could not be registered",
+            exc_info=True,
+        )
+
     from vllm.model_executor.models import ModelRegistry
 
     for model_arch, model_cls in _DEEPSEEK_MODEL_REGISTRATIONS.items():

@@ -188,7 +188,7 @@ class AFDConnectorMetadata:
             device=device,
             request_id=request_id,
             ffn_need_forward_data=ffn_need_forward_data,
-            timestamp=time.time(),
+            timestamp=_compile_safe_timestamp(),
             num_of_stages=num_of_stages,
             afd_tokens_lens=list(afd_tokens_lens or ()),
             ubatch_idx=ubatch_idx,
@@ -216,7 +216,7 @@ class AFDConnectorMetadata:
             dtype=dtype,
             device=device,
             request_id=request_id,
-            timestamp=time.time(),
+            timestamp=_compile_safe_timestamp(),
             ubatch_idx=ubatch_idx,
             transaction_id=transaction_id,
             direction="ffn_to_attention",
@@ -231,7 +231,22 @@ class AFDConnectorMetadata:
         return indices
 
     def validate_tensor_shape(self, tensor_shape: tuple[int, ...]) -> bool:
-        return bool(tensor_shape) and tensor_shape[0] == self.total_tokens
+        return len(tensor_shape) > 0 and tensor_shape[0] == self.total_tokens
+
+
+def _compile_safe_timestamp() -> float:
+    if _torch_is_compiling():
+        return 0.0
+    return time.time()
+
+
+def _torch_is_compiling() -> bool:
+    try:
+        import torch
+
+        return bool(torch.compiler.is_compiling())
+    except Exception:
+        return False
 
 
 @dataclass(slots=True)
