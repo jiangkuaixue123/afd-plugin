@@ -113,6 +113,36 @@ def test_attention_runner_installs_afd_metadata_on_forward_context():
     assert runner.afd_connector.sent_dp_metadata_flags == [(False, False)]
 
 
+def test_attention_runner_uses_padded_full_graph_tokens_for_afd_metadata():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(),
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = runner._build_afd_metadata(None, 1)
+    forward_context = SimpleNamespace(
+        additional_kwargs={},
+        dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
+        ubatch_slices=None,
+        batch_descriptor=SimpleNamespace(num_tokens=64),
+        cudagraph_runtime_mode=SimpleNamespace(name="FULL"),
+    )
+
+    runner._install_afd_metadata_on_forward_context(forward_context)
+
+    metadata = forward_context.additional_kwargs["afd_metadata"]
+    assert metadata.afd_tokens_lens == [1]
+    sent_metadata = runner.afd_connector.sent_dp_metadata_lists[0][0]
+    tokens = sent_metadata.num_tokens_across_dp_cpu
+    if hasattr(tokens, "tolist"):
+        tokens = tokens.tolist()
+    assert tokens == [64]
+
+
 def test_attention_runner_sends_per_ubatch_dp_metadata():
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
