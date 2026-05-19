@@ -14,6 +14,7 @@ from typing import Any
 import torch
 from vllm.model_executor.models import deepseek_v2 as native
 
+from afd_plugin.config import parse_afd_config
 from afd_plugin.connectors import AFDConnectorMetadata
 from afd_plugin.models import get_afd_metadata_from_forward_context
 from afd_plugin.runtime.dbo import maybe_apply_dbo_yield
@@ -21,6 +22,56 @@ from afd_plugin.runtime.dbo import maybe_apply_dbo_yield
 
 class AFDDeepseekV2DecoderLayer(native.DeepseekV2DecoderLayer):
     """DeepSeek decoder layer with separable Attention and FFN execution."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        vllm_config = args[0] if args else kwargs.get("vllm_config")
+        afd_config = parse_afd_config(vllm_config, validate=False)
+        self.afd_role = afd_config.role if afd_config.enabled else None
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        residual: torch.Tensor | None,
+        llama_4_scaling: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if residual is None:
+            residual = hidden_states.clone()
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        attn_kwargs: dict[str, Any] = {
+            "positions": positions,
+            "hidden_states": hidden_states,
+        }
+        if not self.use_mha:
+            attn_kwargs["llama_4_scaling"] = llama_4_scaling
+        hidden_states = self.self_attn(**attn_kwargs)
+
+        if (
+            not isinstance(self.self_attn, native.DeepseekAttention)
+            and hidden_states.dtype == torch.float16
+        ):
+            hidden_states *= 1.0 / self.routed_scaling_factor
+            if self.layer_idx == 0:
+                residual *= 1.0 / self.routed_scaling_factor
+
+        hidden_states, residual = self.post_attention_layernorm(
+            hidden_states,
+            residual,
+        )
+        if self.afd_role == "attention":
+            return hidden_states, residual
+
+        hidden_states = self.mlp(hidden_states)
+        if (
+            isinstance(self.mlp, native.DeepseekV2MLP)
+            and hidden_states.dtype == torch.float16
+        ):
+            hidden_states *= 1.0 / self.routed_scaling_factor
+        return hidden_states, residual
 
     def compute_attn_output(
         self,
@@ -206,8 +257,6 @@ class AFDDeepseekV2Model(torch.nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         afd_connector = afd_metadata.afd_connector
         stage_idx = int(getattr(afd_metadata, "afd_stage_idx", 0))
-        ubatch_idx = int(getattr(afd_metadata, "ubatch_idx", stage_idx))
-        transaction_id = getattr(afd_metadata, "transaction_id", None)
 
         for layer_offset, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
@@ -218,7 +267,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
                     ubatch_idx=stage_idx,
                 )
 
-            hidden_states, residual = layer.compute_attn_output(
+            hidden_states, residual = layer(
                 positions,
                 hidden_states,
                 residual,
