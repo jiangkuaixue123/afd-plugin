@@ -180,6 +180,23 @@ def test_ffn_runner_cuda_graph_miss_falls_back_to_eager():
     ]
 
 
+def test_ffn_forward_can_skip_connector_state_update_for_capture():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    metadata = _metadata()
+    runner.connector.attn_outputs.append(("hidden", metadata))
+
+    runner._ffn_forward(
+        dp_metadata_list={0: "dp"},
+        is_graph_capturing=True,
+        update_connector_state=False,
+    )
+
+    assert runner.connector.dp_metadata_updates == []
+    assert runner.connector.ffn_outputs == [
+        ("ffn(hidden, layer=0)", metadata),
+    ]
+
+
 def test_set_moe_layer_index_resets_for_current_layer():
     forward_context = SimpleNamespace(
         all_moe_layers=[
