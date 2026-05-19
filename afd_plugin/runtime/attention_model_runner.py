@@ -228,10 +228,12 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             )
         if bool(getattr(self, "_afd_suppress_metadata_send", False)):
             return
-        self._send_dp_metadata(
-            forward_context.dp_metadata,
-            forward_context.ubatch_slices,
-        )
+        dp_metadata = forward_context.dp_metadata
+        ubatch_slices = forward_context.ubatch_slices
+        padded_graph_tokens = _full_cudagraph_padded_tokens(forward_context)
+        if padded_graph_tokens is not None and not ubatch_slices:
+            dp_metadata = self._build_capture_dp_metadata(padded_graph_tokens)
+        self._send_dp_metadata(dp_metadata, ubatch_slices)
 
     def _build_attention_metadata(self, *args: Any, **kwargs: Any) -> Any:
         num_tokens = kwargs.get("num_tokens", 0)
@@ -568,6 +570,20 @@ def _forward_context_num_tokens(
         return max(1, int(dp_metadata.num_tokens_across_dp_cpu[dp_rank]))
 
     return max(1, int(forward_context.batch_descriptor.num_tokens))
+
+
+def _full_cudagraph_padded_tokens(forward_context: object) -> int | None:
+    mode = getattr(forward_context, "cudagraph_runtime_mode", None)
+    name = getattr(mode, "name", None)
+    if isinstance(name, str):
+        is_full = name == "FULL"
+    else:
+        is_full = str(mode).rsplit(".", 1)[-1] == "FULL"
+    if not is_full:
+        return None
+    batch_descriptor = getattr(forward_context, "batch_descriptor", None)
+    num_tokens = getattr(batch_descriptor, "num_tokens", None)
+    return None if num_tokens is None else max(1, int(num_tokens))
 
 
 @contextmanager
