@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from afd_plugin.models import get_afd_metadata_from_forward_context
@@ -37,3 +38,11 @@ def test_maybe_apply_dbo_yield_only_when_dbo_enabled():
         is tensor
     )
     assert calls == ["yield"]
+
+
+def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
+    source = Path("afd_plugin/models/deepseek_v2.py").read_text()
+
+    assert "@native.support_torch_compile\nclass AFDDeepseekV2Model" in source
+    assert "from __future__ import annotations" not in source
+    assert "self.do_not_compile = True" not in source

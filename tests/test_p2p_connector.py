@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -135,3 +136,84 @@ def test_p2p_module_exports_connector_class():
     module = importlib.import_module("afd_plugin.connectors.p2p")
 
     assert module.P2PAFDConnector.__module__ == "afd_plugin.connectors.p2p"
+
+
+def test_p2p_custom_ops_register_send_recv_with_fake_impls(monkeypatch):
+    module = importlib.import_module("afd_plugin.connectors.p2p")
+    calls = []
+
+    torch_module = types.ModuleType("torch")
+    torch_module.Tensor = object
+
+    vllm_module = types.ModuleType("vllm")
+    utils_module = types.ModuleType("vllm.utils")
+    torch_utils_module = types.ModuleType("vllm.utils.torch_utils")
+
+    def direct_register_custom_op(**kwargs):
+        calls.append(kwargs)
+
+    torch_utils_module.direct_register_custom_op = direct_register_custom_op
+    utils_module.torch_utils = torch_utils_module
+    vllm_module.utils = utils_module
+
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.utils", utils_module)
+    monkeypatch.setitem(sys.modules, "vllm.utils.torch_utils", torch_utils_module)
+    monkeypatch.setattr(module, "_AFD_CUSTOM_OPS_REGISTERED", False)
+
+    module._register_p2p_custom_ops()
+
+    assert [call["op_name"] for call in calls] == [
+        "afd_p2p_send",
+        "afd_p2p_recv",
+    ]
+    assert calls[0]["mutates_args"] == ["tensor"]
+    assert calls[1]["mutates_args"] == ["out"]
+    assert callable(calls[0]["fake_impl"])
+    assert callable(calls[1]["fake_impl"])
+
+
+def test_p2p_hidden_state_send_uses_registered_custom_op(monkeypatch):
+    connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        _fake_vllm_config(),
+        AFDConfig(
+            enabled=True,
+            role="attention",
+            connector="p2pconnector",
+            num_attention_servers=2,
+            num_ffn_servers=1,
+        ),
+    )
+    communicator = object()
+    connector.a2e_pynccl = communicator
+    connector.a2e_comm_id = 17
+
+    calls = []
+    torch_module = types.ModuleType("torch")
+    torch_module.ops = SimpleNamespace(
+        vllm=SimpleNamespace(
+            afd_p2p_send=lambda tensor, dst, comm_id: (
+                calls.append((tensor, dst, comm_id)) or None
+            ),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    hidden_states = SimpleNamespace(
+        is_cpu=False,
+        device="cuda:0",
+        shape=(4, 16),
+        dtype="bf16",
+    )
+    output = connector._send_hidden_states(
+        hidden_states,
+        1,
+        SimpleNamespace(world_size=2, rank=0),
+        communicator,
+    )
+
+    assert calls == [(hidden_states, 1, 17)]
+    assert output is None
