@@ -288,6 +288,34 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     assert runner.afd_connector.sent_dp_metadata_lists
 
 
+def test_forward_context_provider_can_install_without_sending_metadata():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(),
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = True
+    runner._afd_suppress_metadata_send = True
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = runner._build_afd_metadata(None, 1)
+    forward_context = SimpleNamespace(
+        additional_kwargs={},
+        dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
+        ubatch_slices=None,
+        batch_descriptor=SimpleNamespace(num_tokens=1),
+    )
+
+    from afd_plugin.models.forward_context import use_afd_metadata_provider
+
+    with use_afd_metadata_provider(runner):
+        metadata = get_afd_metadata_from_forward_context(forward_context)
+
+    assert metadata is runner._afd_pending_metadata
+    assert runner.afd_connector.sent_dp_metadata_lists == []
+
+
 def test_attention_runtime_rejects_unsupported_cuda_graph_modes():
     vllm_config = SimpleNamespace(
         model_config=SimpleNamespace(enforce_eager=False),

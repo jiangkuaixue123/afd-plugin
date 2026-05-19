@@ -66,6 +66,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self._is_warmup = False
         self._afd_is_graph_capturing = False
         self._afd_pending_metadata: AFDMetadata | None = None
+        self._afd_suppress_metadata_send = False
         self._afd_transaction_counter = 0
 
     @staticmethod
@@ -220,6 +221,8 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             forward_context.additional_kwargs["afd_metadata"] = (
                 self._afd_pending_metadata
             )
+        if bool(getattr(self, "_afd_suppress_metadata_send", False)):
+            return
         self._send_dp_metadata(
             forward_context.dp_metadata,
             forward_context.ubatch_slices,
@@ -381,17 +384,35 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         finally:
             self._is_warmup = previous_is_warmup
 
-        self._dummy_run(
-            desc.num_tokens,
-            cudagraph_runtime_mode=cudagraph_runtime_mode,
-            uniform_decode=desc.uniform,
-            allow_microbatching=allow_microbatching,
-            skip_eplb=True,
-            remove_lora=False,
-            num_active_loras=desc.num_active_loras,
-            is_graph_capturing=True,
-            profile_seq_lens=profile_seq_lens,
-        )
+        previous_metadata = self._afd_pending_metadata
+        previous_suppress_send = self._afd_suppress_metadata_send
+        previous_is_graph_capturing = self._afd_is_graph_capturing
+        try:
+            # DP metadata transfer is a control-plane side effect.  The original
+            # AFD path sends it before formal CUDA graph capture so the capture
+            # contains only replayable model/data-plane work.
+            self._afd_pending_metadata = self._build_afd_metadata(
+                None,
+                int(desc.num_tokens),
+            )
+            self._afd_is_graph_capturing = True
+            self._send_dp_metadata(None, None)
+            self._afd_suppress_metadata_send = True
+            self._dummy_run(
+                desc.num_tokens,
+                cudagraph_runtime_mode=cudagraph_runtime_mode,
+                uniform_decode=desc.uniform,
+                allow_microbatching=allow_microbatching,
+                skip_eplb=True,
+                remove_lora=False,
+                num_active_loras=desc.num_active_loras,
+                is_graph_capturing=True,
+                profile_seq_lens=profile_seq_lens,
+            )
+        finally:
+            self._afd_is_graph_capturing = previous_is_graph_capturing
+            self._afd_suppress_metadata_send = previous_suppress_send
+            self._afd_pending_metadata = previous_metadata
 
     def shutdown(self) -> None:
         self.afd_connector.close()

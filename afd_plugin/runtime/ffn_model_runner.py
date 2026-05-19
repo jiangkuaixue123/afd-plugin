@@ -172,11 +172,13 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         *,
         dp_metadata_list: dict[int, Any],
         is_graph_capturing: bool = False,
+        update_connector_state: bool = True,
     ) -> Any:
-        self._update_connector_state(
-            dp_metadata_list,
-            is_graph_capturing=is_graph_capturing,
-        )
+        if update_connector_state:
+            self._update_connector_state(
+                dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
+            )
 
         rank_ffn_output = None
         num_layers = max(int(self.num_layers or 0), 1)
@@ -308,10 +310,17 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                 self._graph_memory_pool = torch.cuda.graph_pool_handle()
             graph_key = self._make_graph_key(dp_metadata_list)
             cudagraph = torch.cuda.CUDAGraph()
+            # DP metadata receive/update is a control-plane side effect and must
+            # complete before CUDA graph capture starts.
+            self._update_connector_state(
+                dp_metadata_list,
+                is_graph_capturing=is_attn_graph_capturing,
+            )
             with torch.cuda.graph(cudagraph, pool=self._graph_memory_pool):
                 output = self._ffn_forward(
                     dp_metadata_list=dp_metadata_list,
                     is_graph_capturing=is_attn_graph_capturing,
+                    update_connector_state=False,
                 )
             self._cuda_graphs[graph_key] = {
                 "graph": cudagraph,
@@ -357,9 +366,14 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                         "ffn_capture_cudagraph_warmup",
                         graph_key=self._make_graph_key(dp_metadata_list),
                     )
+                    self._update_connector_state(
+                        dp_metadata_list,
+                        is_graph_capturing=False,
+                    )
                     self._ffn_forward(
                         dp_metadata_list=dp_metadata_list,
                         is_graph_capturing=False,
+                        update_connector_state=False,
                     )
                 else:
                     self._capture_graphs(
