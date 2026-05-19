@@ -23,8 +23,7 @@ hidden states 和 metadata。
 ## 启动方式
 
 FFN 侧通过普通 `vllm serve` 启动。当前 EngineCore compat patch 已经让 FFN role
-跳过正常 request/KV-cache 初始化路径，因此不需要 `--headless`，也不需要
-`--disable-hybrid-kv-cache-manager`：
+跳过正常 request/KV-cache 初始化路径：
 
 ```bash
 vllm serve <model> \
@@ -42,10 +41,6 @@ vllm serve <model> \
     }
   }'
 ```
-
-`--headless` 仍可作为部署隔离或排障选项使用，但不是 FFN 启动条件。
-`--disable-hybrid-kv-cache-manager` 是早期验证 workaround，当前不应作为标准命令
-的一部分。
 
 第一版不传 `--scheduler-cls`。默认 scheduler 只作为 vLLM `EngineCore` 初始化后的
 空转组件存在，不驱动 FFN 执行。
@@ -89,7 +84,8 @@ vllm serve <model> \
 - 从 connector 接收 Attention 侧发送的 hidden states 和 metadata。
 - 执行对应 layer/stage 的 FFN computation。
 - 将 FFN output 通过 connector 发送回 Attention 侧。
-- 支持 warmup / CUDA graph capture 相关路径，具体覆盖范围后续验证。
+- 支持 `FULL_DECODE_ONLY` warmup / CUDA graph capture / replay 路径；FFN graph
+  cache 按 DP metadata shape 建 key。
 
 ## 执行路径
 
@@ -176,8 +172,7 @@ request loop 并显式触发 `start_ffn_server_loop`。external plugin 的当前
   `stop_ffn_server_loop`；
 - shutdown 时停止 FFN loop 并释放 executor。
 
-这个 patch 是幂等的，并通过 CPU-safe unit tests 覆盖。远程 eager `1A1F` 和
-`2A2F` 验证均不需要 `--headless` 或 `--disable-hybrid-kv-cache-manager`。
+这个 patch 是幂等的，并通过 CPU-safe unit tests 覆盖。
 
 ## Connector Loop
 
@@ -237,8 +232,8 @@ execute_ffn_step(dp_metadata_list=...)
 - `execute_model()` fail fast
 - shutdown 停止 loop
 
-CUDA graph capture、复杂拓扑、异构 A/F 比例和 profiling 可以在 P2P 基线稳定后逐步
-补齐。
+`FULL_DECODE_ONLY` CUDA graph capture/replay 已接入 FFN loop；复杂拓扑、异构
+A/F 比例、TP/PP collective 和 profiling 仍需要在 P2P 基线稳定后继续补齐。
 
 ## 待验证问题
 

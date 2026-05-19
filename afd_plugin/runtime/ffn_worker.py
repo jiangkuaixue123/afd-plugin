@@ -91,7 +91,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         del scheduler_output
         raise RuntimeError(
             "AFD FFN workers are connector-driven in Phase 3; scheduler-driven "
-            "execute_model() is not supported. Start this side with --headless.",
+            "execute_model() is not supported.",
         )
 
     def start_ffn_server_loop(self) -> None:
