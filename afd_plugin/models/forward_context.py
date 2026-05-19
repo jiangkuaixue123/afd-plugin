@@ -6,13 +6,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from functools import wraps
 from typing import Any
-
-_afd_metadata_provider: ContextVar[Any | None] = ContextVar(
-    "afd_metadata_provider",
-    default=None,
-)
 
 
 def get_afd_metadata_from_forward_context(forward_context: object | None = None) -> Any:
@@ -32,23 +27,46 @@ def get_afd_metadata_from_forward_context(forward_context: object | None = None)
     metadata = additional_kwargs.get("afd_metadata")
     if metadata is not None:
         return metadata
-
-    provider = _afd_metadata_provider.get()
-    install = getattr(provider, "_install_afd_metadata_on_forward_context", None)
-    if callable(install):
-        install(forward_context)
-        additional_kwargs = getattr(forward_context, "additional_kwargs", None) or {}
-        return additional_kwargs.get("afd_metadata")
-    return None
+    return getattr(forward_context, "afd_metadata", None)
 
 
 @contextmanager
 def use_afd_metadata_provider(provider: Any) -> Iterator[None]:
-    token = _afd_metadata_provider.set(provider)
+    """Install AFD metadata as vLLM creates a forward context.
+
+    Native vLLM dummy runs call the model directly, bypassing
+    ``AFDAttentionModelRunner._model_forward()``.  The original in-tree AFD
+    implementation passed ``afd_metadata`` into ``set_forward_context()``
+    before the compiled model was entered.  Out-of-tree we cannot extend that
+    signature, so during dummy runs we temporarily wrap
+    ``create_forward_context()`` and mutate ``additional_kwargs`` immediately
+    after vLLM creates the context.  Model code can then do a simple metadata
+    read, which keeps ``torch.compile`` away from provider lookups.
+    """
+
+    try:
+        import vllm.forward_context as forward_context_module
+    except Exception:
+        yield
+        return
+
+    original_create = getattr(forward_context_module, "create_forward_context", None)
+    install = getattr(provider, "_install_afd_metadata_on_forward_context", None)
+    if original_create is None or not callable(install):
+        yield
+        return
+
+    @wraps(original_create)
+    def create_forward_context_with_afd(*args: Any, **kwargs: Any) -> Any:
+        forward_context = original_create(*args, **kwargs)
+        install(forward_context)
+        return forward_context
+
+    forward_context_module.create_forward_context = create_forward_context_with_afd
     try:
         yield
     finally:
-        _afd_metadata_provider.reset(token)
+        forward_context_module.create_forward_context = original_create
 
 
 __all__ = [
