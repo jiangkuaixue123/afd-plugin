@@ -355,6 +355,21 @@ def test_attention_runner_forwards_capture_and_warmup_flags():
     assert runner.afd_connector.sent_dp_metadata_flags == [(True, True)]
 
 
+def test_attention_runner_builds_capture_dp_metadata_for_native_dp():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(data_parallel_size=2),
+    )
+
+    metadata = runner._build_capture_dp_metadata(64)
+
+    tokens = metadata.num_tokens_across_dp_cpu
+    if hasattr(tokens, "tolist"):
+        tokens = tokens.tolist()
+    assert tokens == [64, 64]
+    assert int(metadata.max_tokens_across_dp_cpu) == 64
+
+
 def test_afd_rank_derives_from_data_parallel_rank():
     config = AFDConfig(
         enabled=True,
