@@ -8,7 +8,6 @@ inside methods that only run after vLLM has loaded the native ubatching stack.
 
 from __future__ import annotations
 
-import os
 from contextlib import nullcontext
 from typing import Any
 
@@ -53,7 +52,6 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             return super().__call__(*args, **kwargs)
 
         cudagraph_runtime_mode = forward_context.cudagraph_runtime_mode
-        trace_ubatch_slices(ubatch_slices, source="wrapper")
         parent_additional_kwargs = dict(forward_context.additional_kwargs)
         if "afd_metadata" not in parent_additional_kwargs:
             self._install_missing_afd_metadata(forward_context, ubatch_slices)
@@ -119,7 +117,6 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
     ) -> None:
         provider = self._afd_context_provider
         if provider is None:
-            trace_ubatch_slices(ubatch_slices, source="wrapper_native_no_afd")
             self._afd_use_native_ubatch_metadata = True
             return
 
@@ -135,7 +132,6 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 forward_context.dp_metadata,
                 ubatch_slices,
             )
-        trace_ubatch_slices(ubatch_slices, source="wrapper_missing_afd_metadata")
 
     def _make_ubatch_metadata(
         self,
@@ -341,33 +337,6 @@ def _current_cuda_stream() -> Any:
     return torch.cuda.current_stream()
 
 
-def trace_ubatch_slices(ubatch_slices: Any, *, source: str) -> None:
-    if os.environ.get("AFD_UBATCH_TRACE") != "1":
-        return
-    token_slices = [
-        (int(ubatch_slice.token_slice.start), int(ubatch_slice.token_slice.stop))
-        for ubatch_slice in ubatch_slices
-    ]
-    request_slices = [
-        (int(ubatch_slice.request_slice.start), int(ubatch_slice.request_slice.stop))
-        for ubatch_slice in ubatch_slices
-    ]
-    token_lens = [int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices]
-    kind = "decode" if token_lens and all(length == 1 for length in token_lens) else (
-        "prefill_or_mixed"
-    )
-    print(
-        "AFD_UBATCH_TRACE "
-        f"source={source} "
-        f"kind={kind} "
-        f"num_ubatches={len(ubatch_slices)} "
-        f"token_slices={token_slices} "
-        f"request_slices={request_slices} "
-        f"token_lens={token_lens}",
-        flush=True,
-    )
-
-
 def _is_afd_enabled(vllm_config: object) -> bool:
     try:
         from afd_plugin.config import parse_afd_config
@@ -382,5 +351,4 @@ __all__ = [
     "build_ubatch_additional_kwargs",
     "build_ubatch_afd_metadata",
     "build_ubatch_dp_metadata_list",
-    "trace_ubatch_slices",
 ]

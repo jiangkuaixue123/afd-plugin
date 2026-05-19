@@ -19,10 +19,8 @@ Defaults:
 - XAYF topologies use native vLLM DP: Attention runs with `DP=X, TP=1`, FFN
   runs with `DP=Y, TP=1`, and both roles pass `--enable-expert-parallel`
 - graph tests pass `DecodeBenchConnector`, align `max-num-seqs`,
-  `max-num-batched-tokens`, and CUDA graph capture size, and assert FFN
-  `ffn_replay_cudagraph_done` traces
-- the DBO graph test also enables AFD ubatch tracing and asserts two-stage FFN
-  replay
+  `max-num-batched-tokens`, and CUDA graph capture size
+- the DBO graph test exercises the two-stage ubatch CUDA graph path
 
 The pytest cases currently cover:
 
@@ -131,7 +129,7 @@ can stay on the single-stage `[0:[64,64]]` graph.
 
 - GPU tests are opt-in and are not run by default on CPU-only development
   machines.
-- Graph tests assert request success and trace evidence for FFN replay; they do
-  not yet compare token output against an eager baseline.
+- Graph tests assert request success; they do not yet compare token output
+  against an eager baseline.
 - CUDA graph coverage is limited to `FULL_DECODE_ONLY`, TP=1, and current
   DeepSeekV2 wrapper paths.

@@ -20,7 +20,6 @@ from afd_plugin.runtime.cuda_graph import (
     make_ffn_graph_key,
     validate_cuda_graph_mode,
 )
-from afd_plugin.tracing import afd_trace, dp_metadata_summary, tensor_summary
 
 _LoRAModelRunnerMixin, _LoRAModelRunnerMixin_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.lora_model_runner_mixin",
@@ -70,15 +69,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         )
         self._cuda_graphs: dict[tuple, dict[str, Any]] = {}
         self._graph_memory_pool: Any | None = None
-        afd_trace(
-            "ffn_runner_init",
-            role=self.afd_config.role,
-            rank=rank,
-            local_rank=local_rank,
-            afd_server_rank=self.afd_config.afd_server_rank,
-            num_layers=self.num_layers,
-            use_cuda_graph=self.use_cuda_graph,
-        )
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -142,20 +132,9 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             graph_enabled=bool(self.use_cuda_graph),
             graph_exists=cuda_graph_info is not None,
         )
-        afd_trace(
-            "ffn_execute_model",
-            graph_key=graph_key,
-            run_mode=run_mode.value,
-            is_graph_capturing=is_graph_capturing,
-            is_warmup=is_warmup,
-        )
         if run_mode is AFDGraphRunMode.REPLAY:
             cuda_graph_info["graph"].replay()
-            afd_trace("ffn_replay_cudagraph_done", graph_key=graph_key)
             return None
-
-        if self.use_cuda_graph and run_mode is AFDGraphRunMode.EAGER:
-            afd_trace("ffn_cudagraph_miss_fallback", graph_key=graph_key)
 
         self._ffn_forward(
             dp_metadata_list=dp_metadata_list,
@@ -183,31 +162,10 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         rank_ffn_output = None
         num_layers = max(int(self.num_layers or 0), 1)
         stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
-        afd_trace(
-            "ffn_forward_begin",
-            num_layers=num_layers,
-            stages=stage_ids,
-            dp_metadata=dp_metadata_summary(dp_metadata_list),
-            is_graph_capturing=is_graph_capturing,
-        )
         with _ffn_forward_context(self.vllm_config) as forward_context:
             for layer_idx in range(num_layers):
                 for stage_idx in stage_ids:
-                    afd_trace(
-                        "ffn_layer_stage_recv_begin",
-                        layer_idx=layer_idx,
-                        stage_idx=stage_idx,
-                    )
                     hidden_states, metadata = self._recv_attn_output(stage_idx)
-                    afd_trace(
-                        "ffn_layer_stage_recv_done",
-                        layer_idx=layer_idx,
-                        stage_idx=stage_idx,
-                        metadata_layer_idx=metadata.layer_idx,
-                        metadata_stage_idx=metadata.stage_idx,
-                        metadata_ubatch_idx=metadata.ubatch_idx,
-                        tensor=tensor_summary(hidden_states),
-                    )
                     metadata.layer_idx = layer_idx
                     if forward_context is not None:
                         forward_context.dp_metadata = dp_metadata_list.get(
@@ -220,27 +178,8 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                         for work in recv_handle_list:
                             work.wait()
                         metadata.recv_handle_list = None
-                    afd_trace(
-                        "ffn_layer_stage_compute_begin",
-                        layer_idx=layer_idx,
-                        stage_idx=stage_idx,
-                        tensor=tensor_summary(hidden_states),
-                    )
                     rank_ffn_output = self._execute_eager_mode(hidden_states, layer_idx)
-                    afd_trace(
-                        "ffn_layer_stage_compute_done",
-                        layer_idx=layer_idx,
-                        stage_idx=stage_idx,
-                        tensor=tensor_summary(rank_ffn_output),
-                    )
                     self.connector.send_ffn_output(rank_ffn_output, metadata)
-                    afd_trace(
-                        "ffn_layer_stage_send_done",
-                        layer_idx=layer_idx,
-                        stage_idx=stage_idx,
-                        tensor=tensor_summary(rank_ffn_output),
-                    )
-        afd_trace("ffn_forward_done", stages=stage_ids)
         return rank_ffn_output
 
     def _execute_eager_mode(self, hidden_states: Any, layer_idx: int) -> Any:
@@ -262,18 +201,8 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         *,
         is_graph_capturing: bool,
     ) -> None:
-        afd_trace(
-            "ffn_update_connector_state_begin",
-            dp_metadata=dp_metadata_summary(dp_metadata_list),
-            is_graph_capturing=is_graph_capturing,
-        )
         self.connector.update_state_from_dp_metadata(
             dp_metadata_list,
-            is_graph_capturing=is_graph_capturing,
-        )
-        afd_trace(
-            "ffn_update_connector_state_done",
-            dp_metadata=dp_metadata_summary(dp_metadata_list),
             is_graph_capturing=is_graph_capturing,
         )
 
@@ -327,7 +256,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
                 "input_hidden_states": output,
                 "output": output,
             }
-            afd_trace("ffn_capture_cudagraph_done", graph_key=graph_key)
         else:
             self._ffn_forward(
                 dp_metadata_list=dp_metadata_list,
@@ -341,7 +269,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         is_attn_graph_capturing: bool = True,
     ) -> int:
         if not self.use_cuda_graph:
-            afd_trace("ffn_capture_cudagraph_skip_disabled")
             return 0
         if dp_metadata_list is None:
             raise RuntimeError("GPUFFNModelRunner.capture_model requires metadata")
@@ -362,10 +289,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         try:
             with graph_capture(device=self.device):
                 if is_warmup:
-                    afd_trace(
-                        "ffn_capture_cudagraph_warmup",
-                        graph_key=self._make_graph_key(dp_metadata_list),
-                    )
                     self._update_connector_state(
                         dp_metadata_list,
                         is_graph_capturing=False,
@@ -386,12 +309,6 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
 
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
         cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
-        afd_trace(
-            "ffn_capture_cudagraph_finished",
-            graph_key=self._make_graph_key(dp_metadata_list),
-            seconds=time.perf_counter() - start_time,
-            bytes=cuda_graph_size,
-        )
         return int(cuda_graph_size)
 
     def _capture_graphs(
