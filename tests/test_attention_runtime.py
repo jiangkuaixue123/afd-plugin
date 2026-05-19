@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -60,6 +61,25 @@ class _RecordingConnector:
     ):
         self.sent_dp_metadata_lists.append(dp_metadata_list)
         self.sent_dp_metadata_flags.append((is_graph_capturing, is_warmup))
+
+
+def _install_fake_vllm_forward_context(monkeypatch):
+    fake_vllm = ModuleType("vllm")
+    fake_forward_context = ModuleType("vllm.forward_context")
+
+    def create_forward_context():
+        return SimpleNamespace(
+            additional_kwargs={},
+            dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
+            ubatch_slices=None,
+            batch_descriptor=SimpleNamespace(num_tokens=1),
+        )
+
+    fake_forward_context.create_forward_context = create_forward_context
+    fake_vllm.forward_context = fake_forward_context
+    monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+    monkeypatch.setitem(sys.modules, "vllm.forward_context", fake_forward_context)
+    return fake_forward_context, create_forward_context
 
 
 def _parallel_config(**overrides):
@@ -259,7 +279,7 @@ def test_attention_runner_inherits_native_dummy_run_microbatching():
     assert "_dummy_run" in AFDAttentionModelRunner.__dict__
 
 
-def test_forward_context_provider_installs_missing_afd_metadata():
+def test_forward_context_provider_installs_metadata_before_model_forward(monkeypatch):
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.vllm_config = SimpleNamespace(
@@ -270,25 +290,24 @@ def test_forward_context_provider_installs_missing_afd_metadata():
     runner._afd_is_graph_capturing = False
     runner._afd_pending_metadata = None
     runner._afd_transaction_counter = 0
-    forward_context = SimpleNamespace(
-        additional_kwargs={},
-        dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
-        ubatch_slices=None,
-        batch_descriptor=SimpleNamespace(num_tokens=1),
+    fake_forward_context, original_create = _install_fake_vllm_forward_context(
+        monkeypatch,
     )
 
     from afd_plugin.models.forward_context import use_afd_metadata_provider
 
     with use_afd_metadata_provider(runner):
+        forward_context = fake_forward_context.create_forward_context()
         metadata = get_afd_metadata_from_forward_context(forward_context)
 
     assert metadata is not None
     assert metadata.afd_tokens_lens == [1]
     assert forward_context.additional_kwargs["afd_metadata"] is metadata
     assert runner.afd_connector.sent_dp_metadata_lists
+    assert fake_forward_context.create_forward_context is original_create
 
 
-def test_forward_context_provider_can_install_without_sending_metadata():
+def test_forward_context_provider_can_install_without_sending_metadata(monkeypatch):
     runner = object.__new__(AFDAttentionModelRunner)
     runner.afd_config = AFDConfig(enabled=True, role="attention")
     runner.vllm_config = SimpleNamespace(
@@ -300,20 +319,19 @@ def test_forward_context_provider_can_install_without_sending_metadata():
     runner._afd_suppress_metadata_send = True
     runner._afd_transaction_counter = 0
     runner._afd_pending_metadata = runner._build_afd_metadata(None, 1)
-    forward_context = SimpleNamespace(
-        additional_kwargs={},
-        dp_metadata=SimpleNamespace(num_tokens_across_dp_cpu=[1]),
-        ubatch_slices=None,
-        batch_descriptor=SimpleNamespace(num_tokens=1),
+    fake_forward_context, original_create = _install_fake_vllm_forward_context(
+        monkeypatch,
     )
 
     from afd_plugin.models.forward_context import use_afd_metadata_provider
 
     with use_afd_metadata_provider(runner):
+        forward_context = fake_forward_context.create_forward_context()
         metadata = get_afd_metadata_from_forward_context(forward_context)
 
     assert metadata is runner._afd_pending_metadata
     assert runner.afd_connector.sent_dp_metadata_lists == []
+    assert fake_forward_context.create_forward_context is original_create
 
 
 def test_attention_runtime_rejects_unsupported_cuda_graph_modes():
