@@ -208,7 +208,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             max_tokens_across_dp_cpu=torch.max(num_tokens_across_dp_cpu),
         )
 
-    def _build_capture_dp_metadata(self, num_tokens: int) -> AFDSingleDPMetadata:
+    def _build_capture_dp_metadata(self, num_tokens: int) -> Any:
         dp_size = int(self.vllm_config.parallel_config.data_parallel_size)
         try:
             import torch
@@ -219,6 +219,17 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
                 dtype=torch.int32,
                 device="cpu",
             )
+            if dp_size > 1:
+                try:
+                    from vllm.forward_context import DPMetadata
+
+                    return DPMetadata.make(
+                        self.vllm_config.parallel_config,
+                        int(num_tokens),
+                        num_tokens_across_dp_cpu,
+                    )
+                except Exception:
+                    pass
             max_tokens_across_dp_cpu = torch.max(num_tokens_across_dp_cpu)
         except ModuleNotFoundError:
             num_tokens_across_dp_cpu = [int(num_tokens)] * dp_size
