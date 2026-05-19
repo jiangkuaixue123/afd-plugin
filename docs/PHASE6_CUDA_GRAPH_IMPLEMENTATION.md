@@ -1,103 +1,50 @@
-# Phase 6 CUDA Graph 开发实施文档
+# Phase 6 CUDA Graph Status
 
-本文档定义 AFD plugin Phase 6 的 CUDA graph 支持方案。目标版本仍固定为
+本文档记录 AFD plugin 当前 CUDA graph 实现状态。目标版本仍固定为
 vLLM `v0.19.1`，不修改 `../vllm` 源码树；所有行为通过本插件 runtime、
 connector、model wrapper、显式 class path 或受控 compat shim 提供。
 
-## 背景
+## Current Status
 
-当前 AFD runtime 已经完成 eager P2P 闭环，并在代码中预留了部分 CUDA graph
-信号：
+Phase 6 的核心链路已经实现并进入 opt-in GPU 回归阶段：
 
-- `AFDAttentionModelRunner` 和 `GPUFFNModelRunner` 目前都会调用
-  `fail_if_cuda_graph_enabled()`，要求启动时传 `--enforce-eager`。
-- `AFDAttentionModelRunner` 已经有 `_is_warmup`、`_afd_pending_metadata` 和
-  `_dummy_run()` provider 机制，但还没有把 `is_graph_capturing` 传到 connector。
-- `P2PAFDConnector.update_state_from_dp_metadata()` / `send_dp_metadata_list()`
-  / `recv_dp_metadata_list()` 已经携带 `is_graph_capturing` 和 `is_warmup`。
-- `GPUFFNModelRunner.capture_model()` 当前是空实现，FFN 侧还没有 graph cache。
-- `AFDUBatchWrapper` 对 `CUDAGraphMode.FULL` 仍 fail fast。
+- AFD 不再全局要求 `--enforce-eager`。
+- Attention/FFN 侧只允许 vLLM `CUDAGraphMode.FULL_DECODE_ONLY`；`PIECEWISE`、
+  `FULL`、`FULL_AND_PIECEWISE` 和未设置 graph mode 的非 eager 配置会 fail fast。
+- FFN 侧实现 graph-keyed CUDA graph cache，按 DP metadata shape 做
+  capture/replay。
+- Attention 侧在 normal、warmup、capture、replay 路径发送 DP/AFD metadata，并把
+  DP metadata control-plane send 移到正式 CUDA graph capture 外。
+- P2P connector 已传递 `(dp_metadata_list, is_graph_capturing, is_warmup)`，并在
+  FFN graph 模式下按 metadata shape 预分配接收 buffer。
+- 两路 DBO/ubatching + `FULL_DECODE_ONLY` CUDA graph 已放行；其他 ubatch 数量仍
+  fail fast。
 
-原始 AFD commit 在 in-tree `GPUModelRunner` 中把 AFD metadata 注入 normal
-`execute_model()` 和 `_dummy_run()`；在 `_warmup_and_capture()` 中用
-`_is_warmup` 区分 warmup 与正式 capture；FFN 侧按 DP metadata key 管理 graph。
-迁移到 external plugin 时不能照搬大段 vLLM runner，因此 Phase 6 需要以最小覆盖
-点实现同等语义。
+当前仍未解决 role-based weight pruning；Attention 和 FFN 侧仍加载完整
+DeepSeekV2 权重。
 
-## 开发策略
+## Supported Matrix
 
-Phase 6 的第一原则是：原始 AFD commit 中已经验证过的 CUDA graph 逻辑，能复用就
-尽量复用。本插件只做 external plugin 化所必需的解耦：
+| 场景 | 当前状态 | 备注 |
+| --- | --- | --- |
+| AFD eager | 支持 | 现有 `1A1F` / `2A2F` 基线 |
+| Attention `FULL_DECODE_ONLY` | 支持 | 唯一支持的 vLLM CUDA graph mode |
+| FFN graph-keyed capture/replay | 支持 | graph key 来自 DP metadata token shape |
+| AFD + two-way DBO + eager | 支持 | Phase 5 结果 |
+| AFD + two-way DBO + `FULL_DECODE_ONLY` | 支持 | 要求 `num_ubatches=2` |
+| AFD + `PIECEWISE` | 不支持 | fail fast |
+| AFD + `FULL` / `FULL_AND_PIECEWISE` | 不支持 | fail fast |
+| AFD + DBO graph with `num_ubatches != 2` | 不支持 | fail fast |
+| TP/PP 下 FFN graph cache | 未验证 | 当前 GPU E2E 固定 `TP=1` |
 
-- Attention 侧复用原始 `GPUModelRunner` 中 normal run / `_dummy_run()` /
-  `_warmup_and_capture()` 对 AFD metadata 的处理方式，只把 `vllm_config.afd_config`
-  改成 plugin-owned `additional_config["afd"]` 解析结果。
-- FFN 侧优先迁移原始 `GPUFFNModelRunner` 的 `_make_graph_key()`、`_cuda_graphs`、
-  `_graph_memory_pool`、`_dummy_run()`、`capture_model()` 和 replay fallback 逻辑。
-- connector 侧沿用原始 `send_dp_metadata_list(dp_metadata_list,
-  is_graph_capturing=..., is_warmup=...)` 信号，只把实现落在
-  `afd_plugin.connectors`。
-- 只有原始实现强绑定 in-tree vLLM 改动时，才在插件内抽 helper 或加受控 compat
-  shim。
+## Implementation Notes
 
-Phase 6 只支持 vLLM `FULL_DECODE_ONLY` CUDA graph。其他 CUDA graph mode，包括
-`FULL`、`PIECEWISE`、`FULL_AND_PIECEWISE` 以及 ubatching full graph，都应 fail fast。
+### Policy
 
-## 目标
+`afd_plugin.runtime.cuda_graph.validate_cuda_graph_mode()` 负责解析和校验 graph
+策略。它保持 CPU-safe，不在 import 时加载 torch 或 vLLM CUDA runtime。
 
-- normal run、warmup、capture、replay 都向 FFN 侧发送正确的 DP/AFD metadata。
-- Attention 侧只放行 `CUDAGraphMode.FULL_DECODE_ONLY`，并复用 vLLM 原生 full decode
-  graph capture/replay 调度。
-- FFN 侧复用原始 AFD 的 graph-keyed capture/replay 逻辑，按 DP metadata shape
-  维护 CUDA graph cache。
-- 保持 package import CPU-safe，CUDA-heavy import 继续延迟到 runtime。
-- 增加 GPU-gated correctness tests 和 trace/runbook，失败时能清楚区分 metadata、
-  graph key、connector shape 和 replay 问题。
-
-## 非目标
-
-- Phase 6 第一版不解决 role-based weight pruning。
-- 第一版不支持 `CUDAGraphMode.PIECEWISE`。
-- 第一版不支持 `CUDAGraphMode.FULL` 或 `FULL_AND_PIECEWISE`。
-- 第一版不支持 AFD + ubatching + CUDA graph 的组合。
-- 第一版不支持 TP/PP 下 FFN graph cache，除非 eager 基线已覆盖并有独立验证。
-
-## 支持矩阵
-
-| 场景 | Phase 6.1 | 后续 | 备注 |
-| --- | --- | --- | --- |
-| Attention eager | 支持 | 支持 | 当前基线 |
-| Attention `FULL_DECODE_ONLY` | 支持 | 支持 | 唯一放行的 CUDA graph mode |
-| Attention `PIECEWISE` | fail fast | 待定 | 当前不支持 |
-| Attention `FULL` / `FULL_AND_PIECEWISE` | fail fast | 待定 | 当前不支持 |
-| FFN eager | 支持 | 支持 | 当前基线 |
-| FFN graph-keyed capture/replay | 支持 | 支持 | 优先复用原始 FFN runner 逻辑 |
-| AFD + ubatching + eager | 支持 Phase 5 结果 | 支持 | 仅两路 ubatch |
-| AFD + ubatching + CUDA graph | fail fast | 待设计 | 需要独立 metadata/graph key |
-
-## 核心设计
-
-### 1. 配置与校验
-
-把当前 `fail_if_cuda_graph_enabled()` 改为更细的 mode 校验：
-
-- 当 `model_config.enforce_eager=True` 时保持当前 eager 路径。
-- 当 AFD role 为 Attention 时，只允许 `enforce_eager=True` 或
-  `compilation_config.cudagraph_mode == CUDAGraphMode.FULL_DECODE_ONLY`。
-- 当 AFD role 为 Attention 且 runtime mode 可能进入 `PIECEWISE`、`FULL` 或
-  `FULL_AND_PIECEWISE` 时 fail fast，错误信息指出 Phase 6 只支持
-  `FULL_DECODE_ONLY`。
-- 当 AFD role 为 FFN 时，允许启动时不传 `--enforce-eager`，但只启用插件自己的
-  graph-keyed capture/replay cache。
-- 当 `parallel_config.use_ubatching=True` 且 CUDA graph enabled 时继续 fail fast。
-
-建议新增 helper：
-
-```python
-validate_cuda_graph_mode(vllm_config, *, role: str) -> AFDCUDAGraphPolicy
-```
-
-`AFDCUDAGraphPolicy` 应至少包含：
+策略结果包含：
 
 - `enabled`
 - `mode_name`
@@ -105,223 +52,136 @@ validate_cuda_graph_mode(vllm_config, *, role: str) -> AFDCUDAGraphPolicy
 - `enable_ffn_graph_cache`
 - `allow_cuda_graph_with_ubatching`
 
-CPU-safe tests 覆盖不同 config 组合，不需要 import torch/vLLM CUDA。
+保留了兼容入口 `fail_if_cuda_graph_enabled()`，但它现在委托给 mode validator，而
+不是简单拒绝所有 graph 配置。
 
-### 2. Attention Metadata 发送
+### Attention Metadata
 
-Attention 侧需要覆盖三条路径：
+`AFDAttentionModelRunner` 覆盖三类路径：
 
-- normal `execute_model()`：当前 `_model_forward()` 已能安装 metadata，但
-  `_send_dp_metadata()` 需要接收 `is_graph_capturing`。
-- CUDA graph warmup `_dummy_run(..., cudagraph_runtime_mode=NONE)`：需要发送
-  `is_warmup=True`，让 FFN 侧只做 eager warmup 或预分配，不登记正式 graph。
-- CUDA graph capture `_dummy_run(..., is_graph_capturing=True)`：需要发送
-  `is_graph_capturing=True`，让 FFN 侧按同一个 DP metadata key capture 或确认已有
-  graph。
+- normal run：在 `_model_forward()` 安装 AFD metadata 并发送普通 DP metadata。
+- warmup：在 `_warmup_and_capture()` warmup loop 中设置 `_is_warmup=True`，FFN
+  侧执行 warmup forward 但不登记正式 graph。
+- capture：设置 `_afd_is_graph_capturing=True`。非 ubatch capture 会先发送单 stage
+  DP metadata，然后 suppress capture 内重复发送；ubatch capture 由
+  `AFDUBatchWrapper` 构造精确 padded ubatch slices，并在进入
+  `torch.cuda.graph(...)` 前发送 per-stage DP metadata。
 
-实施点：
+这保证各个 A 侧 DP 的 send metadata 和 F 侧 recv metadata 不落入正式 CUDA graph
+capture 流程。
 
-- 覆盖 `AFDAttentionModelRunner._warmup_and_capture()`，在 warmup 循环中设置
-  `self._is_warmup=True`，正式 capture 前恢复为 `False`。
-- 覆盖或包裹 `_dummy_run()`，把 `is_graph_capturing` 保存为短生命周期字段，例如
-  `self._afd_is_graph_capturing`。
-- `_send_dp_metadata()` 同时向 connector 传
-  `is_graph_capturing=self._afd_is_graph_capturing` 和
-  `is_warmup=self._is_warmup`。
-- `_build_afd_metadata()` 使用 padded ubatch slices 时，metadata token lens 必须与
-  graph batch descriptor 一致；模型实际通信 shape 使用 connector 的
-  `_tensor_metadata_list` 校验。
+### FFN Graph Cache
 
-### 3. Connector 状态机
-
-DP metadata 发送的 payload 已经是：
-
-```text
-(dp_metadata_list, is_graph_capturing, is_warmup)
-```
-
-Phase 6 需要明确 FFN 侧状态语义：
-
-- `is_warmup=True`：FFN 执行 eager warmup，不登记 graph。
-- `is_graph_capturing=True`：FFN 对当前 graph key 执行 capture，第一版按原始
-  `_dummy_run()` 逻辑 capture `_ffn_forward()`。
-- 两者都为 `False` 且 graph cache 命中：FFN replay graph。
-- 两者都为 `False` 且 graph cache miss：默认 eager fallback，并 trace warning；
-  测试阶段可通过 env 开启 strict miss fail fast。
-
-建议新增 `AFDGraphRunMode`：
-
-```text
-EAGER
-WARMUP
-CAPTURE
-REPLAY
-```
-
-connector 只负责传递状态和预分配 shape buffer，不负责管理 graph cache。connector
-通信是否能稳定参与 capture 由 GPU E2E 验证决定；如不稳定，再把 FFN graph 收窄为
-compute-only fallback。
-
-### 4. FFN Graph Cache
-
-FFN 侧优先复用原始 AFD `GPUFFNModelRunner` 的结构，而不是重新设计一套 graph
-runtime。建议直接迁移并插件化以下字段和方法：
+`GPUFFNModelRunner` 维护：
 
 ```python
-self.use_cuda_graph = not self.model_config.enforce_eager
-self._cuda_graphs: dict[tuple, dict] = {}
-self._graph_memory_pool = None
-
-@staticmethod
-def _make_graph_key(dp_metadata_list: dict) -> tuple: ...
-
-def _dummy_run(cudagraph_runtime_mode, dp_metadata_list, is_attn_graph_capturing):
-    ...
-
-def capture_model(dp_metadata_list=None, is_warmup=False, is_attn_graph_capturing=True):
-    ...
+self.use_cuda_graph
+self._cuda_graphs
+self._graph_memory_pool
 ```
 
-graph key 第一版沿用原始实现：
+FFN run mode 由 `AFDGraphRunMode` 表示：
+
+- `WARMUP`：执行 eager warmup，不存 graph。
+- `CAPTURE`：按当前 graph key capture `_ffn_forward()`。
+- `REPLAY`：命中 graph cache 后 replay。
+- `EAGER`：graph miss 或 eager mode 下走 `_ffn_forward()` fallback。
+
+graph key 第一版沿用原始 AFD 形状：
 
 ```text
 tuple((stage_idx, tuple(meta.num_tokens_across_dp_cpu.tolist()))
       for stage_idx, meta in sorted(dp_metadata_list.items()))
 ```
 
-只有当 GPU 验证发现 ratio、dtype、hidden size 或 TP/EP 会造成 key collision 时，才
-扩展 key。扩展 key 时要加 backward-compatible tests。
+trace 会输出 `ffn_execute_model`、`ffn_capture_cudagraph_done`、
+`ffn_replay_cudagraph_done` 和 graph key，便于区分 capture/replay/miss。
 
-运行时顺序：
+### DBO / Ubatching
 
-```text
-recv_attn_output
-  -> graph replay 或 _ffn_forward eager fallback
-  -> send_ffn_output
-```
-
-capture 顺序：
+当前只支持 vLLM 两路 ubatch。DBO graph capture/replay 的 key 会从单 stage：
 
 ```text
-Attention 发送 is_graph_capturing=True
-  -> FFN recv dp_metadata_list
-  -> GPUFFNModelRunner.capture_model(dp_metadata_list, is_attn_graph_capturing=True)
-  -> _dummy_run(CUDAGraphMode.FULL, dp_metadata_list, ...)
-  -> _ffn_forward(dp_metadata_list, is_graph_capturing=True)
-  -> store graph in _cuda_graphs[graph_key]
+[0:[64,64]]
 ```
 
-这部分先尽量贴近原始实现。实施时必须用 GPU trace 验证 capture/replay 是否存在
-不可重放的 connector 副作用；如果发现 NCCL send/recv 被 capture 后不能稳定 replay，
-再把 FFN graph 收窄为 compute-only，而不是一开始就偏离原始代码。
-
-### 5. Attention `FULL_DECODE_ONLY`
-
-当前 DeepSeekV2 wrapper 在 `forward_with_afd()` 中逐层执行：
+变成双 stage：
 
 ```text
-attention compute -> send_attn_output -> recv_ffn_output -> next layer
+[0:[32,32],1:[32,32]]
 ```
 
-Phase 6 只允许 `FULL_DECODE_ONLY`，因为 decode-only full graph 的 shape 集合更小，
-更接近原始 AFD 验证路径，也更容易和 FFN graph key 对齐。
+在 2A2F、capture size 64 的场景下，总并发 64 往往不足以触发 live DBO 切分，因为
+每个 DP rank 约 32 个 token，vLLM 会避免最后一个 ubatch 为空。把总并发提高到
+128 后，每个 DP rank 约 64 个 token，可以触发 `32/32` 双 stage replay。
 
-实施要求：
+## Testing Progress
 
-- normal prefill / mixed prefill-decode 仍可落到 eager。
-- uniform decode 命中 `FULL_DECODE_ONLY` capture size 时走 graph。
-- `_warmup_and_capture()` warmup 阶段向 FFN 发送 `is_warmup=True`。
-- 正式 capture 阶段向 FFN 发送 `is_graph_capturing=True`。
-- replay 阶段向 FFN 发送普通 DP metadata，让 FFN 用 graph key replay。
+CPU-safe tests 已覆盖：
 
-如果后续要支持 `FULL`、`FULL_AND_PIECEWISE` 或 `PIECEWISE`，必须单独开设计文档，
-不要混入 Phase 6.1。
+- CUDA graph policy：eager 允许、`FULL_DECODE_ONLY` 允许、非支持 mode 拒绝、
+  两路 DBO graph 允许、其他 ubatch 数量拒绝。
+- Attention metadata flag：normal、warmup、capture flag 会传到 connector。
+- FFN graph key、replay、miss fallback、capture 时跳过 connector state update。
+- AFD ubatch metadata cloning、per-ubatch DP metadata、两路 ubatch 校验。
 
-## 实施步骤
+GPU-gated pytest 已新增以下 opt-in cases：
 
-### Step 1：策略与校验
+- `test_deepseek_v2_eager_1a1f_end_to_end`
+- `test_deepseek_v2_eager_2a2f_end_to_end`
+- `test_deepseek_v2_full_decode_cudagraph_1a1f_end_to_end`
+- `test_deepseek_v2_full_decode_cudagraph_2a2f_end_to_end`
+- `test_deepseek_v2_full_decode_cudagraph_2a2f_dbo_replays_ubatch_graph`
 
-- 新增 `afd_plugin/runtime/cuda_graph.py`，放 CPU-safe policy、mode helper 和 FFN
-  graph key helper。
-- 替换 runner init 中的 `fail_if_cuda_graph_enabled()`，但保留旧函数作为兼容别名
-  或测试入口。
-- 添加 CPU tests：eager 允许、`FULL_DECODE_ONLY` 允许、`PIECEWISE` 拒绝、
-  `FULL` / `FULL_AND_PIECEWISE` 拒绝、ubatching + graph 拒绝。
+CUDA graph cases 使用 `DecodeBenchConnector`，对齐 `max-num-seqs`、
+`max-num-batched-tokens` 和 CUDA graph capture size，并通过 trace 断言 FFN replay。
+DBO graph case 额外断言 live 请求期间出现两 stage DP metadata 和两 stage FFN graph
+replay。
 
-### Step 2：Attention dummy/capture metadata
+最近一次 L20X 手工验证已经证明：
 
-- 在 `AFDAttentionModelRunner` 中保存 `_afd_is_graph_capturing`。
-- 覆盖 `_warmup_and_capture()`，设置 `_is_warmup`。
-- 修改 `_send_dp_metadata()` 传递 `is_graph_capturing`。
-- 添加 CPU fake connector tests，验证 normal、warmup、capture 三种 flag。
+- `2A2F + FULL_DECODE_ONLY + DecodeBenchConnector + DBO`
+- capture size `64`
+- 并发 `128`
+- `128/128` completion 请求返回 `200`
+- A 侧出现 `AFD_UBATCH_TRACE ... token_slices=[(0,32),(32,64)]`
+- F 侧出现 `dp_metadata='[0:[32,32],1:[32,32]]'`
+- F 侧出现 `ffn_execute_model ... run_mode='replay'` 和
+  `ffn_replay_cudagraph_done` 的双 stage graph key
 
-### Step 3：FFN graph cache
+## Running GPU E2E
 
-- 迁移原始 `GPUFFNModelRunner` 的 graph cache 字段和 `_make_graph_key()`。
-- 迁移原始 `_dummy_run()` / `capture_model()` / `_capture_graphs()` 的主要控制流。
-- `execute_model()` 中按 graph key replay；miss 时沿用原始 eager fallback，并增加
-  trace。
-- 添加 CPU-level key tests；GPU unit test 用 tiny torch module 验证 capture/replay
-  输出一致。
+```bash
+AFD_GPU_E2E_MODEL=/home/jcz/models/DeepSeek-V2-Lite \
+  uv run pytest -q -m gpu
+```
 
-### Step 4：P2P buffer 与 shape
+常用覆盖变量：
 
-- 确认 `P2PAFDConnector.update_state_from_dp_metadata()` 预分配的
-  `_recv_attn_buffers` 与 FFN graph replay 期望 shape 一致。
-- 对 ratio > 1 的 FFN output split 增加 graph replay 后 shape 校验。
-- trace 中输出 graph key、run mode、stage/layer、tensor shape。
+- `AFD_GPU_E2E_GPUS=0,1,2,3`
+- `AFD_GPU_E2E_GRAPH_CAPTURE_SIZE=64`
+- `AFD_GPU_E2E_GRAPH_REQUESTS=64`
+- `AFD_GPU_E2E_DBO_REQUESTS=128`
+- `AFD_GPU_E2E_GRAPH_MAX_TOKENS=8`
 
-### Step 5：GPU E2E 验证
+## Remaining Gaps
 
-新增 opt-in GPU cases：
+- GPU graph tests 已加入 pytest，但仍是 opt-in，需要在 L20X/CI GPU 环境实际跑通后
+  才能作为持续回归信号。
+- graph 输出与 eager baseline 的 token 序列一致性还没有自动比较；当前 graph tests
+  主要验证请求成功、FFN replay trace 和 DBO replay trace。
+- 还没有 tiny torch module 级别的 CUDA graph capture/replay correctness unit test。
+- strict graph miss fail-fast 还没实现；当前 graph miss 会 trace 后 eager fallback。
+- TP/PP、ratio > 1、EP collective、非 DeepSeekV2 模型的 graph 路径仍需独立验证。
+- FFN graph cache 的显存预算仍只通过 trace 观察，尚未纳入 worker memory planning。
 
-- `1A1F` DeepSeekV2 eager baseline。
-- `1A1F` DeepSeekV2 `FULL_DECODE_ONLY` + FFN graph cache。
-- `2A2F` DeepSeekV2 `FULL_DECODE_ONLY` + FFN graph cache。
-- 两路 ubatch eager 回归，确认 Phase 6 没破坏 Phase 5。
+## Completion Criteria
 
-验收标准：
+Phase 6 可认为“功能闭环”完成的标准：
 
-- graph 模式输出与 eager baseline token 序列一致。
-- trace 中能看到 warmup、capture、replay 的 DP metadata key 一致。
-- graph replay 期间没有新的 FFN graph capture。
-- 没有要求 `--enforce-eager`；但非 `FULL_DECODE_ONLY` graph 组合有清楚的
-  fail-fast 错误。
-
-## 测试计划
-
-CPU tests：
-
-- `tests/test_cuda_graph_policy.py`
-- `tests/test_attention_runtime.py` 增加 metadata flag assertions。
-- `tests/test_ffn_runtime.py` 增加 graph key 和 miss policy。
-- `tests/test_p2p_connector.py` 增加 `(metadata, is_graph_capturing, is_warmup)`
-  payload compatibility。
-
-GPU tests：
-
-- `tests/test_gpu_e2e_deepseek_v2.py` 增加 graph marker case。
-- 使用 `AFD_GPU_E2E_MODEL` opt-in。
-- 默认先跑 `1A1F`；`2A2F` 作为第二层验证。
-- 远程 L20X 验证按 AGENTS.md 流程使用临时分支，验证后删除本地和远程临时分支。
-
-## 风险与待验证点
-
-- vLLM `v0.19.1` 的 `CUDAGraphMode.FULL_DECODE_ONLY` 解析和当前 checkout 可能有
-  patch-level 差异，实施前需要再次固定目标 commit/tag。
-- 原始 FFN graph capture 逻辑是否能在 external plugin 的 P2P connector 下稳定
-  replay，需要用 trace 和 GPU run 确认。
-- FFN `compute_ffn_output()` 内部如果包含 TP/EP collective，graph cache 可能需要
-  额外 communicator 支持；第一版限制 TP=1/PP=1 更稳。
-- DP padding、ubatch padded token lens 与 connector tensor shape 必须完全一致，否则
-  graph key 会命中但 replay buffer shape 错。
-- CUDA graph memory profiling 可能低估 FFN graph cache，需要把 FFN graph memory
-  计入 worker 可用显存预算或在 runbook 中要求保守 `gpu_memory_utilization`。
-
-## 完成定义
-
-- AFD 不再全局要求 `--enforce-eager`。
-- Attention `FULL_DECODE_ONLY` + FFN graph cache 在 `1A1F` 和 `2A2F` GPU E2E 通过。
-- Unsupported graph modes / ubatching graph 组合 fail fast 且错误信息明确。
+- L20X 上 `1A1F` / `2A2F` `FULL_DECODE_ONLY` GPU E2E 通过。
+- L20X 上 `2A2F` `FULL_DECODE_ONLY + DBO` GPU E2E 通过，并能断言 live 两 stage replay。
+- 非支持 graph mode 和非两路 ubatch graph 组合 fail fast 且错误清晰。
 - CPU smoke tests 在无 CUDA、无 vLLM wheel 的本地开发环境干净通过或干净 skip。
-- 文档更新 README current status、GPU runbook 和已知限制。
+
+后续 hardening 再补输出一致性、strict miss、TP/PP/ratio 拓扑和 graph memory runbook。

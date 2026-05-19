@@ -7,11 +7,8 @@ This script is intentionally opt-in and is not collected by pytest. It starts
 one FFN-side ``vllm serve`` process and one Attention-side ``vllm serve``
 OpenAI-compatible API process. XAYF topologies are represented as native vLLM
 data parallelism: Attention runs with ``DP=X, TP=1`` and FFN runs with
-``DP=Y, TP=1``.
-
-Current Phase 4 limitations are enforced by the command line: full weights are
-loaded on all sides, and ``--enforce-eager`` is always passed because CUDA graph
-support is not implemented yet.
+``DP=Y, TP=1``. By default the runner keeps the eager baseline behavior; CUDA
+graph and DBO coverage are opt-in flags.
 """
 
 from __future__ import annotations
@@ -42,14 +39,19 @@ def main() -> int:
 
     processes: list[subprocess.Popen[str]] = []
     log_threads: list[threading.Thread] = []
+    logs: dict[str, list[str]] = {"ffn": [], "attention": []}
 
     try:
         ffn_cmd = build_vllm_command(args, role="ffn")
         ffn_cuda_visible_devices = ",".join(ffn_gpus)
         print_command("FFN", ffn_cmd, ffn_cuda_visible_devices)
-        ffn_proc = start_process("ffn", ffn_cmd, build_env(ffn_cuda_visible_devices))
+        ffn_proc = start_process(
+            "ffn",
+            ffn_cmd,
+            build_env(ffn_cuda_visible_devices, args),
+        )
         processes.append(ffn_proc)
-        log_threads.append(stream_output("ffn", ffn_proc))
+        log_threads.append(stream_output("ffn", ffn_proc, logs["ffn"]))
 
         time.sleep(args.ffn_start_delay)
         ensure_alive(ffn_proc, "FFN process exited during startup")
@@ -60,10 +62,12 @@ def main() -> int:
         attention_proc = start_process(
             "attention",
             attention_cmd,
-            build_env(attention_cuda_visible_devices),
+            build_env(attention_cuda_visible_devices, args),
         )
         processes.append(attention_proc)
-        log_threads.append(stream_output("attention", attention_proc))
+        log_threads.append(
+            stream_output("attention", attention_proc, logs["attention"]),
+        )
 
         ensure_alive(attention_proc, "Attention process exited during startup")
         wait_for_openai_api(args)
@@ -73,6 +77,7 @@ def main() -> int:
             print(f"\n=== Completion response: request {request_idx} ===")
             print(json.dumps(response, ensure_ascii=False, indent=2))
 
+        assert_log_expectations(args, logs)
         return 0
     finally:
         terminate_processes(processes)
@@ -122,14 +127,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
+        "--num-requests",
+        type=int,
+        default=None,
+        help=(
+            "Number of completion requests to send. Defaults to the number of "
+            "Attention servers."
+        ),
+    )
+    parser.add_argument(
+        "--request-concurrency",
+        type=int,
+        default=None,
+        help="Maximum concurrent completion requests. Defaults to --num-requests.",
+    )
+    parser.add_argument(
         "--served-model-name-prefix",
         default="deepseek-v2-lite-afd",
         help="Prefix used for role-specific served model names.",
     )
     parser.add_argument(
-        "--ffn-headless",
+        "--cuda-graph-full-decode-only",
         action="store_true",
-        help="Run FFN servers with --headless. Not required by the current patch.",
+        help="Run without --enforce-eager and set cudagraph_mode=FULL_DECODE_ONLY.",
+    )
+    parser.add_argument(
+        "--cudagraph-capture-size",
+        type=int,
+        default=64,
+        help=(
+            "Capture size used for max-num-seqs, max-num-batched-tokens, "
+            "max-cudagraph-capture-size, and cudagraph-capture-sizes."
+        ),
+    )
+    parser.add_argument(
+        "--enable-dbo",
+        action="store_true",
+        help="Enable vLLM DBO/ubatching for both AFD roles.",
+    )
+    parser.add_argument(
+        "--dbo-decode-token-threshold",
+        type=int,
+        default=1,
+        help="Value passed to --dbo-decode-token-threshold when DBO is enabled.",
+    )
+    parser.add_argument(
+        "--dbo-prefill-token-threshold",
+        type=int,
+        default=None,
+        help=(
+            "Value passed to --dbo-prefill-token-threshold when DBO is enabled. "
+            "Defaults to --cudagraph-capture-size."
+        ),
+    )
+    parser.add_argument(
+        "--use-decode-bench-connector",
+        action="store_true",
+        help="Pass a DecodeBenchConnector kv-transfer-config to Attention.",
+    )
+    parser.add_argument(
+        "--expect-ffn-cudagraph-replay",
+        action="store_true",
+        help="Fail unless FFN logs show CUDA graph replay.",
+    )
+    parser.add_argument(
+        "--expect-ffn-ubatch-cudagraph-replay",
+        action="store_true",
+        help="Fail unless FFN logs show two-stage ubatch CUDA graph replay.",
+    )
+    parser.add_argument(
+        "--expect-log-timeout",
+        type=float,
+        default=60,
+        help="Seconds to wait for expected trace lines after requests finish.",
     )
     parser.add_argument(
         "--common-vllm-arg",
@@ -204,7 +274,6 @@ def build_vllm_command(
         args.model,
         "--worker-cls",
         worker_cls,
-        "--enforce-eager",
         "--served-model-name",
         served_model_name(args, role),
         "--data-parallel-size",
@@ -215,21 +284,72 @@ def build_vllm_command(
         "--additional-config",
         json.dumps(afd_config, separators=(",", ":")),
     ]
+    if args.cuda_graph_full_decode_only:
+        capture_size = str(args.cudagraph_capture_size)
+        cmd.extend(
+            [
+                "--max-num-seqs",
+                capture_size,
+                "--max-num-batched-tokens",
+                capture_size,
+                "--max-cudagraph-capture-size",
+                capture_size,
+                "--cudagraph-capture-sizes",
+                capture_size,
+                "--compilation-config",
+                json.dumps(
+                    {"cudagraph_mode": "FULL_DECODE_ONLY"},
+                    separators=(",", ":"),
+                ),
+            ],
+        )
+    else:
+        cmd.append("--enforce-eager")
+
+    if args.enable_dbo:
+        prefill_threshold = (
+            args.dbo_prefill_token_threshold
+            if args.dbo_prefill_token_threshold is not None
+            else args.cudagraph_capture_size
+        )
+        cmd.extend(
+            [
+                "--enable-dbo",
+                "--dbo-decode-token-threshold",
+                str(args.dbo_decode_token_threshold),
+                "--dbo-prefill-token-threshold",
+                str(prefill_threshold),
+            ],
+        )
+
     if role == "attention":
         cmd.extend(
             ["--host", args.api_host, "--port", str(attention_api_port(args))],
         )
+        if args.use_decode_bench_connector:
+            cmd.extend(["--kv-transfer-config", decode_bench_connector_config()])
         cmd.extend(args.attention_vllm_arg)
     else:
-        if args.ffn_headless:
-            cmd.append("--headless")
-        else:
-            cmd.extend(
-                ["--host", args.api_host, "--port", str(ffn_api_port(args))],
-            )
+        cmd.extend(
+            ["--host", args.api_host, "--port", str(ffn_api_port(args))],
+        )
         cmd.extend(args.ffn_vllm_arg)
     cmd.extend(args.common_vllm_arg)
     return cmd
+
+
+def decode_bench_connector_config() -> str:
+    return json.dumps(
+        {
+            "kv_connector": "DecodeBenchConnector",
+            "kv_role": "kv_both",
+            "kv_connector_extra_config": {
+                "fill_mean": 0.015,
+                "fill_std": 0.0,
+            },
+        },
+        separators=(",", ":"),
+    )
 
 
 def served_model_name(args: argparse.Namespace, role: str) -> str:
@@ -244,11 +364,15 @@ def ffn_api_port(args: argparse.Namespace) -> int:
     return args.api_port_base + 1
 
 
-def build_env(cuda_visible_devices: str) -> dict[str, str]:
+def build_env(cuda_visible_devices: str, args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     env["VLLM_PLUGINS"] = "afd"
     env["PYTHONUNBUFFERED"] = "1"
+    if args.expect_ffn_cudagraph_replay or args.expect_ffn_ubatch_cudagraph_replay:
+        env["AFD_TRACE"] = "1"
+    if args.expect_ffn_ubatch_cudagraph_replay:
+        env["AFD_UBATCH_TRACE"] = "1"
     env.pop("AFD_PLUGIN_EARLY_ENGINE_PATCH", None)
     current_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (
@@ -277,10 +401,15 @@ def start_process(
     )
 
 
-def stream_output(name: str, process: subprocess.Popen[str]) -> threading.Thread:
+def stream_output(
+    name: str,
+    process: subprocess.Popen[str],
+    log_lines: list[str],
+) -> threading.Thread:
     def worker() -> None:
         assert process.stdout is not None
         for line in process.stdout:
+            log_lines.append(line)
             print(f"[{name}] {line}", end="")
 
     thread = threading.Thread(target=worker, name=f"{name}-log-stream", daemon=True)
@@ -328,12 +457,21 @@ def request_completion(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
-    request_count = max(int(args.num_attention_servers), 1)
+    request_count = (
+        int(args.num_requests)
+        if args.num_requests is not None
+        else max(int(args.num_attention_servers), 1)
+    )
     if request_count == 1:
         return [request_completion(args)]
 
     responses: list[dict[str, Any] | None] = [None] * request_count
-    with ThreadPoolExecutor(max_workers=request_count) as executor:
+    concurrency = (
+        int(args.request_concurrency)
+        if args.request_concurrency is not None
+        else request_count
+    )
+    with ThreadPoolExecutor(max_workers=max(concurrency, 1)) as executor:
         futures = {
             executor.submit(request_completion, args): request_idx
             for request_idx in range(request_count)
@@ -342,6 +480,75 @@ def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
             responses[futures[future]] = future.result()
 
     return [response for response in responses if response is not None]
+
+
+def assert_log_expectations(
+    args: argparse.Namespace,
+    logs: dict[str, list[str]],
+) -> None:
+    if not (
+        args.expect_ffn_cudagraph_replay
+        or args.expect_ffn_ubatch_cudagraph_replay
+    ):
+        return
+
+    deadline = time.monotonic() + float(args.expect_log_timeout)
+    while time.monotonic() < deadline:
+        if _log_expectations_met(args, logs):
+            return
+        time.sleep(0.5)
+
+    ffn_tail = "".join(logs["ffn"][-80:])
+    attention_tail = "".join(logs["attention"][-80:])
+    raise AssertionError(
+        "Timed out waiting for expected AFD CUDA graph trace lines.\n"
+        f"FFN log tail:\n{ffn_tail}\n"
+        f"Attention log tail:\n{attention_tail}",
+    )
+
+
+def _log_expectations_met(
+    args: argparse.Namespace,
+    logs: dict[str, list[str]],
+) -> bool:
+    if args.expect_ffn_cudagraph_replay and not _has_line(
+        logs["ffn"],
+        "ffn_replay_cudagraph_done",
+    ):
+        return False
+
+    if args.expect_ffn_ubatch_cudagraph_replay:
+        if not _has_line(logs["attention"], "AFD_UBATCH_TRACE"):
+            return False
+        if not any(
+            "p2p_recv_dp_metadata_done" in line
+            and "dp_metadata='[0:[" in line
+            and ",1:[" in line
+            for line in logs["ffn"]
+        ):
+            return False
+        if not any(
+            "ffn_execute_model" in line
+            and "run_mode='replay'" in line
+            and _line_has_stage_one(line)
+            for line in logs["ffn"]
+        ):
+            return False
+        if not any(
+            "ffn_replay_cudagraph_done" in line and _line_has_stage_one(line)
+            for line in logs["ffn"]
+        ):
+            return False
+
+    return True
+
+
+def _has_line(lines: list[str], needle: str) -> bool:
+    return any(needle in line for line in lines)
+
+
+def _line_has_stage_one(line: str) -> bool:
+    return any(token in line for token in ("1:[", "\\'1\\'", "'1'", '"1"'))
 
 
 def ensure_alive(process: subprocess.Popen[str], message: str) -> None:

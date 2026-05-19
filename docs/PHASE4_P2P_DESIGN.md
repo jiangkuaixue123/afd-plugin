@@ -17,7 +17,8 @@ adapters intact. The earlier in-process dummy connector has been removed.
 - Provide a DeepSeekV2 E2E model wrapper that loads full weights on both roles
   and splits only the forward path. This covers first server-side eager `1A1F`
   and `2A2F` smoke testing, not the final memory-efficient model implementation.
-- Continue to fail fast for AFD + ubatching/DBO; that belongs to Phase 5.
+- Keep P2P independent of graph-cache policy. Phase 5/6 now layer two-way DBO
+  metadata and `FULL_DECODE_ONLY` CUDA graph replay on top of this connector.
 
 ## Rank Mapping
 
@@ -42,9 +43,11 @@ FFN-owned subgroup.
 
 - Role-based weight pruning is not implemented; both sides load full
   DeepSeekV2 weights.
-- GPU-gated multi-process round-trip tests exist for eager `1A1F` and `2A2F`
-  and are opt-in through `AFD_GPU_E2E_MODEL`.
-- CUDA graph capture is not supported by this connector version; server runs
-  must pass `--enforce-eager`.
-- Ubatching/DBO support remains Phase 5.
+- GPU-gated multi-process tests exist for eager `1A1F` / `2A2F`,
+  `FULL_DECODE_ONLY` `1A1F` / `2A2F`, and `FULL_DECODE_ONLY` `2A2F` with DBO
+  ubatch replay. They are opt-in through `AFD_GPU_E2E_MODEL`.
+- CUDA graph metadata flags and FFN receive-buffer preallocation are supported
+  by the P2P connector; graph cache ownership remains in `GPUFFNModelRunner`.
+- Two-way DBO metadata is supported for current AFD graph/eager paths; only
+  `num_ubatches=2` is currently allowed.
 - More flexible non-divisible A/F routing is deferred until topology hardening.

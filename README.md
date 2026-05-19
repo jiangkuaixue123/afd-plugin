@@ -33,7 +33,7 @@ Phase 2 added the Attention-side MVP:
 - A minimal plugin-owned model helper can read AFD metadata from the forward
   context without patching `vllm.forward_context`.
 
-Phase 3 has started for the FFN side:
+Phase 3 added the FFN-side connector-driven runtime:
 
 - `AFDFFNWorker` injects `GPUFFNModelRunner`, returns an empty KV cache spec,
   and starts a connector-driven FFN loop during worker initialization.
@@ -43,7 +43,7 @@ Phase 3 has started for the FFN side:
 - The legacy in-process dummy connector has been removed; CPU-safe tests now
   use local fakes and metadata-level checks.
 
-Phase 4 has started the P2P connector migration:
+Phase 4 added the P2P connector migration:
 
 - `p2pconnector` is registered in the plugin connector factory.
 - A CPU-safe topology helper defines the Phase 4 rank mapping:
@@ -58,14 +58,13 @@ Phase 4 has started the P2P connector migration:
   testing. This wrapper loads full model weights on both Attention and FFN
   sides, and only splits the forward path across the connector.
 
-Phase 4 is still in progress: FFN serving now works through ordinary
-`vllm serve` and does not require `--headless` or
-`--disable-hybrid-kv-cache-manager`. Scheduler-driven FFN execution still fails
-fast, and role-based weight pruning remains deferred. Phase 5 has CPU-side
-ubatching metadata support. Phase 6 CUDA graph scaffolding is started and only
-allows vLLM `FULL_DECODE_ONLY`; other graph modes and ubatching plus CUDA graph
-fail fast. Opt-in GPU E2E coverage currently exists for eager `1A1F` and
-`2A2F` DeepSeekV2 P2P runs.
+Current limitations: scheduler-driven FFN execution still fails fast, and
+role-based weight pruning remains deferred. Phase 5 has two-way ubatching
+metadata support. Phase 6 allows vLLM `FULL_DECODE_ONLY` CUDA graph mode and FFN
+graph-keyed capture/replay; other graph modes fail fast. Two-way DBO plus CUDA
+graph is supported only for `num_ubatches=2`. Opt-in GPU E2E coverage exists for
+eager `1A1F`/`2A2F`, `FULL_DECODE_ONLY` `1A1F`/`2A2F`, and `FULL_DECODE_ONLY`
+`2A2F` with DBO ubatch replay.
 
 P2P config shape:
 
@@ -97,7 +96,7 @@ Opt-in GPU E2E tests:
 AFD_GPU_E2E_MODEL=/path/to/DeepSeek-V2-Lite uv run pytest -q -m gpu
 ```
 
-The GPU tests default to `AFD_GPU_E2E_GPUS=0,1,2,3`, run eager `1A1F` and
-`2A2F`, and shell out to `tests/e2e_deepseek_v2_afd.py`. XAYF tests use native
-vLLM data parallelism: Attention runs with `DP=X, TP=1`, FFN runs with
-`DP=Y, TP=1`, and both roles enable expert parallelism.
+The GPU tests default to `AFD_GPU_E2E_GPUS=0,1,2,3`, run eager and CUDA graph
+`1A1F`/`2A2F` cases, and shell out to `tests/e2e_deepseek_v2_afd.py`. XAYF tests
+use native vLLM data parallelism: Attention runs with `DP=X, TP=1`, FFN runs
+with `DP=Y, TP=1`, and both roles enable expert parallelism.
