@@ -46,3 +46,16 @@ def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
     assert "@native.support_torch_compile\nclass AFDDeepseekV2Model" in source
     assert "from __future__ import annotations" not in source
     assert "self.do_not_compile = True" not in source
+
+
+def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
+    source = Path("afd_plugin/models/deepseek_v2.py").read_text()
+    forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(
+        "    def compute_ffn_output(",
+        1,
+    )[0]
+
+    assert "if self.afd_role == \"attention\":" in source
+    assert "def _forward_attention(" not in source
+    assert "hidden_states, residual = layer(\n" in forward_with_afd
+    assert "layer.compute_attn_output(" not in forward_with_afd
