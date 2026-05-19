@@ -20,8 +20,8 @@ class DefaultProcessGroupSwitcher:
 
         _update_default_pg(self.new_default_group)
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
-        del exc_type, exc_value, traceback
+    def __exit__(self, exc_type: object, exc_value: object, tb: object) -> None:
+        del exc_type, exc_value, tb
         from torch.distributed.distributed_c10d import _update_default_pg
 
         _update_default_pg(self.default_group)

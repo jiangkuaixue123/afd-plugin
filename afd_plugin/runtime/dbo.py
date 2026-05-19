@@ -4,8 +4,6 @@
 
 from typing import Any
 
-from afd_plugin.tracing import afd_trace
-
 _AFD_DBO_YIELD_OP_REGISTERED = False
 
 
@@ -25,12 +23,7 @@ def maybe_apply_dbo_yield(
             return tensor
         if not bool(dbo_enabled()):
             return tensor
-        trace_enabled = not _torch_is_compiling()
-        if trace_enabled:
-            afd_trace("dbo_yield_begin", role=role)
         dbo_yield()
-        if trace_enabled:
-            afd_trace("dbo_yield_done", role=role)
         return tensor
 
     try:

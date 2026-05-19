@@ -17,7 +17,6 @@ from vllm.model_executor.models import deepseek_v2 as native
 from afd_plugin.connectors import AFDConnectorMetadata
 from afd_plugin.models import get_afd_metadata_from_forward_context
 from afd_plugin.runtime.dbo import maybe_apply_dbo_yield
-from afd_plugin.tracing import afd_trace, tensor_summary
 
 
 class AFDDeepseekV2DecoderLayer(native.DeepseekV2DecoderLayer):
@@ -209,70 +208,22 @@ class AFDDeepseekV2Model(torch.nn.Module):
         stage_idx = int(getattr(afd_metadata, "afd_stage_idx", 0))
         ubatch_idx = int(getattr(afd_metadata, "ubatch_idx", stage_idx))
         transaction_id = getattr(afd_metadata, "transaction_id", None)
-        trace_enabled = not torch.compiler.is_compiling()
-        if trace_enabled:
-            afd_trace(
-                "attn_forward_with_afd_begin",
-                stage_idx=stage_idx,
-                ubatch_idx=ubatch_idx,
-                transaction_id=transaction_id,
-                num_of_stages=getattr(afd_metadata, "num_of_stages", 1),
-                tensor=tensor_summary(hidden_states),
-            )
 
         for layer_offset, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
         ):
             if layer_offset > 0:
-                if trace_enabled:
-                    afd_trace(
-                        "attn_recv_ffn_output_begin",
-                        layer_idx=layer.layer_idx - 1,
-                        next_layer_idx=layer.layer_idx,
-                        stage_idx=stage_idx,
-                        ubatch_idx=ubatch_idx,
-                        transaction_id=transaction_id,
-                        tensor=tensor_summary(hidden_states),
-                    )
                 hidden_states = afd_connector.recv_ffn_output(
                     ref_tensor=hidden_states,
                     ubatch_idx=stage_idx,
                 )
-                if trace_enabled:
-                    afd_trace(
-                        "attn_recv_ffn_output_done",
-                        layer_idx=layer.layer_idx - 1,
-                        next_layer_idx=layer.layer_idx,
-                        stage_idx=stage_idx,
-                        ubatch_idx=ubatch_idx,
-                        transaction_id=transaction_id,
-                        tensor=tensor_summary(hidden_states),
-                    )
 
-            if trace_enabled:
-                afd_trace(
-                    "attn_layer_compute_begin",
-                    layer_idx=layer.layer_idx,
-                    stage_idx=stage_idx,
-                    ubatch_idx=ubatch_idx,
-                    transaction_id=transaction_id,
-                    tensor=tensor_summary(hidden_states),
-                )
             hidden_states, residual = layer.compute_attn_output(
                 positions,
                 hidden_states,
                 residual,
                 llama_4_scaling,
             )
-            if trace_enabled:
-                afd_trace(
-                    "attn_layer_compute_done",
-                    layer_idx=layer.layer_idx,
-                    stage_idx=stage_idx,
-                    ubatch_idx=ubatch_idx,
-                    transaction_id=transaction_id,
-                    tensor=tensor_summary(hidden_states),
-                )
             metadata = AFDConnectorMetadata.create_attention_metadata(
                 layer_idx=layer.layer_idx,
                 stage_idx=stage_idx,
@@ -289,51 +240,16 @@ class AFDDeepseekV2Model(torch.nn.Module):
                     [],
                 ),
             )
-            if trace_enabled:
-                afd_trace(
-                    "attn_send_attn_output_begin",
-                    layer_idx=layer.layer_idx,
-                    stage_idx=stage_idx,
-                    ubatch_idx=ubatch_idx,
-                    transaction_id=transaction_id,
-                    tensor=tensor_summary(hidden_states),
-                )
             afd_connector.send_attn_output(hidden_states, metadata)
-            if trace_enabled:
-                afd_trace(
-                    "attn_send_attn_output_done",
-                    layer_idx=layer.layer_idx,
-                    stage_idx=stage_idx,
-                    ubatch_idx=ubatch_idx,
-                    transaction_id=transaction_id,
-                    tensor=tensor_summary(hidden_states),
-                )
             hidden_states = maybe_apply_dbo_yield(
                 hidden_states,
                 role="attention",
             )
 
-        if trace_enabled:
-            afd_trace(
-                "attn_final_recv_ffn_output_begin",
-                layer_idx=getattr(self.layers[self.end_layer - 1], "layer_idx", None),
-                stage_idx=stage_idx,
-                ubatch_idx=ubatch_idx,
-                transaction_id=transaction_id,
-                tensor=tensor_summary(hidden_states),
-            )
         hidden_states = afd_connector.recv_ffn_output(
             ref_tensor=hidden_states,
             ubatch_idx=stage_idx,
         )
-        if trace_enabled:
-            afd_trace(
-                "attn_final_recv_ffn_output_done",
-                stage_idx=stage_idx,
-                ubatch_idx=ubatch_idx,
-                transaction_id=transaction_id,
-                tensor=tensor_summary(hidden_states),
-            )
         return hidden_states, residual
 
     def compute_ffn_output(
@@ -341,20 +257,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
         hidden_states: torch.Tensor,
         layer_idx: int,
     ) -> torch.Tensor:
-        trace_enabled = not torch.compiler.is_compiling()
-        if trace_enabled:
-            afd_trace(
-                "model_compute_ffn_output_begin",
-                layer_idx=layer_idx,
-                tensor=tensor_summary(hidden_states),
-            )
         output = self.layers[layer_idx].compute_ffn_output(hidden_states)
-        if trace_enabled:
-            afd_trace(
-                "model_compute_ffn_output_done",
-                layer_idx=layer_idx,
-                tensor=tensor_summary(output),
-            )
         return output
 
     def _get_llama_4_scaling(

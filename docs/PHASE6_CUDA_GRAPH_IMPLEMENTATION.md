@@ -94,9 +94,6 @@ tuple((stage_idx, tuple(meta.num_tokens_across_dp_cpu.tolist()))
       for stage_idx, meta in sorted(dp_metadata_list.items()))
 ```
 
-trace 会输出 `ffn_execute_model`、`ffn_capture_cudagraph_done`、
-`ffn_replay_cudagraph_done` 和 graph key，便于区分 capture/replay/miss。
-
 ### DBO / Ubatching
 
 当前只支持 vLLM 两路 ubatch。DBO graph capture/replay 的 key 会从单 stage：
@@ -134,9 +131,8 @@ GPU-gated pytest 已新增以下 opt-in cases：
 - `test_deepseek_v2_full_decode_cudagraph_2a2f_dbo_replays_ubatch_graph`
 
 CUDA graph cases 使用 `DecodeBenchConnector`，对齐 `max-num-seqs`、
-`max-num-batched-tokens` 和 CUDA graph capture size，并通过 trace 断言 FFN replay。
-DBO graph case 额外断言 live 请求期间出现两 stage DP metadata 和两 stage FFN graph
-replay。
+`max-num-batched-tokens` 和 CUDA graph capture size。DBO graph case 额外覆盖
+live 请求期间的两 stage ubatch 路径。
 
 最近一次 L20X 手工验证已经证明：
 
@@ -144,10 +140,6 @@ replay。
 - capture size `64`
 - 并发 `128`
 - `128/128` completion 请求返回 `200`
-- A 侧出现 `AFD_UBATCH_TRACE ... token_slices=[(0,32),(32,64)]`
-- F 侧出现 `dp_metadata='[0:[32,32],1:[32,32]]'`
-- F 侧出现 `ffn_execute_model ... run_mode='replay'` 和
-  `ffn_replay_cudagraph_done` 的双 stage graph key
 
 ## Running GPU E2E
 
@@ -169,11 +161,11 @@ AFD_GPU_E2E_MODEL=/home/jcz/models/DeepSeek-V2-Lite \
 - GPU graph tests 已加入 pytest，但仍是 opt-in，需要在 L20X/CI GPU 环境实际跑通后
   才能作为持续回归信号。
 - graph 输出与 eager baseline 的 token 序列一致性还没有自动比较；当前 graph tests
-  主要验证请求成功、FFN replay trace 和 DBO replay trace。
+  主要验证请求成功。
 - 还没有 tiny torch module 级别的 CUDA graph capture/replay correctness unit test。
-- strict graph miss fail-fast 还没实现；当前 graph miss 会 trace 后 eager fallback。
+- strict graph miss fail-fast 还没实现；当前 graph miss 会 eager fallback。
 - TP/PP、ratio > 1、EP collective、非 DeepSeekV2 模型的 graph 路径仍需独立验证。
-- FFN graph cache 的显存预算仍只通过 trace 观察，尚未纳入 worker memory planning。
+- FFN graph cache 的显存预算尚未纳入 worker memory planning。
 
 ## Completion Criteria
 

@@ -20,9 +20,7 @@ from afd_plugin.runtime.cuda_graph import validate_cuda_graph_mode
 from afd_plugin.runtime.ubatch_wrapper import (
     AFDUBatchWrapper,
     build_ubatch_dp_metadata_list,
-    trace_ubatch_slices,
 )
-from afd_plugin.tracing import afd_trace, dp_metadata_summary
 
 _GPUModelRunner, _GPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.gpu_model_runner",
@@ -79,7 +77,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         num_tokens_unpadded: int,
     ) -> AFDMetadata:
         if ubatch_slices and len(ubatch_slices) > 1:
-            trace_ubatch_slices(ubatch_slices, source="attention_metadata")
             afd_tokens_start_loc = [ub.token_slice.start for ub in ubatch_slices]
             afd_reqs_start_loc = [ub.request_slice.start for ub in ubatch_slices]
             afd_tokens_lens = [ub.num_tokens for ub in ubatch_slices]
@@ -126,34 +123,11 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         rank = self.afd_connector.world_rank
         should_send = bool(self.afd_connector.is_attn_top_min_size_rank(rank))
 
-        afd_trace(
-            "attn_send_dp_metadata_decision",
-            rank=rank,
-            should_send=should_send,
-            stages=sorted(int(stage_idx) for stage_idx in dp_metadata_list),
-            dp_metadata=dp_metadata_summary(dp_metadata_list),
-            is_warmup=is_warmup,
-            is_graph_capturing=is_graph_capturing,
-        )
         if should_send:
-            afd_trace(
-                "attn_send_dp_metadata_begin",
-                rank=rank,
-                dp_metadata=dp_metadata_summary(dp_metadata_list),
-                is_warmup=is_warmup,
-                is_graph_capturing=is_graph_capturing,
-            )
             self.afd_connector.send_dp_metadata_list(
                 dp_metadata_list,
                 is_graph_capturing=is_graph_capturing,
                 is_warmup=is_warmup,
-            )
-            afd_trace(
-                "attn_send_dp_metadata_done",
-                rank=rank,
-                dp_metadata=dp_metadata_summary(dp_metadata_list),
-                is_warmup=is_warmup,
-                is_graph_capturing=is_graph_capturing,
             )
 
     def load_model(self, *args: Any, **kwargs: Any) -> Any:
