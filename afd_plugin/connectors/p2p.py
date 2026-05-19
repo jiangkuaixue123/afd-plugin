@@ -7,6 +7,7 @@ PyNCCL, and vLLM runtime imports are delayed until connector initialization or
 actual send/recv calls.
 """
 
+import os
 import pickle
 from datetime import timedelta
 from typing import Any, NamedTuple
@@ -19,6 +20,7 @@ from afd_plugin.distributed import (
     build_rank_mapping,
     init_afd_process_group,
 )
+
 _AFD_COMMUNICATORS: dict[int, Any] = {}
 _AFD_COMM_ID_COUNTER = 0
 _AFD_CUSTOM_OPS_REGISTERED = False
@@ -79,6 +81,7 @@ class P2PAFDConnector(AFDConnectorBase):
         self.e2a_pynccl: Any | None = None
         self.a2e_comm_id: int | None = None
         self.e2a_comm_id: int | None = None
+        self.stub_hidden_states = _env_flag("AFD_STUB_P2P_HIDDEN_STATES")
 
     def close(self) -> None:
         for comm_id_name in ("a2e_comm_id", "e2a_comm_id"):
@@ -388,6 +391,8 @@ class P2PAFDConnector(AFDConnectorBase):
             raise ValueError(f"invalid P2P destination rank {dst}")
         if getattr(hidden_states, "is_cpu", False):
             raise ValueError("P2P hidden states must be on GPU")
+        if self.stub_hidden_states:
+            return
 
         import torch
 
@@ -414,6 +419,8 @@ class P2PAFDConnector(AFDConnectorBase):
             return ref_tensor
         if src >= process_group.world_size:
             raise ValueError(f"invalid P2P source rank {src}")
+        if self.stub_hidden_states and ref_tensor is not None:
+            return ref_tensor
 
         import torch
 
@@ -425,6 +432,9 @@ class P2PAFDConnector(AFDConnectorBase):
                 dtype=tensor_metadata.dtype,
                 device=tensor_metadata.device,
             )
+        if self.stub_hidden_states:
+            return hidden_states
+
         comm_id = self._comm_id_for_communicator(communicator)
         torch.ops.vllm.afd_p2p_recv(hidden_states, int(src), int(comm_id))
         return hidden_states
@@ -465,6 +475,11 @@ def _torch_is_compiling() -> bool:
         return bool(torch.compiler.is_compiling())
     except Exception:
         return False
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _num_tokens_for_dp_rank(dp_metadata: Any, dp_rank: int) -> int:

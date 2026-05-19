@@ -217,3 +217,90 @@ def test_p2p_hidden_state_send_uses_registered_custom_op(monkeypatch):
 
     assert calls == [(hidden_states, 1, 17)]
     assert output is None
+
+
+def test_p2p_hidden_state_stub_skips_custom_send_op(monkeypatch):
+    monkeypatch.setenv("AFD_STUB_P2P_HIDDEN_STATES", "1")
+    connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        _fake_vllm_config(),
+        AFDConfig(
+            enabled=True,
+            role="attention",
+            connector="p2pconnector",
+            num_attention_servers=2,
+            num_ffn_servers=1,
+        ),
+    )
+    communicator = object()
+    connector.a2e_pynccl = communicator
+    connector.a2e_comm_id = 17
+
+    torch_module = types.ModuleType("torch")
+    torch_module.ops = SimpleNamespace(
+        vllm=SimpleNamespace(
+            afd_p2p_send=lambda *_args: pytest.fail("send op should be stubbed"),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    hidden_states = SimpleNamespace(
+        is_cpu=False,
+        device="cuda:0",
+        shape=(4, 16),
+        dtype="bf16",
+    )
+    output = connector._send_hidden_states(
+        hidden_states,
+        1,
+        SimpleNamespace(world_size=2, rank=0),
+        communicator,
+    )
+
+    assert output is None
+
+
+def test_p2p_hidden_state_stub_returns_ref_tensor_without_recv_op(monkeypatch):
+    monkeypatch.setenv("AFD_STUB_P2P_HIDDEN_STATES", "1")
+    connector = AFDConnectorFactory.create_connector(
+        0,
+        0,
+        _fake_vllm_config(),
+        AFDConfig(
+            enabled=True,
+            role="attention",
+            connector="p2pconnector",
+            num_attention_servers=2,
+            num_ffn_servers=1,
+        ),
+    )
+    communicator = object()
+    ref_tensor = SimpleNamespace(
+        is_cpu=False,
+        device="cuda:0",
+        shape=(4, 16),
+        dtype="bf16",
+    )
+    tensor_metadata = SimpleNamespace(
+        device="cuda:0",
+        dtype="bf16",
+        size=(4, 16),
+    )
+    torch_module = types.ModuleType("torch")
+    torch_module.ops = SimpleNamespace(
+        vllm=SimpleNamespace(
+            afd_p2p_recv=lambda *_args: pytest.fail("recv op should be stubbed"),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    output = connector._recv_hidden_states(
+        0,
+        SimpleNamespace(world_size=2, rank=0),
+        communicator,
+        tensor_metadata,
+        ref_tensor=ref_tensor,
+    )
+
+    assert output is ref_tensor
