@@ -217,6 +217,15 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self,
         forward_context: object,
     ) -> None:
+        existing_metadata = (
+            getattr(forward_context, "additional_kwargs", {}) or {}
+        ).get("afd_metadata")
+        if existing_metadata is not None and _is_ubatch_child_afd_context(
+            forward_context,
+            existing_metadata,
+        ):
+            return
+
         if self._afd_pending_metadata is None:
             self._afd_pending_metadata = self._build_afd_metadata(
                 forward_context.ubatch_slices,
@@ -467,6 +476,17 @@ def _resolve_world_ranks() -> tuple[int, int]:
         return int(group.rank), int(group.local_rank)
     except Exception:
         return 0, 0
+
+
+def _is_ubatch_child_afd_context(
+    forward_context: object,
+    afd_metadata: object,
+) -> bool:
+    if getattr(forward_context, "ubatch_slices", None) is not None:
+        return False
+    if int(getattr(afd_metadata, "num_of_stages", 1) or 1) <= 1:
+        return False
+    return len(getattr(afd_metadata, "afd_tokens_lens", []) or []) == 1
 
 
 def _with_dp_derived_afd_rank(

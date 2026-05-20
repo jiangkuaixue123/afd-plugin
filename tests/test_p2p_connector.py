@@ -100,6 +100,39 @@ def test_p2p_topology_supports_afd_size_alias():
 
 
 @pytest.mark.parametrize(
+    ("attention_size", "ffn_size", "role", "role_rank", "subgroup_ranks", "dsts"),
+    [
+        (2, 2, "attention", 1, (1, 3), (1,)),
+        (2, 1, "attention", 0, (0, 1, 2), (0,)),
+        (4, 2, "attention", 2, (1, 4, 5), ()),
+        (4, 2, "ffn", 1, (1, 4, 5), ()),
+    ],
+)
+def test_p2p_topology_supports_equal_and_integer_multiple_attention_counts(
+    attention_size,
+    ffn_size,
+    role,
+    role_rank,
+    subgroup_ranks,
+    dsts,
+):
+    mapping = build_rank_mapping(
+        AFDConfig(
+            enabled=True,
+            role=role,
+            connector="p2pconnector",
+            num_attention_servers=attention_size,
+            num_ffn_servers=ffn_size,
+            afd_server_rank=role_rank,
+        ),
+    )
+
+    assert mapping.ratio == attention_size // ffn_size
+    assert mapping.subgroup_ranks == subgroup_ranks
+    assert mapping.dp_metadata_destinations == dsts
+
+
+@pytest.mark.parametrize(
     ("raw", "message"),
     [
         (

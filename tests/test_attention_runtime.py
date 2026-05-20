@@ -10,6 +10,7 @@ from afd_plugin.models.forward_context import get_afd_metadata_from_forward_cont
 from afd_plugin.runtime.attention_model_runner import (
     AFDAttentionModelRunner,
     _has_enough_tokens_for_ubatches,
+    _is_ubatch_child_afd_context,
     _with_dp_derived_afd_rank,
     fail_if_cuda_graph_enabled,
     fail_if_unsupported_ubatching,
@@ -180,6 +181,69 @@ def test_attention_runner_sends_per_ubatch_dp_metadata():
 
     assert set(runner.afd_connector.dp_metadata_updates[0]) == {0, 1}
     assert set(runner.afd_connector.sent_dp_metadata_lists[0]) == {0, 1}
+
+
+def test_attention_runner_skips_dp_metadata_send_for_ubatch_child_context():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(),
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = None
+
+    parent = runner._build_afd_metadata(
+        [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)],
+        8,
+    )
+    child = build_ubatch_afd_metadata(
+        parent,
+        [_UbatchSlice(0, 3, 0, 1), _UbatchSlice(3, 8, 1, 2)],
+        1,
+    )
+    forward_context = SimpleNamespace(
+        additional_kwargs={"afd_metadata": child},
+        dp_metadata="child-dp",
+        ubatch_slices=None,
+    )
+
+    assert _is_ubatch_child_afd_context(forward_context, child)
+
+    runner._install_afd_metadata_on_forward_context(forward_context)
+
+    assert forward_context.additional_kwargs["afd_metadata"] is child
+    assert runner.afd_connector.dp_metadata_updates == []
+    assert runner.afd_connector.sent_dp_metadata_lists == []
+
+
+def test_attention_runner_does_not_skip_single_stage_context():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config(),
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = runner._build_afd_metadata(None, 5)
+    forward_context = SimpleNamespace(
+        additional_kwargs={},
+        dp_metadata="dp",
+        ubatch_slices=None,
+    )
+
+    assert not _is_ubatch_child_afd_context(
+        forward_context,
+        runner._afd_pending_metadata,
+    )
+
+    runner._install_afd_metadata_on_forward_context(forward_context)
+
+    assert runner.afd_connector.sent_dp_metadata_lists == [{0: "dp"}]
 
 
 def test_ubatch_metadata_clones_parent_and_preserves_additional_kwargs():
