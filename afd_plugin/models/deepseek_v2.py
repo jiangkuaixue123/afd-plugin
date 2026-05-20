@@ -277,17 +277,6 @@ class AFDDeepseekV2Model(torch.nn.Module):
                 layer_idx=layer.layer_idx,
                 stage_idx=stage_idx,
                 seq_len=int(hidden_states.shape[0]),
-                dtype=hidden_states.dtype,
-                device=hidden_states.device,
-                num_of_stages=getattr(afd_metadata, "num_of_stages", 1),
-                afd_tokens_lens=getattr(afd_metadata, "afd_tokens_lens", []),
-                ubatch_idx=getattr(afd_metadata, "ubatch_idx", stage_idx),
-                transaction_id=getattr(afd_metadata, "transaction_id", None),
-                afd_tokens_unpadded_lens=getattr(
-                    afd_metadata,
-                    "afd_tokens_unpadded_lens",
-                    [],
-                ),
             )
             afd_connector.send_attn_output(hidden_states, metadata)
             hidden_states = maybe_apply_dbo_yield(

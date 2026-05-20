@@ -264,7 +264,6 @@ class P2PAFDConnector(AFDConnectorBase):
                 f"hidden_states shape {hidden_states.shape!r} does not match "
                 f"AFD metadata token count {metadata.total_tokens}",
             )
-        metadata.direction = "attention_to_ffn"
         self._send_hidden_states(
             hidden_states,
             0,
@@ -326,9 +325,6 @@ class P2PAFDConnector(AFDConnectorBase):
             layer_idx=0,
             stage_idx=ubatch_idx,
             seq_lens=[int(tensor.shape[0]) for tensor in hidden_states_list],
-            dtype=tensor_metadata.dtype,
-            device=tensor_metadata.device,
-            ubatch_idx=ubatch_idx,
         )
         return hidden_states, metadata
 
@@ -343,7 +339,6 @@ class P2PAFDConnector(AFDConnectorBase):
             raise ValueError(
                 f"ffn_output shape {ffn_output.shape!r} does not match metadata",
             )
-        metadata.direction = "ffn_to_attention"
         if self.ratio == 1:
             self._send_hidden_states(ffn_output, 1, self.e2a_group, self.e2a_pynccl)
             return

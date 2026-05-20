@@ -16,7 +16,4 @@ def test_connector_metadata_validates_sequence_lengths():
             layer_idx=0,
             stage_idx=0,
             seq_lens=[0],
-            dtype="bf16",
-            device="cuda:0",
         )
-

@@ -45,8 +45,6 @@ def _metadata():
         layer_idx=0,
         stage_idx=0,
         seq_len=1,
-        dtype="bf16",
-        device="cpu",
     )
 
 
@@ -55,9 +53,6 @@ def _metadata_for_stage(stage_idx):
         layer_idx=0,
         stage_idx=stage_idx,
         seq_len=1,
-        dtype="bf16",
-        device="cpu",
-        ubatch_idx=stage_idx,
     )
 
 
