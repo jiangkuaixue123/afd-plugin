@@ -1,0 +1,34 @@
+name: Documentation
+description: Report missing, stale, or confusing afd-plugin documentation.
+title: "[Doc]: "
+labels: ["documentation"]
+
+body:
+  - type: textarea
+    id: doc_issue
+    attributes:
+      label: Documentation issue
+      description: Describe what is missing, stale, incorrect, or confusing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_area
+    attributes:
+      label: Affected area
+      description: Link files, examples, runbooks, or phase docs when possible.
+
+  - type: textarea
+    id: suggested_fix
+    attributes:
+      label: Suggested fix
+      description: Describe what should be added or changed.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing documentation issues.
+          required: true
+

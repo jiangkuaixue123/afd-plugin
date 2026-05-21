@@ -1,0 +1,60 @@
+name: Request for comments
+description: Ask for feedback on architecture, compatibility, or migration design.
+title: "[RFC]: "
+labels: ["RFC"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Use an RFC for broad design choices, compatibility shims, monkey patches,
+        connector protocols, runtime lifecycle changes, or topology semantics.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Explain why this design decision is needed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_change
+    attributes:
+      label: Proposed change
+      description: Describe the architecture or behavior you want feedback on.
+    validations:
+      required: true
+
+  - type: textarea
+    id: plugin_boundary
+    attributes:
+      label: Plugin boundary
+      description: Explain what remains plugin-owned and what, if anything, needs compat helpers or patches.
+      placeholder: |
+        Plugin-owned:
+        Compat helper:
+        Compat patch:
+        Explicit class path:
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and alternatives
+      description: Include compatibility, correctness, performance, testing, and maintenance risks.
+    validations:
+      required: true
+
+  - type: textarea
+    id: feedback_period
+    attributes:
+      label: Feedback period
+      description: Suggested review period or decision deadline.
+
+  - type: textarea
+    id: cc
+    attributes:
+      label: CC list
+      description: People or teams who should review this RFC.
