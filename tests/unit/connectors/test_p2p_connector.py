@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.config import AFDConfig, afd_config_from_mapping
-from afd_plugin.connectors import AFDDPMetadata, AFDConnectorFactory
+from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata
 from afd_plugin.distributed import build_rank_mapping, topology_from_config
 
 

@@ -144,9 +144,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
             except TimeoutError:
                 continue
 
-            if (
-                self.model_runner.use_cuda_graph
-                and (is_warmup or is_attn_graph_capturing)
+            if self.model_runner.use_cuda_graph and (
+                is_warmup or is_attn_graph_capturing
             ):
                 self.model_runner.capture_model(
                     dp_metadata_list=dp_metadata_list,

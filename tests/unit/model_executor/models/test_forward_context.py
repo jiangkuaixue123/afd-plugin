@@ -55,7 +55,7 @@ def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
         1,
     )[0]
 
-    assert "if self.afd_role == \"attention\":" in source
+    assert 'if self.afd_role == "attention":' in source
     assert "def _forward_attention(" not in source
     assert "hidden_states, residual = layer(\n" in forward_with_afd
     assert "layer.compute_attn_output(" not in forward_with_afd

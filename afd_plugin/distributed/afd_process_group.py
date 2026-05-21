@@ -36,11 +36,7 @@ class AFDRankMapping:
 
     @property
     def is_attention_top_min_size_rank(self) -> bool:
-        return (
-            self.ffn_size
-            <= self.world_rank
-            < self.ffn_size + self.min_size
-        )
+        return self.ffn_size <= self.world_rank < self.ffn_size + self.min_size
 
     @property
     def participates_in_dp_metadata_group(self) -> bool:
@@ -143,10 +139,7 @@ def build_rank_mapping(
     attention_ranks = list(range(ffn_size, ffn_size + attention_size))
     subgroup_ranks = tuple(
         [ffn_ranks[subgroup_index]]
-        + [
-            attention_ranks[subgroup_index * ratio + offset]
-            for offset in range(ratio)
-        ],
+        + [attention_ranks[subgroup_index * ratio + offset] for offset in range(ratio)],
     )
     rank_in_subgroup = subgroup_ranks.index(world_rank)
     p2p_rank = role_rank + min_size if config.role == "attention" else role_rank

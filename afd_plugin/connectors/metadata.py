@@ -112,10 +112,7 @@ def _cpu_int_tensor_or_list(value: Any) -> Any:
 
 def _cpu_scalar_tensor_or_int(value: Any) -> Any:
     item = getattr(value, "item", None)
-    if callable(item):
-        value = int(item())
-    else:
-        value = max(_to_int_list(value))
+    value = int(item()) if callable(item) else max(_to_int_list(value))
     try:
         import torch
 

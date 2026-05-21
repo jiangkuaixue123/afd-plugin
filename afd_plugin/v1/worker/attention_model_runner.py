@@ -11,8 +11,8 @@ from typing import Any
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
-    AFDMetadata,
     AFDDPMetadata,
+    AFDMetadata,
 )
 from afd_plugin.model_executor.models.forward_context import use_afd_metadata_provider
 from afd_plugin.v1.worker._optional import optional_class

@@ -108,9 +108,13 @@ def _should_relax_engine_args_backend(engine_args: Any) -> bool:
         return False
     if not afd_config.enabled:
         return False
-    if not bool(getattr(engine_args, "enable_dbo", False)) and int(
-        getattr(engine_args, "ubatch_size", 1),
-    ) <= 1:
+    if (
+        not bool(getattr(engine_args, "enable_dbo", False))
+        and int(
+            getattr(engine_args, "ubatch_size", 1),
+        )
+        <= 1
+    ):
         return False
 
     backend = getattr(engine_args, "all2all_backend", None)

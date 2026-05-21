@@ -528,8 +528,7 @@ def _decode_dp_metadata_payload(
     dp_metadata_list = {
         int(stage_idx): AFDDPMetadata(
             num_tokens_across_dp_cpu=[
-                int(value)
-                for value in metadata["num_tokens_across_dp_cpu"]
+                int(value) for value in metadata["num_tokens_across_dp_cpu"]
             ],
             max_tokens_across_dp_cpu=int(metadata["max_tokens_across_dp_cpu"]),
         )
