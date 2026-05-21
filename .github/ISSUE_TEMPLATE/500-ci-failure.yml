@@ -1,0 +1,54 @@
+name: CI failure report
+description: Report a failing CI job, flaky test, or validation regression.
+title: "[CI Failure]: "
+labels: ["ci-failure"]
+
+body:
+  - type: input
+    id: failing_test
+    attributes:
+      label: Failing job or test
+      description: Paste the workflow job name or fully-qualified pytest test name.
+      placeholder: "tests/test_file.py::test_name"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: basic_info
+    attributes:
+      label: Basic information
+      options:
+        - label: Flaky test
+        - label: Reproduces locally
+        - label: CPU-only failure
+        - label: GPU-gated failure
+        - label: Related to optional vLLM dependency
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure details
+      description: Describe the failure and paste the relevant traceback or log excerpt.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: history
+    attributes:
+      label: Failure history
+      description: When did this start? Link the first failing run or suspected PR when known.
+
+  - type: textarea
+    id: local_repro
+    attributes:
+      label: Local reproduction
+      description: Paste the command used locally and the result.
+      render: sh
+
+  - type: textarea
+    id: cc
+    attributes:
+      label: CC list
+      description: People who should be aware of this failure.
+

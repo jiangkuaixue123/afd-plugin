@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible bug in afd-plugin.
+title: "[Bug]: "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting, please search existing issues to avoid duplicates.
+        afd-plugin targets vLLM v0.19.1 unless an issue explicitly says otherwise.
+
+  - type: markdown
+    attributes:
+      value: |
+        SECURITY WARNING: Please remove secrets before pasting logs or configs.
+        This includes API keys, Hugging Face tokens, private endpoints, and internal paths.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Current environment
+      description: Include Python version, platform, afd-plugin commit, vLLM version or checkout, CUDA/GPU details if relevant, and install command.
+      value: |
+        ```text
+        Python:
+        OS:
+        afd-plugin commit:
+        vLLM version/checkout:
+        CUDA/GPU:
+        Install command:
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest command, script, config, or class path setup that reproduces the issue.
+      placeholder: |
+        ```sh
+        VLLM_PLUGINS=afd vllm serve ... --worker-cls afd_plugin.runtime....
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+      description: Paste the observed behavior, full traceback, relevant logs, or hang/crash details.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: afd_config
+    attributes:
+      label: AFD configuration
+      description: Paste the relevant --additional-config afd namespace or explain why this is not config-related.
+      render: yaml
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for related reports.
+          required: true
+        - label: I confirmed whether this reproduces against vLLM v0.19.1 or explained why not.
+          required: true

@@ -1,0 +1,62 @@
+name: Feature request
+description: Propose a new afd-plugin feature or migration task.
+title: "[Feature]: "
+labels: ["feature request"]
+
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before submitting, please search existing issues and RFCs. Keep proposals
+        tied to vLLM v0.19.1 compatibility unless the issue explicitly proposes a
+        version expansion.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Feature, motivation, and pitch
+      description: Describe the feature and the problem it solves.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_change
+    attributes:
+      label: Proposed change
+      description: Include the expected plugin entry point, class path, config namespace, connector, worker, runner, or model surface when known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: vLLM compatibility and extension points
+      description: Explain how this should work without modifying the vLLM v0.19.1 source tree.
+      placeholder: |
+        Preferred extension point:
+        Compat shim needed:
+        Monkey patch needed:
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe other approaches, especially if they require monkey patching or in-tree vLLM changes.
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: List CPU-safe tests, GPU-gated tests, or manual smoke checks expected for this work.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and RFCs.
+          required: true
+        - label: I identified whether this belongs in plugin-owned code, compat helpers, or compat patches.
+          required: true
