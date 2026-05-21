@@ -46,7 +46,7 @@ The same command builder can be used directly.
 `1A1F`:
 
 ```bash
-python tests/e2e_deepseek_v2_afd.py \
+python tests/e2e/gpu/deepseek_v2_lite/runner.py \
   --model /home/jcz/models/DeepSeek-V2-Lite \
   --num-attention-servers 1 \
   --num-ffn-servers 1 \
@@ -60,7 +60,7 @@ python tests/e2e_deepseek_v2_afd.py \
 `2A2F`:
 
 ```bash
-python tests/e2e_deepseek_v2_afd.py \
+python tests/e2e/gpu/deepseek_v2_lite/runner.py \
   --model /home/jcz/models/DeepSeek-V2-Lite \
   --num-attention-servers 2 \
   --num-ffn-servers 2 \
@@ -79,7 +79,7 @@ and one FFN `vllm serve` with
 `2A2F FULL_DECODE_ONLY`:
 
 ```bash
-python tests/e2e_deepseek_v2_afd.py \
+python tests/e2e/gpu/deepseek_v2_lite/runner.py \
   --model /home/jcz/models/DeepSeek-V2-Lite \
   --num-attention-servers 2 \
   --num-ffn-servers 2 \
@@ -99,7 +99,7 @@ python tests/e2e_deepseek_v2_afd.py \
 `2A2F FULL_DECODE_ONLY + DBO`:
 
 ```bash
-python tests/e2e_deepseek_v2_afd.py \
+python tests/e2e/gpu/deepseek_v2_lite/runner.py \
   --model /home/jcz/models/DeepSeek-V2-Lite \
   --num-attention-servers 2 \
   --num-ffn-servers 2 \

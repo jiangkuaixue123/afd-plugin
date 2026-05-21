@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from afd_plugin.models import get_afd_metadata_from_forward_context
+from afd_plugin.model_executor.models import get_afd_metadata_from_forward_context
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 
@@ -41,7 +41,7 @@ def test_maybe_apply_dbo_yield_only_when_dbo_enabled():
 
 
 def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
-    source = Path("afd_plugin/models/deepseek_v2.py").read_text()
+    source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
 
     assert "@native.support_torch_compile\nclass AFDDeepseekV2Model" in source
     assert "from __future__ import annotations" not in source
@@ -49,7 +49,7 @@ def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
 
 
 def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
-    source = Path("afd_plugin/models/deepseek_v2.py").read_text()
+    source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
     forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(
         "    def compute_ffn_output(",
         1,

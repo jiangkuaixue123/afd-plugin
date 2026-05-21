@@ -97,6 +97,6 @@ AFD_GPU_E2E_MODEL=/path/to/DeepSeek-V2-Lite uv run pytest -q -m gpu
 ```
 
 The GPU tests default to `AFD_GPU_E2E_GPUS=0,1,2,3`, run eager and CUDA graph
-`1A1F`/`2A2F` cases, and shell out to `tests/e2e_deepseek_v2_afd.py`. XAYF tests
+`1A1F`/`2A2F` cases, and shell out to `tests/e2e/gpu/deepseek_v2_lite/runner.py`. XAYF tests
 use native vLLM data parallelism: Attention runs with `DP=X, TP=1`, FFN runs
 with `DP=Y, TP=1`, and both roles enable expert parallelism.

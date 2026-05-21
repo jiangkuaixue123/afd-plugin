@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNNER = REPO_ROOT / "tests" / "e2e_deepseek_v2_afd.py"
+REPO_ROOT = Path(__file__).resolve().parents[4]
+RUNNER = REPO_ROOT / "tests" / "e2e" / "gpu" / "deepseek_v2_lite" / "runner.py"
 
 
 def _gpu_list() -> list[str]:

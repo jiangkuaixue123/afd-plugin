@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
-import tests.e2e_deepseek_v2_afd as runner
-from tests.e2e_deepseek_v2_afd import build_vllm_command
+from tests.e2e.gpu.deepseek_v2_lite import runner
+from tests.e2e.gpu.deepseek_v2_lite.runner import build_vllm_command
 
 
 def _args() -> argparse.Namespace:

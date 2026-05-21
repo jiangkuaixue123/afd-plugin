@@ -6,7 +6,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from afd_plugin.config import AFDConfig
-from afd_plugin.models.forward_context import get_afd_metadata_from_forward_context
+from afd_plugin.model_executor.models.forward_context import (
+    get_afd_metadata_from_forward_context,
+)
 from afd_plugin.v1.worker.attention_model_runner import (
     AFDAttentionModelRunner,
     _has_enough_tokens_for_ubatches,
@@ -408,7 +410,9 @@ def test_forward_context_provider_installs_metadata_before_model_forward(monkeyp
         monkeypatch,
     )
 
-    from afd_plugin.models.forward_context import use_afd_metadata_provider
+    from afd_plugin.model_executor.models.forward_context import (
+        use_afd_metadata_provider,
+    )
 
     with use_afd_metadata_provider(runner):
         forward_context = fake_forward_context.create_forward_context()
@@ -437,7 +441,9 @@ def test_forward_context_provider_can_install_without_sending_metadata(monkeypat
         monkeypatch,
     )
 
-    from afd_plugin.models.forward_context import use_afd_metadata_provider
+    from afd_plugin.model_executor.models.forward_context import (
+        use_afd_metadata_provider,
+    )
 
     with use_afd_metadata_provider(runner):
         forward_context = fake_forward_context.create_forward_context()

@@ -45,15 +45,17 @@ _logger = logging.getLogger(__name__)
 _registered = False
 
 _DEEPSEEK_MODEL_REGISTRATIONS = {
-    "DeepseekForCausalLM": "afd_plugin.models.deepseek_v2:AFDDeepseekForCausalLM",
+    "DeepseekForCausalLM": (
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekForCausalLM"
+    ),
     "DeepseekV2ForCausalLM": (
-        "afd_plugin.models.deepseek_v2:AFDDeepseekV2ForCausalLM"
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV2ForCausalLM"
     ),
     "DeepseekV3ForCausalLM": (
-        "afd_plugin.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
     ),
     "GlmMoeDsaForCausalLM": (
-        "afd_plugin.models.deepseek_v2:AFDGlmMoeDsaForCausalLM"
+        "afd_plugin.model_executor.models.deepseek_v2:AFDGlmMoeDsaForCausalLM"
     ),
 }
 

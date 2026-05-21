@@ -181,7 +181,7 @@ afd-plugin/
 - `afd_plugin.distributed`：从原始 `parallel_state.py` 改动中抽取出的
   AFD-specific distributed helper。这里应优先放插件自己调用的 helper，而不是
   patch。
-- `afd_plugin.models`：plugin-owned model implementation 或 wrapper。
+- `afd_plugin.model_executor.models`：plugin-owned model implementation 或 wrapper。
 - `afd_plugin.v1.worker`：vLLM 可通过显式 class path 加载的运行时 adapter/class，
   包括 worker、runner、ubatching、forward-context 相关能力。这里不作为 patch
   目录使用。

@@ -16,7 +16,7 @@ from vllm.model_executor.models import deepseek_v2 as native
 
 from afd_plugin.config import parse_afd_config
 from afd_plugin.connectors import AFDConnectorMetadata
-from afd_plugin.models import get_afd_metadata_from_forward_context
+from afd_plugin.model_executor.models import get_afd_metadata_from_forward_context
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 

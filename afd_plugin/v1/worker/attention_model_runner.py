@@ -14,7 +14,7 @@ from afd_plugin.connectors import (
     AFDMetadata,
     AFDSingleDPMetadata,
 )
-from afd_plugin.models.forward_context import use_afd_metadata_provider
+from afd_plugin.model_executor.models.forward_context import use_afd_metadata_provider
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.cuda_graph import validate_cuda_graph_mode
 from afd_plugin.v1.worker.ubatch_wrapper import (

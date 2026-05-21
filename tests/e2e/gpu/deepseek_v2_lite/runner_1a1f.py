@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 
-from e2e_deepseek_v2_afd import main
+from tests.e2e.gpu.deepseek_v2_lite.runner import main
 
 if __name__ == "__main__":
     sys.exit(main())
