@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from types import SimpleNamespace
 
@@ -212,3 +213,28 @@ def test_ffn_worker_scheduler_execute_model_fails_fast():
 
     with pytest.raises(RuntimeError, match="connector-driven"):
         worker.execute_model(scheduler_output=object())
+
+
+def test_ffn_worker_loop_logs_unexpected_thread_errors(caplog):
+    worker = object.__new__(AFDFFNWorker)
+    worker._ffn_thread = None
+    worker._ffn_shutdown_event = None
+    worker._ffn_loop_error = None
+    worker.model_runner = SimpleNamespace(
+        connector=SimpleNamespace(is_initialized=True),
+    )
+
+    expected_error = RuntimeError("boom")
+
+    def fail_loop():
+        raise expected_error
+
+    worker._run_ffn_server_loop = fail_loop
+
+    with caplog.at_level(logging.ERROR, logger="afd_plugin.v1.worker.ffn_worker"):
+        worker.start_ffn_server_loop()
+        assert worker._ffn_thread is not None
+        worker._ffn_thread.join(timeout=5)
+
+    assert worker._ffn_loop_error is expected_error
+    assert "AFD FFN worker loop failed" in caplog.text

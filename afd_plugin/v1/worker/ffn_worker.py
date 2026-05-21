@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -16,6 +17,7 @@ _GPUWorker, _GPUWorker_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.gpu_worker",
     "Worker",
 )
+logger = logging.getLogger(__name__)
 
 
 class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
@@ -108,9 +110,9 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         def ffn_worker_loop() -> None:
             try:
                 self._run_ffn_server_loop()
-            except BaseException as exc:
+            except Exception as exc:
                 self._ffn_loop_error = exc
-                raise
+                logger.exception("AFD FFN worker loop failed")
 
         self._ffn_thread = threading.Thread(
             target=ffn_worker_loop,
