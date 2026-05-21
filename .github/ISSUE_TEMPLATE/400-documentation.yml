@@ -16,7 +16,7 @@ body:
     id: affected_area
     attributes:
       label: Affected area
-      description: Link files, examples, runbooks, or phase docs when possible.
+      description: Link files, examples, or runbooks when possible.
 
   - type: textarea
     id: suggested_fix
@@ -31,4 +31,3 @@ body:
       options:
         - label: I searched existing documentation issues.
           required: true
-
