@@ -12,12 +12,25 @@ from typing import Any
 
 
 @dataclass(slots=True)
-class AFDSingleDPMetadata:
-    """Minimal DPMetadata-compatible payload for attention DP=1."""
+class AFDDPMetadata:
+    """Serializable DPMetadata-compatible payload for AFD control traffic."""
 
     num_tokens_across_dp_cpu: Any
     max_tokens_across_dp_cpu: Any | None = None
     local_sizes: list[int] | None = None
+
+    def __post_init__(self) -> None:
+        self.num_tokens_across_dp_cpu = _cpu_int_tensor_or_list(
+            self.num_tokens_across_dp_cpu,
+        )
+        if self.max_tokens_across_dp_cpu is None:
+            self.max_tokens_across_dp_cpu = _max_token_count(
+                self.num_tokens_across_dp_cpu,
+            )
+        else:
+            self.max_tokens_across_dp_cpu = _cpu_scalar_tensor_or_int(
+                self.max_tokens_across_dp_cpu,
+            )
 
     @contextmanager
     def sp_local_sizes(self, sequence_parallel_size: int) -> Iterator[list[int]]:
@@ -29,6 +42,33 @@ class AFDSingleDPMetadata:
             yield self.local_sizes
         finally:
             self.local_sizes = None
+
+    def get_chunk_sizes_across_dp_rank(self) -> list[int] | None:
+        return self.local_sizes
+
+    def cu_tokens_across_sp(self, sp_size: int) -> Any:
+        try:
+            import torch
+
+            num_tokens = _cpu_int_tensor_or_list(self.num_tokens_across_dp_cpu)
+            if not hasattr(num_tokens, "repeat_interleave"):
+                num_tokens = torch.tensor(num_tokens, dtype=torch.int32, device="cpu")
+            num_tokens_across_sp_cpu = (num_tokens - 1 + sp_size) // sp_size
+            num_tokens_across_sp_cpu = num_tokens_across_sp_cpu.repeat_interleave(
+                sp_size,
+            )
+            return torch.cumsum(num_tokens_across_sp_cpu, dim=0)
+        except ModuleNotFoundError:
+            local_sizes = _compute_sp_num_tokens(
+                self.num_tokens_across_dp_cpu,
+                sp_size,
+            )
+            cumulative: list[int] = []
+            total = 0
+            for size in local_sizes:
+                total += int(size)
+                cumulative.append(total)
+            return cumulative
 
     @contextmanager
     def chunked_sizes(
@@ -55,6 +95,50 @@ class AFDSingleDPMetadata:
             yield self.local_sizes
         finally:
             self.local_sizes = None
+
+
+AFDSingleDPMetadata = AFDDPMetadata
+
+
+def _cpu_int_tensor_or_list(value: Any) -> Any:
+    values = _to_int_list(value)
+    try:
+        import torch
+
+        return torch.tensor(values, dtype=torch.int32, device="cpu")
+    except ModuleNotFoundError:
+        return values
+
+
+def _cpu_scalar_tensor_or_int(value: Any) -> Any:
+    item = getattr(value, "item", None)
+    if callable(item):
+        value = int(item())
+    else:
+        value = max(_to_int_list(value))
+    try:
+        import torch
+
+        return torch.tensor(value, dtype=torch.int32, device="cpu")
+    except ModuleNotFoundError:
+        return value
+
+
+def _max_token_count(value: Any) -> Any:
+    if hasattr(value, "max"):
+        return value.max()
+    return max(_to_int_list(value))
+
+
+def _to_int_list(value: Any) -> list[int]:
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    elif hasattr(value, "item"):
+        value = [value.item()]
+    elif isinstance(value, (int, float)):
+        value = [value]
+    return [int(item) for item in value]
 
 
 def _compute_sp_num_tokens(
@@ -156,6 +240,7 @@ class AFDMetadata:
 
 __all__ = [
     "AFDConnectorMetadata",
+    "AFDDPMetadata",
     "AFDMetadata",
     "AFDSingleDPMetadata",
 ]

@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import Any
 
-from afd_plugin.connectors import AFDMetadata, AFDSingleDPMetadata
+from afd_plugin.connectors import AFDDPMetadata, AFDMetadata
 from afd_plugin.v1.worker._optional import optional_class
 
 _UBatchWrapper, _UBatchWrapper_IMPORT_ERROR = optional_class(
@@ -284,7 +284,7 @@ def build_ubatch_dp_metadata_list(
     dp_size = int(parallel_config.data_parallel_size)
     if dp_size <= 1:
         return [
-            AFDSingleDPMetadata(
+            AFDDPMetadata(
                 num_tokens_across_dp_cpu=_cpu_int_tensor([ubatch_slice.num_tokens]),
                 max_tokens_across_dp_cpu=_cpu_int_tensor([ubatch_slice.num_tokens]),
             )

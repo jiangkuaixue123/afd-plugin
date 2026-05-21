@@ -12,7 +12,7 @@ from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
     AFDMetadata,
-    AFDSingleDPMetadata,
+    AFDDPMetadata,
 )
 from afd_plugin.model_executor.models.forward_context import use_afd_metadata_provider
 from afd_plugin.v1.worker._optional import optional_class
@@ -177,7 +177,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             dtype=torch.int32,
             device="cpu",
         )
-        return AFDSingleDPMetadata(
+        return AFDDPMetadata(
             num_tokens_across_dp_cpu=num_tokens_across_dp_cpu,
             max_tokens_across_dp_cpu=torch.max(num_tokens_across_dp_cpu),
         )
@@ -208,7 +208,7 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         except ModuleNotFoundError:
             num_tokens_across_dp_cpu = [int(num_tokens)] * dp_size
             max_tokens_across_dp_cpu = max(num_tokens_across_dp_cpu)
-        return AFDSingleDPMetadata(
+        return AFDDPMetadata(
             num_tokens_across_dp_cpu=num_tokens_across_dp_cpu,
             max_tokens_across_dp_cpu=max_tokens_across_dp_cpu,
         )

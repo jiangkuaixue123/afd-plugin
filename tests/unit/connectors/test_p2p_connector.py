@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.config import AFDConfig, afd_config_from_mapping
-from afd_plugin.connectors import AFDConnectorFactory
+from afd_plugin.connectors import AFDDPMetadata, AFDConnectorFactory
 from afd_plugin.distributed import build_rank_mapping, topology_from_config
 
 
@@ -21,6 +21,13 @@ def _fake_vllm_config():
         ),
         parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
     )
+
+
+def _tolist(value):
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    return list(value)
 
 
 def test_p2p_connector_is_registered_and_import_is_cpu_safe():
@@ -188,8 +195,12 @@ def test_p2p_dp_metadata_serialization_uses_json_payload():
     )
 
     assert payload.startswith(b"{")
-    assert decoded[7].num_tokens_across_dp_cpu == [3, 5]
-    assert decoded[7].max_tokens_across_dp_cpu == 5
+    assert isinstance(decoded[7], AFDDPMetadata)
+    assert _tolist(decoded[7].num_tokens_across_dp_cpu) == [3, 5]
+    assert int(decoded[7].max_tokens_across_dp_cpu) == 5
+    with decoded[7].sp_local_sizes(sequence_parallel_size=1):
+        assert decoded[7].get_chunk_sizes_across_dp_rank() == [3, 5]
+    assert _tolist(decoded[7].cu_tokens_across_sp(1)) == [3, 8]
     assert is_graph_capturing is True
     assert is_warmup is False
 

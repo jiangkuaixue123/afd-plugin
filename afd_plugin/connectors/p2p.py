@@ -13,7 +13,7 @@ from typing import Any, NamedTuple
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
-from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDSingleDPMetadata
+from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDDPMetadata
 from afd_plugin.distributed import (
     DefaultProcessGroupSwitcher,
     build_rank_mapping,
@@ -526,7 +526,7 @@ def _decode_dp_metadata_payload(
 ) -> tuple[dict[int, Any], bool, bool]:
     payload = json.loads(payload_bytes.decode("utf-8"))
     dp_metadata_list = {
-        int(stage_idx): AFDSingleDPMetadata(
+        int(stage_idx): AFDDPMetadata(
             num_tokens_across_dp_cpu=[
                 int(value)
                 for value in metadata["num_tokens_across_dp_cpu"]
