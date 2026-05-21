@@ -15,9 +15,9 @@ from afd_plugin.connectors import (
     AFDSingleDPMetadata,
 )
 from afd_plugin.models.forward_context import use_afd_metadata_provider
-from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.cuda_graph import validate_cuda_graph_mode
-from afd_plugin.runtime.ubatch_wrapper import (
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.cuda_graph import validate_cuda_graph_mode
+from afd_plugin.v1.worker.ubatch_wrapper import (
     AFDUBatchWrapper,
     build_ubatch_dp_metadata_list,
 )
@@ -217,6 +217,8 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         self,
         forward_context: object,
     ) -> None:
+        if getattr(forward_context, "additional_kwargs", None) is None:
+            forward_context.additional_kwargs = {}
         existing_metadata = (
             getattr(forward_context, "additional_kwargs", {}) or {}
         ).get("afd_metadata")

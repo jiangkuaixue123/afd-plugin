@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from afd_plugin.config import AFDConfig, AFDConfig_from_mapping, parse_afd_config
+from afd_plugin.config import AFDConfig, afd_config_from_mapping, parse_afd_config
 
 
 def test_parse_empty_additional_config_returns_disabled_default():
@@ -57,7 +57,7 @@ def test_parse_vllm_like_config_object():
 
 
 def test_original_afd_field_aliases_are_supported():
-    config = AFDConfig_from_mapping(
+    config = afd_config_from_mapping(
         {
             "enabled": "true",
             "afd_role": "ffn",
@@ -88,12 +88,12 @@ def test_original_afd_field_aliases_are_supported():
 )
 def test_validation_errors_are_clear(raw, message):
     with pytest.raises((TypeError, ValueError), match=message):
-        AFDConfig_from_mapping(raw)
+        afd_config_from_mapping(raw)
 
 
 def test_role_mismatch_fails_fast():
     with pytest.raises(ValueError, match="AFD role mismatch"):
-        AFDConfig_from_mapping(
+        afd_config_from_mapping(
             {"enabled": True, "role": "ffn"},
             expected_role="attention",
         )

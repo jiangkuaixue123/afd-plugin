@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from afd_plugin.runtime.cuda_graph import (
+from afd_plugin.v1.worker.cuda_graph import (
     FULL_DECODE_ONLY,
     cudagraph_mode_name,
     make_ffn_graph_key,

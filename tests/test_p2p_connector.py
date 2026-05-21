@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from afd_plugin.config import AFDConfig, AFDConfig_from_mapping
+from afd_plugin.config import AFDConfig, afd_config_from_mapping
 from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.distributed import build_rank_mapping, topology_from_config
 
@@ -82,7 +82,7 @@ def test_p2p_connector_uses_dp_rank_as_role_rank_for_native_dp():
 
 
 def test_p2p_topology_supports_afd_size_alias():
-    config = AFDConfig_from_mapping(
+    config = afd_config_from_mapping(
         {
             "enabled": True,
             "role": "ffn",
@@ -162,13 +162,36 @@ def test_p2p_topology_supports_equal_and_integer_multiple_attention_counts(
 )
 def test_p2p_topology_validation_errors_are_clear(raw, message):
     with pytest.raises(ValueError, match=message):
-        AFDConfig_from_mapping(raw)
+        afd_config_from_mapping(raw)
 
 
 def test_p2p_module_exports_connector_class():
     module = importlib.import_module("afd_plugin.connectors.p2p")
 
     assert module.P2PAFDConnector.__module__ == "afd_plugin.connectors.p2p"
+
+
+def test_p2p_dp_metadata_serialization_uses_json_payload():
+    module = importlib.import_module("afd_plugin.connectors.p2p")
+    metadata = SimpleNamespace(
+        num_tokens_across_dp_cpu=[3, 5],
+        max_tokens_across_dp_cpu=5,
+    )
+
+    payload = module._encode_dp_metadata_payload(
+        {7: metadata},
+        is_graph_capturing=True,
+        is_warmup=False,
+    )
+    decoded, is_graph_capturing, is_warmup = module._decode_dp_metadata_payload(
+        payload,
+    )
+
+    assert payload.startswith(b"{")
+    assert decoded[7].num_tokens_across_dp_cpu == [3, 5]
+    assert decoded[7].max_tokens_across_dp_cpu == 5
+    assert is_graph_capturing is True
+    assert is_warmup is False
 
 
 def test_p2p_custom_ops_register_send_recv_with_fake_impls(monkeypatch):

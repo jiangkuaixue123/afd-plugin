@@ -19,7 +19,7 @@ Attention 侧通过 `vllm serve` 启动，并显式指定 `--worker-cls`：
 
 ```bash
 vllm serve <model> \
-  --worker-cls afd_plugin.runtime.AFDAttentionWorker \
+  --worker-cls afd_plugin.v1.worker.AFDAttentionWorker \
   --additional-config '{
     "afd": {
       "enabled": true,

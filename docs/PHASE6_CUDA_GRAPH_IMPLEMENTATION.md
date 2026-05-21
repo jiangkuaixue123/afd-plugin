@@ -41,7 +41,7 @@ DeepSeekV2 权重。
 
 ### Policy
 
-`afd_plugin.runtime.cuda_graph.validate_cuda_graph_mode()` 负责解析和校验 graph
+`afd_plugin.v1.worker.cuda_graph.validate_cuda_graph_mode()` 负责解析和校验 graph
 策略。它保持 CPU-safe，不在 import 时加载 torch 或 vLLM CUDA runtime。
 
 策略结果包含：

@@ -18,10 +18,10 @@ Phase 1 established the CPU-safe plugin skeleton:
 - No plugin-owned executable entrypoint package; both Attention and FFN sides
   are expected to enter through native `vllm serve` plus explicit class paths.
 - Runtime class-path placeholders for:
-  - `afd_plugin.runtime.AFDAttentionWorker`
-  - `afd_plugin.runtime.AFDAttentionModelRunner`
-  - `afd_plugin.runtime.AFDFFNWorker`
-  - `afd_plugin.runtime.GPUFFNModelRunner`
+  - `afd_plugin.v1.worker.AFDAttentionWorker`
+  - `afd_plugin.v1.worker.AFDAttentionModelRunner`
+  - `afd_plugin.v1.worker.AFDFFNWorker`
+  - `afd_plugin.v1.worker.GPUFFNModelRunner`
 
 Phase 2 added the Attention-side MVP:
 

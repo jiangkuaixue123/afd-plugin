@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.connectors import AFDConnectorMetadata
-from afd_plugin.runtime.ffn_model_runner import (
+from afd_plugin.v1.worker.ffn_model_runner import (
     GPUFFNModelRunner,
     _set_moe_layer_index,
 )
-from afd_plugin.runtime.ffn_worker import AFDFFNWorker
+from afd_plugin.v1.worker.ffn_worker import AFDFFNWorker
 
 
 class _FakeConnector:

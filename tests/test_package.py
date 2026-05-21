@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 
 import afd_plugin
+from afd_plugin.compat import is_vllm_version_supported
 
 
 def test_package_import_is_cpu_safe():
@@ -28,3 +29,9 @@ def test_entry_point_is_registered():
     matches = [ep for ep in entry_points if ep.name == "afd"]
     assert matches
     assert matches[0].value == "afd_plugin:register_afd"
+
+
+def test_vllm_version_support_is_exact_target():
+    assert is_vllm_version_supported("0.19.1")
+    assert not is_vllm_version_supported("0.19.0")
+    assert not is_vllm_version_supported("0.19.2")

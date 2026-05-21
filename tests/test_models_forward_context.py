@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from afd_plugin.models import get_afd_metadata_from_forward_context
-from afd_plugin.runtime.dbo import maybe_apply_dbo_yield
+from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 
 def test_get_afd_metadata_from_additional_kwargs():

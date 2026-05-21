@@ -182,7 +182,7 @@ afd-plugin/
   AFD-specific distributed helper。这里应优先放插件自己调用的 helper，而不是
   patch。
 - `afd_plugin.models`：plugin-owned model implementation 或 wrapper。
-- `afd_plugin.runtime`：vLLM 可通过显式 class path 加载的运行时 adapter/class，
+- `afd_plugin.v1.worker`：vLLM 可通过显式 class path 加载的运行时 adapter/class，
   包括 worker、runner、ubatching、forward-context 相关能力。这里不作为 patch
   目录使用。
 - `docs`：迁移说明、架构决策、operator runbook 和已知限制。

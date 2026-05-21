@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from typing import Any
 
 from afd_plugin.connectors import AFDMetadata, AFDSingleDPMetadata
-from afd_plugin.runtime._optional import optional_class
+from afd_plugin.v1.worker._optional import optional_class
 
 _UBatchWrapper, _UBatchWrapper_IMPORT_ERROR = optional_class(
     "vllm.v1.worker.gpu_ubatch_wrapper",

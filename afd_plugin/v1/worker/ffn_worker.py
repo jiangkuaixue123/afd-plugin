@@ -7,9 +7,9 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.attention_model_runner import fail_if_unsupported_ubatching
-from afd_plugin.runtime.ffn_model_runner import GPUFFNModelRunner
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.attention_model_runner import fail_if_unsupported_ubatching
+from afd_plugin.v1.worker.ffn_model_runner import GPUFFNModelRunner
 from afd_plugin.validation import assert_compatible_afd_stack
 
 _GPUWorker, _GPUWorker_IMPORT_ERROR = optional_class(

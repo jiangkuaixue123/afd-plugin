@@ -44,7 +44,7 @@ def test_runner_uses_native_dp_for_attention_topology():
     assert _arg_value(command, "--tensor-parallel-size") == "1"
     assert "--enable-expert-parallel" in command
     assert _arg_value(command, "--worker-cls") == (
-        "afd_plugin.runtime.AFDAttentionWorker"
+        "afd_plugin.v1.worker.AFDAttentionWorker"
     )
     assert _arg_value(command, "--port") == "18100"
     assert _arg_value(command, "--served-model-name") == (
@@ -64,7 +64,7 @@ def test_runner_uses_native_dp_for_ffn_topology():
     assert _arg_value(command, "--data-parallel-size") == "2"
     assert _arg_value(command, "--tensor-parallel-size") == "1"
     assert "--enable-expert-parallel" in command
-    assert _arg_value(command, "--worker-cls") == "afd_plugin.runtime.AFDFFNWorker"
+    assert _arg_value(command, "--worker-cls") == "afd_plugin.v1.worker.AFDFFNWorker"
     assert _arg_value(command, "--port") == "18101"
     assert _arg_value(command, "--served-model-name") == "deepseek-v2-lite-afd-ffn"
 

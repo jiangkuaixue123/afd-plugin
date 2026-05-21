@@ -7,13 +7,13 @@ PyNCCL, and vLLM runtime imports are delayed until connector initialization or
 actual send/recv calls.
 """
 
-import pickle
+import json
 from datetime import timedelta
 from typing import Any, NamedTuple
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
-from afd_plugin.connectors.metadata import AFDConnectorMetadata
+from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDSingleDPMetadata
 from afd_plugin.distributed import (
     DefaultProcessGroupSwitcher,
     build_rank_mapping,
@@ -207,8 +207,11 @@ class P2PAFDConnector(AFDConnectorBase):
         if self.p2p_pg is None:
             return
         device = torch.device(f"cuda:{self.local_rank}")
-        send_data = (dp_metadata_list, is_graph_capturing, is_warmup)
-        object_bytes = pickle.dumps(send_data)
+        object_bytes = _encode_dp_metadata_payload(
+            dp_metadata_list,
+            is_graph_capturing=is_graph_capturing,
+            is_warmup=is_warmup,
+        )
         object_tensor_cpu = torch.frombuffer(bytearray(object_bytes), dtype=torch.uint8)
         object_tensor = object_tensor_cpu.to(device)
         size_tensor = torch.tensor(
@@ -244,13 +247,7 @@ class P2PAFDConnector(AFDConnectorBase):
         if rank_object != rank_size:
             raise RuntimeError("received AFD metadata fragments from different ranks")
 
-        obj = pickle.loads(object_tensor.cpu().numpy().tobytes())
-        if len(obj) == 3:
-            data, is_graph_capturing, is_warmup = obj
-        else:
-            data, is_graph_capturing = obj
-            is_warmup = False
-        return data, is_graph_capturing, is_warmup
+        return _decode_dp_metadata_payload(object_tensor.cpu().numpy().tobytes())
 
     def send_attn_output(
         self,
@@ -475,6 +472,74 @@ def _num_tokens_for_dp_rank(dp_metadata: Any, dp_rank: int) -> int:
     token_count = dp_metadata.num_tokens_across_dp_cpu[dp_rank]
     item = getattr(token_count, "item", None)
     return int(item() if callable(item) else token_count)
+
+
+def _to_int_list(value: Any) -> list[int]:
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    elif hasattr(value, "item"):
+        value = [value.item()]
+    elif isinstance(value, (int, float)):
+        value = [value]
+    return [int(item) for item in value]
+
+
+def _to_int(value: Any) -> int:
+    item = getattr(value, "item", None)
+    return int(item() if callable(item) else value)
+
+
+def _encode_dp_metadata_payload(
+    dp_metadata_list: dict[int, Any],
+    *,
+    is_graph_capturing: bool,
+    is_warmup: bool,
+) -> bytes:
+    metadata_payload: dict[str, dict[str, Any]] = {}
+    for stage_idx, dp_metadata in dp_metadata_list.items():
+        token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
+        if token_counts is None:
+            raise TypeError(
+                "AFD DP metadata must expose num_tokens_across_dp_cpu "
+                "for JSON serialization",
+            )
+        token_counts_list = _to_int_list(token_counts)
+        max_token_count = getattr(dp_metadata, "max_tokens_across_dp_cpu", None)
+        if max_token_count is None:
+            max_token_count = max(token_counts_list)
+        metadata_payload[str(int(stage_idx))] = {
+            "num_tokens_across_dp_cpu": token_counts_list,
+            "max_tokens_across_dp_cpu": _to_int(max_token_count),
+        }
+
+    payload = {
+        "dp_metadata_list": metadata_payload,
+        "is_graph_capturing": bool(is_graph_capturing),
+        "is_warmup": bool(is_warmup),
+    }
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _decode_dp_metadata_payload(
+    payload_bytes: bytes,
+) -> tuple[dict[int, Any], bool, bool]:
+    payload = json.loads(payload_bytes.decode("utf-8"))
+    dp_metadata_list = {
+        int(stage_idx): AFDSingleDPMetadata(
+            num_tokens_across_dp_cpu=[
+                int(value)
+                for value in metadata["num_tokens_across_dp_cpu"]
+            ],
+            max_tokens_across_dp_cpu=int(metadata["max_tokens_across_dp_cpu"]),
+        )
+        for stage_idx, metadata in payload["dp_metadata_list"].items()
+    }
+    return (
+        dp_metadata_list,
+        bool(payload.get("is_graph_capturing", False)),
+        bool(payload.get("is_warmup", False)),
+    )
 
 
 def _register_comm(communicator: Any) -> int:

@@ -9,11 +9,11 @@ from typing import Any, Final
 
 from afd_plugin.config import AFDConfig, parse_afd_config
 
-ATTENTION_WORKER_FQCN: Final[str] = "afd_plugin.runtime.AFDAttentionWorker"
-FFN_WORKER_FQCN: Final[str] = "afd_plugin.runtime.AFDFFNWorker"
-ATTENTION_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.runtime.AFDAttentionModelRunner"
-FFN_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.runtime.GPUFFNModelRunner"
-UBATCH_WRAPPER_FQCN: Final[str] = "afd_plugin.runtime.AFDUBatchWrapper"
+ATTENTION_WORKER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDAttentionWorker"
+FFN_WORKER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDFFNWorker"
+ATTENTION_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDAttentionModelRunner"
+FFN_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.v1.worker.GPUFFNModelRunner"
+UBATCH_WRAPPER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDUBatchWrapper"
 
 
 def normalize_qualname(value: str) -> str:

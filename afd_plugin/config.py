@@ -157,7 +157,7 @@ def _normalize_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def AFDConfig_from_mapping(
+def afd_config_from_mapping(
     raw: Mapping[str, Any] | None,
     *,
     validate: bool = True,
@@ -186,7 +186,7 @@ def parse_afd_config(
     """Parse ``additional_config["afd"]`` or a vLLM-like config object."""
 
     if source is None:
-        return AFDConfig_from_mapping(
+        return afd_config_from_mapping(
             None,
             validate=validate,
             expected_role=expected_role,
@@ -205,7 +205,7 @@ def parse_afd_config(
     else:
         afd_raw = additional_config.get(AFD_ADDITIONAL_CONFIG_KEY)
 
-    return AFDConfig_from_mapping(
+    return afd_config_from_mapping(
         afd_raw,
         validate=validate,
         expected_role=expected_role,
@@ -272,7 +272,7 @@ def validate_afd_config(
 
 __all__ = [
     "AFDConfig",
-    "AFDConfig_from_mapping",
+    "afd_config_from_mapping",
     "AFD_ADDITIONAL_CONFIG_KEY",
     "AFDRole",
     "SUPPORTED_AFD_CONNECTORS",

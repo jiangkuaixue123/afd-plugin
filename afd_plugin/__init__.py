@@ -20,9 +20,9 @@ def __getattr__(name: str):
         "AFDUBatchWrapper",
         "GPUFFNModelRunner",
     }:
-        from afd_plugin import runtime
+        from afd_plugin.v1 import worker
 
-        return getattr(runtime, name)
+        return getattr(worker, name)
     if name == "assert_compatible_afd_stack":
         from afd_plugin.validation import assert_compatible_afd_stack
 
@@ -103,7 +103,7 @@ def register_afd() -> None:
         )
 
     try:
-        from afd_plugin.runtime.dbo import register_dbo_yield_custom_op
+        from afd_plugin.v1.worker.dbo import register_dbo_yield_custom_op
 
         register_dbo_yield_custom_op()
     except Exception:

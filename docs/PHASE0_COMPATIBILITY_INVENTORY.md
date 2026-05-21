@@ -144,7 +144,7 @@ FFN 侧命令形态：
 
 ```bash
 vllm serve <model> \
-  --worker-cls afd_plugin.runtime.AFDFFNWorker \
+  --worker-cls afd_plugin.v1.worker.AFDFFNWorker \
   --additional-config '{
     "afd": {
       "enabled": true,
@@ -174,7 +174,7 @@ Attention 侧命令形态：
 
 ```bash
 vllm serve <model> \
-  --worker-cls afd_plugin.runtime.AFDAttentionWorker \
+  --worker-cls afd_plugin.v1.worker.AFDAttentionWorker \
   --additional-config '{
     "afd": {
       "enabled": true,

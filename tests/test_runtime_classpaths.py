@@ -20,14 +20,14 @@ from afd_plugin.validation import (
         FFN_WORKER_FQCN,
         FFN_MODEL_RUNNER_FQCN,
         UBATCH_WRAPPER_FQCN,
-        "afd_plugin.runtime:AFDAttentionWorker",
+        "afd_plugin.v1.worker:AFDAttentionWorker",
     ],
 )
 def test_runtime_class_paths_resolve(qualname):
     cls = resolve_class_from_qualname(qualname)
 
     assert isinstance(cls, type)
-    assert cls.__module__.startswith("afd_plugin.runtime")
+    assert cls.__module__.startswith("afd_plugin.v1.worker")
 
 
 def test_phase3_ffn_worker_requires_vllm_when_instantiated_without_runtime():

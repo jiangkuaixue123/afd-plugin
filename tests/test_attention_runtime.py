@@ -7,7 +7,7 @@ import pytest
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.models.forward_context import get_afd_metadata_from_forward_context
-from afd_plugin.runtime.attention_model_runner import (
+from afd_plugin.v1.worker.attention_model_runner import (
     AFDAttentionModelRunner,
     _has_enough_tokens_for_ubatches,
     _is_ubatch_child_afd_context,
@@ -15,7 +15,7 @@ from afd_plugin.runtime.attention_model_runner import (
     fail_if_cuda_graph_enabled,
     fail_if_unsupported_ubatching,
 )
-from afd_plugin.runtime.ubatch_wrapper import (
+from afd_plugin.v1.worker.ubatch_wrapper import (
     build_ubatch_additional_kwargs,
     build_ubatch_afd_metadata,
 )
@@ -132,6 +132,26 @@ def test_attention_runner_installs_afd_metadata_on_forward_context():
     assert runner.afd_connector.dp_metadata_updates == [{0: "dp"}]
     assert runner.afd_connector.sent_dp_metadata_lists == [{0: "dp"}]
     assert runner.afd_connector.sent_dp_metadata_flags == [(False, False)]
+
+
+def test_attention_runner_initializes_missing_forward_context_kwargs():
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.afd_config = AFDConfig(enabled=True, role="attention")
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._afd_transaction_counter = 0
+    runner._afd_suppress_metadata_send = True
+    runner._afd_pending_metadata = runner._build_afd_metadata(None, 5)
+    forward_context = SimpleNamespace(
+        additional_kwargs=None,
+        dp_metadata="dp",
+        ubatch_slices=None,
+    )
+
+    runner._install_afd_metadata_on_forward_context(forward_context)
+
+    assert forward_context.additional_kwargs["afd_metadata"].afd_tokens_lens == [5]
 
 
 def test_attention_runner_uses_padded_full_graph_tokens_for_afd_metadata():

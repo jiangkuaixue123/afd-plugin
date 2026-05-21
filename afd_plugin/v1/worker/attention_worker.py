@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.attention_model_runner import (
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.attention_model_runner import (
     AFDAttentionModelRunner,
     fail_if_unsupported_ubatching,
 )

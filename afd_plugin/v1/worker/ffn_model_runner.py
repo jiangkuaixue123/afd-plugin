@@ -9,12 +9,12 @@ from typing import Any
 
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory
-from afd_plugin.runtime._optional import optional_class
-from afd_plugin.runtime.attention_model_runner import (
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.attention_model_runner import (
     _with_dp_derived_afd_rank,
     fail_if_unsupported_ubatching,
 )
-from afd_plugin.runtime.cuda_graph import (
+from afd_plugin.v1.worker.cuda_graph import (
     AFDGraphRunMode,
     graph_run_mode,
     make_ffn_graph_key,
@@ -273,14 +273,11 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         if dp_metadata_list is None:
             raise RuntimeError("GPUFFNModelRunner.capture_model requires metadata")
 
-        import time
-
         import torch
         from vllm.compilation.monitor import set_cudagraph_capturing_enabled
         from vllm.config import CUDAGraphMode
         from vllm.distributed.parallel_state import graph_capture
 
-        start_time = time.perf_counter()
         start_free_gpu_memory = torch.cuda.mem_get_info()[0]
         if self._graph_memory_pool is None:
             self._graph_memory_pool = torch.cuda.graph_pool_handle()

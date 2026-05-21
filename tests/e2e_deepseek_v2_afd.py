@@ -264,9 +264,9 @@ def build_vllm_command(
         },
     }
     worker_cls = (
-        "afd_plugin.runtime.AFDAttentionWorker"
+        "afd_plugin.v1.worker.AFDAttentionWorker"
         if role == "attention"
-        else "afd_plugin.runtime.AFDFFNWorker"
+        else "afd_plugin.v1.worker.AFDFFNWorker"
     )
     cmd = [
         args.vllm_bin,
