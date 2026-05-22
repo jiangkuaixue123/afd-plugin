@@ -10,10 +10,16 @@ source tree: AFD behavior is provided by this package, `vllm.general_plugins`,
 `--worker-cls`, `--additional-config`, plugin-owned model wrappers, and narrow
 compatibility shims where no public extension point exists.
 
+## Architecture
+
+![vLLM AFD plugin architecture](docs/assets/vllm-afd-plugin-architecture.svg)
+
 ## Current Status
 
-The repository currently contains the AFD plugin skeleton plus Attention,
-FFN, P2P, DBO, and CUDA graph MVP runtime paths:
+The repository currently contains the AFD plugin skeleton plus Attention, FFN,
+P2P, DBO, and CUDA graph MVP runtime paths.
+
+Core runtime support:
 
 - Python package metadata for the `vllm-afd-plugin` distribution.
 - `vllm.general_plugins` entry point named `afd`, implemented by
@@ -28,15 +34,29 @@ FFN, P2P, DBO, and CUDA graph MVP runtime paths:
   `afd_plugin.v1.worker.AFDFFNWorker`.
 - Attention and FFN model runners that exchange AFD metadata and hidden states
   through the plugin connector contract.
-- P2P connector support for eager `1A1F` and `2A2F` style topologies.
-- DeepSeekV2 AFD wrapper registration for server-side smoke testing.
 - Two-way DBO/ubatching metadata support for the current AFD paths.
 - `FULL_DECODE_ONLY` CUDA graph support for the current Attention/FFN runtime
   shape, including FFN graph-keyed capture/replay.
 
+Model support:
+
+| Model family | Registered architectures | Status | Notes |
+| --- | --- | --- | --- |
+| DeepSeekV2 / DeepSeekV3 / GLM MoE DSA | `DeepseekForCausalLM`, `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `GlmMoeDsaForCausalLM` | Supported for AFD smoke and E2E validation | Uses `afd_plugin.model_executor.models.deepseek_v2` wrappers. Attention and FFN sides currently load full model weights. |
+| Other model families | Not registered by this plugin | Not supported yet | Add a plugin-owned model wrapper before using AFD-specific model forward behavior. |
+
+Connector support:
+
+| Connector | Status | Platform | Ubatch support | Graph support | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `p2pconnector` | Supported | CUDA | DBO supported | `FULL_DECODE_ONLY` | Uses FFN ranks first, followed by Attention ranks. `num_attention_servers` must be greater than or equal to `num_ffn_servers` and divisible by it. |
+| Other AFD connectors | Not supported yet | N/A | N/A | N/A | Connector implementations should be added under `afd_plugin.connectors` and registered through the connector factory. |
+
 Known gaps remain important:
 
 - vLLM versions other than `0.19.1` are not claimed as supported.
+- Only the vLLM v1 model runner path is supported; the v2 model runner is not
+  supported yet.
 - Role-based weight pruning is not implemented yet; Attention and FFN sides
   still load full DeepSeekV2 weights.
 - GPU end-to-end tests are opt-in and currently focus on request success rather
@@ -46,6 +66,17 @@ Known gaps remain important:
 - DBO plus CUDA graph is limited to two ubatches.
 - TP/PP, ratio topologies beyond the current validated cases, and non-DeepSeekV2
   model paths still need hardening.
+
+## Roadmap
+
+Near-term development focuses on:
+
+- Ascend NPU platform support, including connector, worker, model runner, and
+  related runtime compatibility work.
+- Broader model support through additional plugin-owned model wrappers and
+  AFD-specific forward-path integration.
+- Role-based weight loading and pruning, so Attention workers load only
+  Attention-side weights and FFN workers load only FFN-side weights.
 
 ## Install
 
