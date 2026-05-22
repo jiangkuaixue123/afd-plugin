@@ -446,9 +446,21 @@ def request_completion(args: argparse.Namespace) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        body = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = read_http_error_body(exc)
+        raise RuntimeError(
+            f"Completion request to {url} failed with HTTP {exc.code} "
+            f"{exc.reason}: {body}",
+        ) from exc
     return json.loads(body)
+
+
+def read_http_error_body(error: urllib.error.HTTPError) -> str:
+    body = error.read().decode("utf-8", errors="replace")
+    return body if body else "<empty response body>"
 
 
 def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -472,9 +484,19 @@ def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
             for request_idx in range(request_count)
         }
         for future in as_completed(futures):
-            responses[futures[future]] = future.result()
+            request_idx = futures[future]
+            try:
+                responses[request_idx] = future.result()
+            except Exception as exc:
+                print(
+                    f"Completion request {request_idx} failed: {exc!r}",
+                    file=sys.stderr,
+                )
 
-    return [response for response in responses if response is not None]
+    completed_responses = [response for response in responses if response is not None]
+    if not completed_responses:
+        raise RuntimeError("All completion requests failed")
+    return completed_responses
 
 
 def assert_log_expectations(
