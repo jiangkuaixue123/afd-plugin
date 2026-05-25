@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
-"""Run manual DeepSeekV2 AFD end-to-end smoke tests.
+"""Run DeepSeekV2-Lite AFD examples.
 
-This script is intentionally opt-in and is not collected by pytest. It starts
-one FFN-side ``vllm serve`` process and one Attention-side ``vllm serve``
-OpenAI-compatible API process. XAYF topologies are represented as native vLLM
-data parallelism: Attention runs with ``DP=X, TP=1`` and FFN runs with
-``DP=Y, TP=1``. By default the runner keeps the eager baseline behavior; CUDA
-graph and DBO coverage are opt-in flags.
+This script starts one FFN-side ``vllm serve`` process and one Attention-side
+``vllm serve`` OpenAI-compatible API process. XAYF topologies are represented
+as native vLLM data parallelism: Attention runs with ``DP=X, TP=1`` and FFN
+runs with ``DP=Y, TP=1``. By default the runner keeps the eager baseline
+behavior; CUDA graph and DBO coverage are opt-in flags.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> int:
@@ -77,7 +76,6 @@ def main() -> int:
             print(f"\n=== Completion response: request {request_idx} ===")
             print(json.dumps(response, ensure_ascii=False, indent=2))
 
-        assert_log_expectations(args, logs)
         return 0
     finally:
         terminate_processes(processes)
@@ -184,22 +182,6 @@ def parse_args() -> argparse.Namespace:
         "--use-decode-bench-connector",
         action="store_true",
         help="Pass a DecodeBenchConnector kv-transfer-config to Attention.",
-    )
-    parser.add_argument(
-        "--expect-ffn-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-ffn-ubatch-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-log-timeout",
-        type=float,
-        default=60,
-        help="Deprecated no-op kept for compatibility with existing scripts.",
     )
     parser.add_argument(
         "--common-vllm-arg",
@@ -380,11 +362,10 @@ def build_env(cuda_visible_devices: str, args: argparse.Namespace) -> dict[str, 
 
 
 def start_process(
-    name: str,
+    _name: str,
     command: list[str],
     env: dict[str, str],
 ) -> subprocess.Popen[str]:
-    del name
     return subprocess.Popen(
         command,
         cwd=REPO_ROOT,
@@ -498,14 +479,6 @@ def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
     if not completed_responses:
         raise RuntimeError("All completion requests failed")
     return completed_responses
-
-
-def assert_log_expectations(
-    args: argparse.Namespace,
-    logs: dict[str, list[str]],
-) -> None:
-    del args, logs
-    return
 
 
 def ensure_alive(process: subprocess.Popen[str], message: str) -> None:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import urllib.error
+
+import pytest
 
 from tests.e2e.gpu.deepseek_v2_lite import runner
 from tests.e2e.gpu.deepseek_v2_lite.runner import build_vllm_command
@@ -18,6 +22,9 @@ def _args() -> argparse.Namespace:
         afd_host="127.0.0.1",
         afd_port=6249,
         served_model_name_prefix="deepseek-v2-lite-afd",
+        prompt="San Francisco is a",
+        max_tokens=16,
+        temperature=0.0,
         num_requests=None,
         request_concurrency=None,
         cuda_graph_full_decode_only=False,
@@ -83,3 +90,41 @@ def test_runner_sends_one_concurrent_request_per_attention_dp_rank(monkeypatch):
 
     assert len(calls) == 2
     assert len(responses) == 2
+
+
+def test_request_completion_includes_http_error_body(monkeypatch):
+    args = _args()
+    error = urllib.error.HTTPError(
+        url="http://127.0.0.1:18100/v1/completions",
+        code=500,
+        msg="Internal Server Error",
+        hdrs=None,
+        fp=io.BytesIO(b'{"error":"CUDA out of memory"}'),
+    )
+
+    def fake_urlopen(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        runner.request_completion(args)
+
+
+def test_runner_keeps_successful_concurrent_responses(monkeypatch, capsys):
+    args = _args()
+    args.num_requests = 3
+    calls = []
+
+    def fake_request_completion(_args):
+        calls.append(_args)
+        if len(calls) == 2:
+            raise RuntimeError("transient request failure")
+        return {"id": len(calls)}
+
+    monkeypatch.setattr(runner, "request_completion", fake_request_completion)
+
+    responses = runner.request_completions(args)
+
+    assert responses == [{"id": 1}, {"id": 3}]
+    assert "transient request failure" in capsys.readouterr().err
