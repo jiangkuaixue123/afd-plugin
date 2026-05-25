@@ -14,6 +14,16 @@ FFN_WORKER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDFFNWorker"
 ATTENTION_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDAttentionModelRunner"
 FFN_MODEL_RUNNER_FQCN: Final[str] = "afd_plugin.v1.worker.GPUFFNModelRunner"
 UBATCH_WRAPPER_FQCN: Final[str] = "afd_plugin.v1.worker.AFDUBatchWrapper"
+NPU_ATTENTION_WORKER_FQCN: Final[str] = (
+    "afd_plugin.v1.worker.ascend.AFDNPUAttentionWorker"
+)
+NPU_FFN_WORKER_FQCN: Final[str] = "afd_plugin.v1.worker.ascend.AFDNPUFFNWorker"
+NPU_ATTENTION_MODEL_RUNNER_FQCN: Final[str] = (
+    "afd_plugin.v1.worker.ascend.AFDNPUAttentionModelRunner"
+)
+NPU_FFN_MODEL_RUNNER_FQCN: Final[str] = (
+    "afd_plugin.v1.worker.ascend.AFDNPUFFNModelRunner"
+)
 
 
 def normalize_qualname(value: str) -> str:
@@ -51,6 +61,7 @@ def assert_compatible_afd_stack(
     *,
     caller: str,
     expected_role: str | None = None,
+    expected_worker_qualname_override: str | None = None,
     require_enabled: bool = True,
 ) -> AFDConfig:
     """Validate AFD config and worker class wiring.
@@ -77,16 +88,21 @@ def assert_compatible_afd_stack(
             f"(got type {type(worker_cls_raw).__name__}){_ctx()}",
         )
     if worker_cls_raw.strip() == "auto":
+        expected_worker = (
+            expected_worker_qualname_override or expected_worker_qualname(config.role)
+        )
         raise ValueError(
             "parallel_config.worker_cls is still 'auto'; pass --worker-cls "
-            f"{expected_worker_qualname(config.role)}{_ctx()}",
+            f"{expected_worker}{_ctx()}",
         )
 
     worker_cls = resolve_class_from_qualname(
         worker_cls_raw,
         role="parallel_config.worker_cls",
     )
-    expected_qualname = expected_worker_qualname(config.role)
+    expected_qualname = (
+        expected_worker_qualname_override or expected_worker_qualname(config.role)
+    )
     expected_worker_cls = resolve_class_from_qualname(
         expected_qualname,
         role="expected AFD worker class",
@@ -109,6 +125,10 @@ __all__ = [
     "ATTENTION_WORKER_FQCN",
     "FFN_MODEL_RUNNER_FQCN",
     "FFN_WORKER_FQCN",
+    "NPU_ATTENTION_MODEL_RUNNER_FQCN",
+    "NPU_ATTENTION_WORKER_FQCN",
+    "NPU_FFN_MODEL_RUNNER_FQCN",
+    "NPU_FFN_WORKER_FQCN",
     "UBATCH_WRAPPER_FQCN",
     "assert_compatible_afd_stack",
     "expected_worker_qualname",
