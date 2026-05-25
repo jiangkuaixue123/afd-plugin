@@ -7,7 +7,11 @@ import pytest
 
 from afd_plugin.compat.ascend import fail_if_unsupported_npu_afd_features
 from afd_plugin.config import AFDConfig
-from afd_plugin.connectors import AFDConnectorFactory, AFDConnectorMetadata
+from afd_plugin.connectors import (
+    AFDConnectorFactory,
+    AFDConnectorMetadata,
+    AFDRecvOutput,
+)
 from afd_plugin.v1.worker.ascend.attention_model_runner import (
     AFDNPUAttentionModelRunner,
 )
@@ -64,7 +68,7 @@ class _FakeFFNConnector:
         for item in tuple(self.attn_outputs):
             if item[1].stage_idx == ubatch_idx:
                 self.attn_outputs.remove(item)
-                return item
+                return AFDRecvOutput(hidden_states=item[0], metadata=item[1])
         raise IndexError(ubatch_idx)
 
     def send_ffn_output(self, ffn_output, metadata, **kwargs):
@@ -265,7 +269,8 @@ def test_npudummyconnector_round_trips_control_and_payload():
         seq_len=1,
     )
     attn.send_attn_output("hidden", metadata)
-    assert ffn.recv_attn_output(timeout_ms=10) == ("hidden", metadata)
+    recv_output = ffn.recv_attn_output(timeout_ms=10)
+    assert recv_output == AFDRecvOutput(hidden_states="hidden", metadata=metadata)
 
     ffn.send_ffn_output("ffn", metadata)
     assert attn.recv_ffn_output(timeout_ms=10) == "ffn"

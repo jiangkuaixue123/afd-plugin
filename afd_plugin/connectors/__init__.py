@@ -8,6 +8,7 @@ from afd_plugin.connectors.metadata import (
     AFDConnectorMetadata,
     AFDDPMetadata,
     AFDMetadata,
+    AFDRecvOutput,
     AFDSingleDPMetadata,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "AFDConnectorMetadata",
     "AFDDPMetadata",
     "AFDMetadata",
+    "AFDRecvOutput",
     "AFDSingleDPMetadata",
 ]

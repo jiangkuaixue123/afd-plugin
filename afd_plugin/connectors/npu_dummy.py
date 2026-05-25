@@ -7,28 +7,13 @@ from __future__ import annotations
 import copy
 import queue
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
-from afd_plugin.connectors.metadata import AFDConnectorMetadata
+from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 
 _CHANNELS: dict[tuple[str, int], _DummyChannel] = {}
-
-
-@dataclass
-class AFDRecvOutput:
-    hidden_states: Any
-    metadata: AFDConnectorMetadata
-    group_list: Any = None
-    topk_weights: Any = None
-    topk_ids: Any = None
-    router_logits: Any = None
-    row_idx: Any = None
-    x_active_mask: Any = None
-    dynamic_scales: Any = None
-    cam_p2p_ep_name: str | None = None
 
 
 class _DummyChannel:
@@ -132,16 +117,14 @@ class NPUDummyAFDConnector(AFDConnectorBase):
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
         **kwargs: Any,
-    ) -> tuple[Any, AFDConnectorMetadata] | AFDRecvOutput:
+    ) -> AFDRecvOutput:
         del kwargs
         hidden_states, metadata = self._get_stage_item(
             self._channel.attn_output_queue,
             ubatch_idx,
             timeout_ms,
         )
-        if self.afd_config.extra_config.get("recv_output_object"):
-            return AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
-        return hidden_states, metadata
+        return AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
 
     def send_ffn_output(
         self,

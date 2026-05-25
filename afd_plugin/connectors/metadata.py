@@ -213,6 +213,22 @@ class AFDConnectorMetadata:
 
 
 @dataclass(slots=True)
+class AFDRecvOutput:
+    """Unified Attention -> FFN payload returned by connector recv paths."""
+
+    hidden_states: Any
+    metadata: AFDConnectorMetadata
+    group_list: Any = None
+    topk_weights: Any = None
+    topk_ids: Any = None
+    router_logits: Any = None
+    row_idx: Any = None
+    x_active_mask: Any = None
+    dynamic_scales: Any = None
+    cam_p2p_ep_name: str | None = None
+
+
+@dataclass(slots=True)
 class AFDMetadata:
     """Forward-context metadata visible to plugin-owned model wrappers."""
 
@@ -239,5 +255,6 @@ __all__ = [
     "AFDConnectorMetadata",
     "AFDDPMetadata",
     "AFDMetadata",
+    "AFDRecvOutput",
     "AFDSingleDPMetadata",
 ]

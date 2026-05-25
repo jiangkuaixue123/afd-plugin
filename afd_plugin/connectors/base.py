@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from afd_plugin.config import AFDConfig
-from afd_plugin.connectors.metadata import AFDConnectorMetadata
+from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 
 
 class AFDConnectorBase(ABC):
@@ -62,7 +62,7 @@ class AFDConnectorBase(ABC):
         self,
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
-    ) -> tuple[Any, AFDConnectorMetadata]:
+    ) -> AFDRecvOutput:
         raise NotImplementedError
 
     @abstractmethod
@@ -72,6 +72,67 @@ class AFDConnectorBase(ABC):
         metadata: AFDConnectorMetadata,
     ) -> None:
         raise NotImplementedError
+
+    def update_state_from_dp_metadata(
+        self,
+        dp_metadata_list: dict[int, Any],
+        *,
+        is_graph_capturing: bool = False,
+        is_warmup: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
+    def send_dp_metadata_list(
+        self,
+        dp_metadata_list: dict[int, Any],
+        *,
+        is_graph_capturing: bool = False,
+        is_warmup: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
+    def recv_dp_metadata_list(
+        self,
+        timeout_ms: int | None = None,
+    ) -> tuple[dict[int, Any], bool, bool]:
+        raise NotImplementedError
+
+    def create_recv_metadata(self, **kwargs: Any) -> AFDConnectorMetadata:
+        dp_metadata_list = kwargs.get("dp_metadata_list") or {}
+        ubatch_idx = int(kwargs.get("ubatch_idx", 0))
+        layer_idx = int(kwargs.get("layer_idx", 0))
+        seq_lens = kwargs.get("seq_lens")
+        if seq_lens is None:
+            seq_lens = [_num_tokens_for_stage(dp_metadata_list, ubatch_idx)]
+        return AFDConnectorMetadata.create_ffn_metadata(
+            layer_idx=layer_idx,
+            stage_idx=ubatch_idx,
+            seq_lens=list(seq_lens),
+        )
+
+    def configure_metadata(
+        self,
+        metadata: AFDConnectorMetadata,
+        **kwargs: Any,
+    ) -> None:
+        del metadata, kwargs
+
+    def update_metadata(
+        self,
+        metadata: AFDConnectorMetadata,
+        recv_output: AFDRecvOutput,
+    ) -> None:
+        metadata.seq_lens = list(recv_output.metadata.seq_lens)
+
+
+def _num_tokens_for_stage(dp_metadata_list: dict[int, Any], stage_idx: int) -> int:
+    dp_metadata = dp_metadata_list.get(int(stage_idx))
+    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
+    if token_counts is None:
+        return 1
+    item = token_counts[0]
+    item_fn = getattr(item, "item", None)
+    return max(1, int(item_fn() if callable(item_fn) else item))
 
 
 __all__ = ["AFDConnectorBase"]
