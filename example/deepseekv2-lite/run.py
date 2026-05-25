@@ -76,7 +76,6 @@ def main() -> int:
             print(f"\n=== Completion response: request {request_idx} ===")
             print(json.dumps(response, ensure_ascii=False, indent=2))
 
-        assert_log_expectations(args, logs)
         return 0
     finally:
         terminate_processes(processes)
@@ -183,22 +182,6 @@ def parse_args() -> argparse.Namespace:
         "--use-decode-bench-connector",
         action="store_true",
         help="Pass a DecodeBenchConnector kv-transfer-config to Attention.",
-    )
-    parser.add_argument(
-        "--expect-ffn-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-ffn-ubatch-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-log-timeout",
-        type=float,
-        default=60,
-        help="Deprecated no-op kept for compatibility with existing scripts.",
     )
     parser.add_argument(
         "--common-vllm-arg",
@@ -379,11 +362,10 @@ def build_env(cuda_visible_devices: str, args: argparse.Namespace) -> dict[str, 
 
 
 def start_process(
-    name: str,
+    _name: str,
     command: list[str],
     env: dict[str, str],
 ) -> subprocess.Popen[str]:
-    del name
     return subprocess.Popen(
         command,
         cwd=REPO_ROOT,
@@ -497,14 +479,6 @@ def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
     if not completed_responses:
         raise RuntimeError("All completion requests failed")
     return completed_responses
-
-
-def assert_log_expectations(
-    args: argparse.Namespace,
-    logs: dict[str, list[str]],
-) -> None:
-    del args, logs
-    return
 
 
 def ensure_alive(process: subprocess.Popen[str], message: str) -> None:
