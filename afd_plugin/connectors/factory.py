@@ -63,6 +63,16 @@ AFDConnectorFactory.register_connector(
     "afd_plugin.connectors.p2p",
     "P2PAFDConnector",
 )
+AFDConnectorFactory.register_connector(
+    "npudummyconnector",
+    "afd_plugin.connectors.npu_dummy",
+    "NPUDummyAFDConnector",
+)
+AFDConnectorFactory.register_connector(
+    "camp2pconnector",
+    "afd_plugin.connectors.ascend.camp2p",
+    "CAMP2PAFDConnector",
+)
 
 
 __all__ = ["AFDConnectorFactory"]

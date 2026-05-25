@@ -13,7 +13,11 @@ AFD_ADDITIONAL_CONFIG_KEY: Final[str] = "afd"
 AFDRole = Literal["attention", "ffn"]
 
 SUPPORTED_AFD_ROLES: Final[tuple[str, ...]] = ("attention", "ffn")
-SUPPORTED_AFD_CONNECTORS: Final[tuple[str, ...]] = ("p2pconnector",)
+SUPPORTED_AFD_CONNECTORS: Final[tuple[str, ...]] = (
+    "p2pconnector",
+    "npudummyconnector",
+    "camp2pconnector",
+)
 
 _ALIASES: Final[dict[str, str]] = {
     "afd_connector": "connector",
