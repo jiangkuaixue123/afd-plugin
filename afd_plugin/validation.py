@@ -88,8 +88,8 @@ def assert_compatible_afd_stack(
             f"(got type {type(worker_cls_raw).__name__}){_ctx()}",
         )
     if worker_cls_raw.strip() == "auto":
-        expected_worker = (
-            expected_worker_qualname_override or expected_worker_qualname(config.role)
+        expected_worker = expected_worker_qualname_override or expected_worker_qualname(
+            config.role
         )
         raise ValueError(
             "parallel_config.worker_cls is still 'auto'; pass --worker-cls "
@@ -100,8 +100,8 @@ def assert_compatible_afd_stack(
         worker_cls_raw,
         role="parallel_config.worker_cls",
     )
-    expected_qualname = (
-        expected_worker_qualname_override or expected_worker_qualname(config.role)
+    expected_qualname = expected_worker_qualname_override or expected_worker_qualname(
+        config.role
     )
     expected_worker_cls = resolve_class_from_qualname(
         expected_qualname,

@@ -36,8 +36,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
     def __init__(self, vllm_config: object, device: object) -> None:
         if _NPUModelRunner_IMPORT_ERROR is not None:
             raise RuntimeError(
-                "AFDNPUAttentionModelRunner requires an importable "
-                "vLLM-Ascend runtime",
+                "AFDNPUAttentionModelRunner requires an importable vLLM-Ascend runtime",
             ) from _NPUModelRunner_IMPORT_ERROR
 
         afd_config = self.parse_config(vllm_config)
