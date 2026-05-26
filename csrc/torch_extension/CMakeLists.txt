@@ -40,7 +40,7 @@ if(ASCEND_HOME_PATH STREQUAL "")
 endif()
 
 set(AFD_PLUGIN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
-set(AFD_CANN_OPS_DIR "${AFD_PLUGIN_ROOT}/afd_plugin/_cann_ops_custom/vendors/vllm-ascend/op_api/lib")
+set(AFD_CANN_OPS_DIR "${AFD_PLUGIN_ROOT}/afd_plugin/_cann_ops_custom/vendors/afd-plugin/op_api/lib")
 
 pybind11_add_module(afd_plugin_ascend_C
   "${CMAKE_CURRENT_LIST_DIR}/torch_binding.cpp"
@@ -76,6 +76,6 @@ target_link_libraries(afd_plugin_ascend_C PRIVATE
   opapi)
 
 target_link_options(afd_plugin_ascend_C PRIVATE
-  "-Wl,-rpath,$ORIGIN:$ORIGIN/_cann_ops_custom/vendors/vllm-ascend/op_api/lib")
+  "-Wl,-rpath,$ORIGIN:$ORIGIN/_cann_ops_custom/vendors/afd-plugin/op_api/lib")
 
 install(TARGETS afd_plugin_ascend_C LIBRARY DESTINATION afd_plugin)

@@ -132,7 +132,7 @@ at::Tensor e2a(const at::Tensor &expand_x,
 
 }  // namespace afd_plugin
 
-TORCH_LIBRARY(_C_ascend, ops) {
+TORCH_LIBRARY(afd_ascend, ops) {
   ops.def("a2e(Tensor x, Tensor? expert_ids=None, Tensor? scales=None, "
           "int batch_size=0, int hidden_size=0, int topk=0, "
           "int expert_rank_size=0, int attention_rank_size=0, int rank=0, "

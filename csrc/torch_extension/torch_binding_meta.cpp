@@ -93,7 +93,7 @@ at::Tensor e2a_meta(const at::Tensor &expand_x,
 
 }  // namespace afd_plugin::meta
 
-TORCH_LIBRARY_IMPL(_C_ascend, Meta, ops) {
+TORCH_LIBRARY_IMPL(afd_ascend, Meta, ops) {
   ops.impl("a2e", &afd_plugin::meta::a2e_meta);
   ops.impl("e2a", &afd_plugin::meta::e2a_meta);
 }

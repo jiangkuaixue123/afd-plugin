@@ -16,21 +16,24 @@ from __future__ import annotations
 import os
 import sys
 
-import torch
-
 from afd_plugin.compat.ascend import ensure_afd_ascend_ops_loaded
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
 
 
 _SCRIPT_MODE = __name__ == "__main__"
 
 
-class _SkipInScript(RuntimeError):
+class _SkipInScriptError(RuntimeError):
     pass
 
 
 def _skip(reason: str) -> None:
     if _SCRIPT_MODE:
-        raise _SkipInScript(reason)
+        raise _SkipInScriptError(reason)
 
     import pytest
 
@@ -38,6 +41,8 @@ def _skip(reason: str) -> None:
 
 
 def _load_ops_or_skip() -> None:
+    if torch is None:
+        _skip("PyTorch is required for A2E/E2A custom op smoke tests")
     try:
         ensure_afd_ascend_ops_loaded()
     except RuntimeError as exc:
@@ -69,7 +74,7 @@ def test_a2e_e2a_meta_contracts() -> None:
         device="meta",
         dtype=torch.bfloat16,
     )
-    expert_a2e = torch.ops._C_ascend.a2e(
+    expert_a2e = torch.ops.afd_ascend.a2e(
         expert_x,
         None,
         None,
@@ -84,7 +89,12 @@ def test_a2e_e2a_meta_contracts() -> None:
         0,
     )
     assert len(expert_a2e) == 5
-    _assert_tensor_spec(expert_a2e[0], (batch_size, hidden_size), torch.bfloat16, "meta")
+    _assert_tensor_spec(
+        expert_a2e[0],
+        (batch_size, hidden_size),
+        torch.bfloat16,
+        "meta",
+    )
     _assert_tensor_spec(expert_a2e[1], (batch_size, topk), torch.int32, "meta")
     _assert_tensor_spec(expert_a2e[2], (batch_size, topk), torch.float32, "meta")
     _assert_tensor_spec(expert_a2e[3], (1,), torch.int32, "meta")
@@ -95,7 +105,7 @@ def test_a2e_e2a_meta_contracts() -> None:
         device="meta",
         dtype=torch.bfloat16,
     )
-    attention_a2e = torch.ops._C_ascend.a2e(
+    attention_a2e = torch.ops.afd_ascend.a2e(
         attention_x,
         None,
         None,
@@ -115,7 +125,7 @@ def test_a2e_e2a_meta_contracts() -> None:
     _assert_tensor_spec(attention_a2e[3], (1,), torch.int32, "meta")
     _assert_tensor_spec(attention_a2e[4], (1,), torch.bool, "meta")
 
-    expert_e2a = torch.ops._C_ascend.e2a(
+    expert_e2a = torch.ops.afd_ascend.e2a(
         expert_a2e[0],
         expert_a2e[3],
         batch_size,
@@ -129,7 +139,7 @@ def test_a2e_e2a_meta_contracts() -> None:
     )
     _assert_tensor_spec(expert_e2a, (1, 1), torch.bfloat16, "meta")
 
-    attention_e2a = torch.ops._C_ascend.e2a(
+    attention_e2a = torch.ops.afd_ascend.e2a(
         attention_x,
         attention_a2e[3],
         batch_size,
@@ -141,7 +151,12 @@ def test_a2e_e2a_meta_contracts() -> None:
         "meta_group",
         1,
     )
-    _assert_tensor_spec(attention_e2a, (batch_size, hidden_size), torch.bfloat16, "meta")
+    _assert_tensor_spec(
+        attention_e2a,
+        (batch_size, hidden_size),
+        torch.bfloat16,
+        "meta",
+    )
 
 
 def _get_default_hccl_group_name(rank: int) -> str:
@@ -159,14 +174,16 @@ def test_a2e_e2a_runtime_roundtrip() -> None:
     _load_ops_or_skip()
 
     try:
-        import torch_npu  # noqa: F401
         import torch.distributed as dist
+        import torch_npu  # noqa: F401
     except Exception as exc:
         raise AssertionError("torch_npu and torch.distributed are required") from exc
 
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if world_size != 2:
-        raise AssertionError("runtime A2E/E2A smoke requires torchrun with exactly 2 ranks")
+        raise AssertionError(
+            "runtime A2E/E2A smoke requires torchrun with exactly 2 ranks",
+        )
 
     local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
     rank = int(os.environ["RANK"])
@@ -193,7 +210,7 @@ def test_a2e_e2a_runtime_roundtrip() -> None:
     x = expected if rank == 1 else torch.zeros_like(expected)
 
     dist.barrier()
-    a2e_out = torch.ops._C_ascend.a2e(
+    a2e_out = torch.ops.afd_ascend.a2e(
         x,
         None,
         None,
@@ -221,7 +238,7 @@ def test_a2e_e2a_runtime_roundtrip() -> None:
 
     e2a_input = expand_x if rank == 0 else torch.empty_like(expected)
     dist.barrier()
-    x_roundtrip = torch.ops._C_ascend.e2a(
+    x_roundtrip = torch.ops.afd_ascend.e2a(
         e2a_input,
         atten_batch_size,
         batch_size,
@@ -254,7 +271,7 @@ def _run_as_script() -> int:
     for test_func in (test_a2e_e2a_meta_contracts, test_a2e_e2a_runtime_roundtrip):
         try:
             test_func()
-        except _SkipInScript as exc:
+        except _SkipInScriptError as exc:
             skipped.append((test_func.__name__, str(exc)))
         except BaseException as exc:  # noqa: BLE001
             failures.append((test_func.__name__, exc))

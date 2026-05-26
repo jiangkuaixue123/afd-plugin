@@ -20,6 +20,7 @@
 #include <ATen/Tensor.h>
 #include <acl/acl_base.h>
 #include <c10/util/Exception.h>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <functional>
 #include <type_traits>
@@ -129,7 +130,13 @@ bool IsOpInputBaseFormat(const at::Tensor &tensor)
 
 inline const char *GetOpApiLibName(void) { return "libopapi.so"; }
 
-inline const char *GetCustOpApiLibName(void) { return "libcust_opapi.so"; }
+inline const char *GetCustOpApiLibName(void) {
+  const char *lib_path = std::getenv("AFD_CUST_OPAPI_LIB_PATH");
+  if (lib_path == nullptr || lib_path[0] == '\0') {
+    return nullptr;
+  }
+  return lib_path;
+}
 
 inline void *GetOpApiFuncAddrInLib(void *handler, const char *libName,
                                    const char *apiName) {
@@ -138,15 +145,19 @@ inline void *GetOpApiFuncAddrInLib(void *handler, const char *libName,
 }
 
 inline void *GetOpApiLibHandler(const char *libName) {
+  if (libName == nullptr || libName[0] == '\0') {
+    return nullptr;
+  }
   auto handler = dlopen(libName, RTLD_LAZY);
   return handler;
 }
 
 inline void *GetOpApiFuncAddr(const char *apiName) {
-  static auto custOpApiHandler = GetOpApiLibHandler(GetCustOpApiLibName());
+  const char *custOpApiLibName = GetCustOpApiLibName();
+  static auto custOpApiHandler = GetOpApiLibHandler(custOpApiLibName);
   if (custOpApiHandler != nullptr) {
     auto funcAddr =
-        GetOpApiFuncAddrInLib(custOpApiHandler, GetCustOpApiLibName(), apiName);
+        GetOpApiFuncAddrInLib(custOpApiHandler, custOpApiLibName, apiName);
     if (funcAddr != nullptr) {
       return funcAddr;
     }
@@ -534,7 +545,9 @@ typedef void (*ReleaseHugeMem)(void *, bool);
     TORCH_CHECK(                                                              \
         getWorkspaceSizeFuncAddr != nullptr && opApiFuncAddr != nullptr,      \
         #aclnn_api, " or ", #aclnn_api "GetWorkspaceSize", " not in ",        \
-        GetOpApiLibName(), ", or ", GetOpApiLibName(), "not found.");         \
+        GetCustOpApiLibName() == nullptr ? "<unset AFD_CUST_OPAPI_LIB_PATH>"  \
+                                         : GetCustOpApiLibName(),             \
+        ", or ", GetOpApiLibName(), " not found.");                          \
     auto acl_stream = c10_npu::getCurrentNPUStream().stream(false);           \
     uint64_t workspace_size = 0;                                              \
     uint64_t *workspace_size_addr = &workspace_size;                          \
