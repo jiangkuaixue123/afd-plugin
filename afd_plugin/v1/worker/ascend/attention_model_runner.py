@@ -116,7 +116,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
     ) -> None:
         if self._afd_pending_metadata is None:
             self._afd_pending_metadata = self._build_afd_metadata(
-                getattr(forward_context, "ubatch_slices", None),
+                forward_context.ubatch_slices,
                 _forward_context_num_tokens(forward_context, self.vllm_config),
             )
 
@@ -124,8 +124,8 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             forward_context,
             self._afd_pending_metadata,
         )
-        dp_metadata = getattr(forward_context, "dp_metadata", None)
-        ubatch_slices = getattr(forward_context, "ubatch_slices", None)
+        dp_metadata = forward_context.dp_metadata
+        ubatch_slices = forward_context.ubatch_slices
         padded_graph_tokens = _full_cudagraph_padded_tokens(forward_context)
         if padded_graph_tokens is not None and not ubatch_slices:
             dp_metadata = self._build_capture_dp_metadata(padded_graph_tokens)
@@ -136,8 +136,8 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             raise RuntimeError("AFD NPU Attention does not support ubatching yet")
         dp_metadata = self._ensure_dp_metadata(dp_metadata)
         dp_metadata_list = {0: dp_metadata}
-        is_warmup = bool(getattr(self, "_is_warmup", False))
-        is_graph_capturing = bool(getattr(self, "_afd_is_graph_capturing", False))
+        is_warmup = bool(self._is_warmup)
+        is_graph_capturing = bool(self._afd_is_graph_capturing)
         self.afd_connector.update_state_from_dp_metadata(
             dp_metadata_list,
             is_graph_capturing=is_graph_capturing,
@@ -183,15 +183,15 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
 def _make_uniform_dp_metadata(dp_size: int, num_tokens: int) -> AFDDPMetadata:
     try:
         import torch
-
+    except ModuleNotFoundError:
+        num_tokens_across_dp_cpu = [int(num_tokens)] * int(dp_size)
+    else:
         num_tokens_across_dp_cpu = torch.full(
             (int(dp_size),),
             int(num_tokens),
             dtype=torch.int32,
             device="cpu",
         )
-    except ModuleNotFoundError:
-        num_tokens_across_dp_cpu = [int(num_tokens)] * int(dp_size)
     return AFDDPMetadata(num_tokens_across_dp_cpu=num_tokens_across_dp_cpu)
 
 

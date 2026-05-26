@@ -40,7 +40,7 @@ def resolve_class_from_qualname(qualname: str, *, role: str = "class") -> type[A
         )
     module_name, obj_name = normalized.rsplit(".", 1)
     module = importlib.import_module(module_name)
-    obj = getattr(module, obj_name)
+    obj = vars(module)[obj_name]
     if not isinstance(obj, type):
         raise TypeError(
             f"{role} resolved to {type(obj).__name__}, expected a class",
@@ -77,11 +77,9 @@ def assert_compatible_afd_stack(
     if require_enabled and not config.enabled:
         raise ValueError(f"AFD is not enabled in additional_config['afd']{_ctx()}")
 
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    if parallel_config is None:
-        raise ValueError(f"missing parallel_config for AFD runtime stack{_ctx()}")
+    parallel_config = vllm_config.parallel_config
 
-    worker_cls_raw = getattr(parallel_config, "worker_cls", "")
+    worker_cls_raw = parallel_config.worker_cls
     if not isinstance(worker_cls_raw, str):
         raise ValueError(
             "parallel_config.worker_cls must be a qualname string "

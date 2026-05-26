@@ -22,7 +22,7 @@ def __getattr__(name: str):
     }:
         from afd_plugin.v1 import worker
 
-        return getattr(worker, name)
+        return vars(worker)[name]
     if name == "assert_compatible_afd_stack":
         from afd_plugin.validation import assert_compatible_afd_stack
 

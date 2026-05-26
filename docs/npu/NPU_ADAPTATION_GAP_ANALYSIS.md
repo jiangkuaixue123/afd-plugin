@@ -350,15 +350,23 @@ runtime/control-plane 骨架：
   `afd_plugin._C_ascend` 的 opt-in CMake 构建路径已经存在；A2E/E2A meta contract
   和两 rank runtime smoke 测试已经有 Ascend-gated 测试入口。
 
-仍未完成的关键点也很明确：
+截至 NPU Phase 4，已经完成的关键点：
 
-- `camp2pconnector` 目前只是 import-safe placeholder，真实 HCCL/CAM/A2E/E2A 通信尚未
-  接入。
+- `camp2pconnector` 已从 import-safe placeholder 替换为真实插件实现，保留原始
+  vLLM-Ascend `CAMP2PAFDConnector` 的主要控制流：HCCL/GLOO process group、
+  FFN-rank-first 的 rank mapping、DP metadata 收发、A2E/E2A hidden-state 传输入口、
+  `CAMP2PAFDConnectorMetadata` 风格 payload，以及缺少 torch-npu/custom op 时的
+  lazy fail-fast。
 - Ascend custom op 隔离已经落地到 package-owned extension：C++ binding / 测试注册和
   调用 `torch.ops.afd_ascend.*`，loader 查找 `_cann_ops_custom/vendors/afd-plugin`，
   并通过 `AFD_CUST_OPAPI_LIB_PATH` 指向包内 `libcust_opapi.so`。
+- 真实 NPU 1A1F 单流 eager 闭环已经验证通过：Attention 侧和 FFN 侧均使用
+  `camp2pconnector`，完成 Attention -> FFN -> Attention 的基础通信路径。
+
+仍未完成的关键点也很明确：
+
 - 尚未做 NPU model wrapper / Ascend fused MoE / token dispatcher 的真实迁移，也没有
-  NPU 端到端 serving 测试。
+  完整 NPU 端到端 serving 测试矩阵。
 - ACL graph、ubatching/DBO、通信多流、`compute_gate_on_attention`、量化和权重加载
   裁剪仍是后续阶段能力。
 
@@ -367,55 +375,74 @@ runtime/control-plane 骨架：
 下面阶段按当前实现进展重排。状态用于指导后续开发优先级，不表示所有远程 NPU
 环境都已经验证通过。
 
-1. **NPU Phase 0：兼容性盘点与边界决策，基本完成**
+1. **NPU Phase 0：兼容性盘点与边界决策，已完成开发**
    已明确 `0.13.0` NPU AFD 参考实现和目标 vLLM `0.19.1` /
    vLLM-Ascend `0.19.1rc1` 的接口差异；已决策配置入口、connector 范围、
    patch 边界、CLI 启动方式、暂不支持能力和 custom op 包归属。后续只在发现
    vLLM-Ascend `v0.19.1rc1` 新约束时增量更新。
 
-2. **NPU Phase 1：NPU runtime dummy 闭环，已实现本地骨架**
+2. **NPU Phase 1：NPU runtime dummy 闭环，已完成开发**
    已实现 `npudummyconnector`、NPU Attention/FFN worker/model runner class path、
    role validation、forward context metadata mirror、DP metadata 通道、FFN daemon
-   loop 和本地 passthrough/最小 FFN step。下一步只需要在真实 Ascend 环境补一个
-   `vllm serve --worker-cls ...` 的 smoke 记录。
+   loop 和本地 passthrough/最小 FFN step。真实 Ascend 环境的
+   `vllm serve --worker-cls ...` smoke 记录归入后续验证阶段。
 
-3. **NPU Phase 2：connector contract 归一，控制面基本完成**
+3. **NPU Phase 2：connector contract 归一，已完成开发**
    `AFDRecvOutput`、`AFDDPMetadata`、metadata 构造/更新、DP metadata 收发和
-   connector state update 已经进入 shared contract，GPU P2P 和 NPU dummy 已开始使用
-   该形态。剩余工作是随 `camp2pconnector` 迁移继续补齐真实 payload 字段语义；
+   connector state update 已经进入 shared contract，GPU P2P、NPU dummy 和
+   `camp2pconnector` 已开始使用该形态。真实 CAMP2P 所需的 handle /
+   `atten_batch_size` / CAM payload 字段已进入统一返回结构；
    `compute_moe` / `select_experts` 当前仍不进入统一 contract。
 
-4. **NPU Phase 3A：Ascend custom op 隔离，已完成本地代码落地**
-   在真实 `camp2pconnector` 接入前，现有 A2E/E2A extension 已从临时兼容形态收敛到
+4. **NPU Phase 3A：Ascend custom op 隔离，已完成开发**
+   现有 A2E/E2A extension 已从临时兼容形态收敛到
    插件隔离形态：package-owned extension 保持 `afd_plugin._C_ascend`；dispatcher
    namespace 为 `torch.ops.afd_ascend.a2e/e2a`；CANN vendor 目录为
    `afd_plugin/_cann_ops_custom/vendors/afd-plugin/...`；加载 `libcust_opapi.so` 时使用
    `AFD_CUST_OPAPI_LIB_PATH` 指向明确包内路径；本地测试覆盖 vLLM-Ascend
    `_C_ascend` namespace 已存在时 AFD namespace 仍可独立解析。
 
-5. **NPU Phase 3B：`camp2pconnector` 真实接入，未开始**
-   将 `camp2pconnector` 从 placeholder 替换为真实实现，接入 HCCL/GLOO process
-   group、rank mapping、DP metadata 收发、A2E/E2A hidden-state 传输和
-   `AFDRecvOutput` payload。缺少 torch-npu/custom op 时必须干净 skip 或 fail fast。
+5. **NPU Phase 3B：`camp2pconnector` 真实接入，已完成开发**
+   `camp2pconnector` 已从 placeholder 替换为真实实现，并尽量复用原始
+   vLLM-Ascend 实现的控制流：HCCL/GLOO process group、rank mapping、DP metadata
+   收发、A2E/E2A hidden-state 传输、`CAMP2PAFDConnectorMetadata` 风格 payload 和
+   `AFDRecvOutput` 返回结构。缺少 torch-npu/custom op 时保持 lazy fail-fast。
 
-6. **NPU Phase 4：真实 NPU Attention/FFN 闭环，待 Phase 3B 后推进**
-   用真实 `camp2pconnector` 跑通 Attention -> FFN -> Attention 的单流 eager 闭环，
-   先限定 `compute_gate_on_attention=false`、`quant_mode=0`、无 ubatching、无 ACL graph、
-   无通信多流。此阶段应新增 Ascend-gated 多进程 connector/runtime 测试。
+6. **NPU Phase 4：真实 NPU Attention/FFN 闭环，已完成验证**
+   已用真实 `camp2pconnector` 跑通 1A1F 的 Attention -> FFN -> Attention 单流 eager
+   闭环，限定条件为 `compute_gate_on_attention=false`、`quant_mode=0`、无 ubatching、
+   无 ACL graph、无通信多流。后续可把该验证固化为 Ascend-gated 多进程
+   connector/runtime 测试。
 
-7. **NPU Phase 5：模型/MoE 语义，待真实 connector 稳定**
+7. **NPU Phase 5：`torch.compile` 与 ACL graph，待推进**
+   在 1A1F 单流 eager 闭环已经可跑通的基础上，优先支持 vLLM-Ascend 的
+   `torch.compile` / ACL graph 路径。实现时优先参考原始 NPU AFD 实现，重点复用
+   vLLM-Ascend 已有 graph dispatch、capture/replay 状态机、custom op 注册路径和
+   Ascend forward context 语义；connector 通信副作用仍需避免被错误 capture。
+   该阶段应先覆盖单流 `camp2pconnector`，并保留对通信多流、量化和
+   `compute_gate_on_attention` 的 fail fast。
+
+8. **NPU Phase 6：ubatch/DBO，待 Phase 5 后推进**
+   在 ACL graph / compile 语义稳定后支持 ubatch。重点对齐 vLLM-Ascend
+   `npu_ubatch_wrapper.py`、原始 AFD metadata list 语义和每个 ubatch 独立
+   `AFDMetadata` / DP metadata 的传递规则，明确 `afd_stage_idx`、token slice、
+   request slice、padded/unpadded token lens 与 FFN daemon loop 的关系。第一版仍以
+   单流 `camp2pconnector` 为目标，不同时引入通信多流。
+
+9. **NPU Phase 7：模型/MoE 语义，顺延**
    迁移不依赖 `compute_gate_on_attention` 的 Ascend fused MoE、token dispatcher 和
    plugin-owned NPU model wrapper。`compute_gate_on_attention`、权重加载裁剪、量化路径
-   继续保持 fail fast，等单流基础语义稳定后再单独设计。
+   继续保持 fail fast，等 graph 和 ubatch 基础语义稳定后再单独设计。
 
-8. **NPU Phase 6：NPU e2e 与运维验证，待模型语义可用**
-   增加真实 Ascend serving/e2e runbook 和远程验证流程，覆盖 1A1F smoke、错误配置
-   fail-fast、custom op loader/coexistence、connector 多进程路径和基础 profiling。
+10. **NPU Phase 8：NPU e2e 与运维验证，待模型语义可用**
+    增加真实 Ascend serving/e2e runbook 和远程验证流程，覆盖 1A1F smoke、错误配置
+    fail-fast、custom op loader/coexistence、connector 多进程路径、ACL graph、
+    ubatch 和基础 profiling。
 
-9. **NPU Phase 7：ACL graph、ubatching/DBO、通信多流与性能硬化，后置**
-   在 connector、模型和 e2e 稳定后，再处理 ACL graph capture/replay、ubatching/DBO、
-   Attention/FFN 通信多流、量化和权重加载裁剪。这些能力不要和 `camp2pconnector`
-   首次接入混在同一阶段。
+11. **NPU Phase 9：通信多流、量化、权重裁剪与性能硬化，后置**
+    在 connector、graph、ubatch、模型和 e2e 稳定后，再处理 Attention/FFN 通信多流、
+    `compute_gate_on_attention`、量化、权重加载裁剪和 profiling/performance hardening。
+    这些能力不要和 `camp2pconnector`、ACL graph 或 ubatch 的首次接入混在同一阶段。
 
 ## 待决策问题
 
@@ -427,4 +454,5 @@ runtime/control-plane 骨架：
   `additional_kwargs["afd_metadata"]`。
 - DeepSeek/Step3/NPU MoE 逻辑由插件统一维护，还是迁入
   `afd_plugin.compat.ascend` 中受控 patch？
-- NPU e2e 需要明确可用的远程 Ascend 环境和验证流程；现有 L20X 远程流程只覆盖 GPU。
+- NPU e2e 需要把已跑通的 1A1F 单流 `camp2pconnector` 验证固化为可重复 runbook /
+  Ascend-gated 测试；现有 L20X 远程流程只覆盖 GPU。

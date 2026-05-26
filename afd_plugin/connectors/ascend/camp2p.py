@@ -97,7 +97,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         self.dp_metadata_list: dict[int, Any] = {}
         self.is_graph_capturing = False
         self.is_warmup = False
-        self.scheduler_config = getattr(vllm_config, "scheduler_config", None)
+        self.scheduler_config = vllm_config.scheduler_config
         self.max_num_reqs = _resolve_max_num_reqs(vllm_config)
         self.afd_pg: Any | None = None
         self.p2p_pg: Any | None = None
@@ -134,7 +134,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         if self._initialized:
             return
         ensure_afd_ascend_ops_loaded()
-        _ensure_torch_npu_available()
+        import torch_npu  # noqa: F401
 
         self.afd_pg = init_afd_process_group(
             backend="hccl",
@@ -171,12 +171,14 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         self._initialized = True
 
     def close(self) -> None:
-        for group_name in ("p2p_pg", "ffn_pg", "afd_pg"):
-            group = getattr(self, group_name, None)
-            shutdown = getattr(group, "shutdown", None)
-            if callable(shutdown):
-                shutdown()
-            setattr(self, group_name, None)
+        import torch.distributed as dist
+
+        for group in (self.p2p_pg, self.ffn_pg, self.afd_pg):
+            if group is not None:
+                dist.destroy_process_group(group)
+        self.p2p_pg = None
+        self.ffn_pg = None
+        self.afd_pg = None
         self._initialized = False
 
     def update_state_from_dp_metadata(
@@ -261,11 +263,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         recv_output: AFDRecvOutput,
     ) -> None:
         connector_data = _ensure_connector_data(metadata)
-        connector_data.atten_batch_size = getattr(
-            recv_output,
-            "atten_batch_size",
-            None,
-        )
+        connector_data.atten_batch_size = recv_output.atten_batch_size
         connector_data.x_active_mask = recv_output.x_active_mask
         connector_data.handle = [
             recv_output.topk_ids,
@@ -509,7 +507,7 @@ def build_camp2p_topology(
 
 
 def _send_object(obj: Any, *, dst: int, group: Any) -> None:
-    torch = _torch_module()
+    torch = _torch()
     object_bytes = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
     object_tensor = torch.frombuffer(bytearray(object_bytes), dtype=torch.uint8)
     size_tensor = torch.tensor([object_tensor.numel()], dtype=torch.long, device="cpu")
@@ -518,7 +516,7 @@ def _send_object(obj: Any, *, dst: int, group: Any) -> None:
 
 
 def _recv_object(*, src: int, group: Any) -> Any:
-    torch = _torch_module()
+    torch = _torch()
     size_tensor = torch.empty(1, dtype=torch.long, device="cpu")
     rank_size = torch.distributed.recv(size_tensor, src=src, group=group)
     object_tensor = torch.empty(
@@ -542,9 +540,9 @@ def _num_tokens_for_ffn_rank(
     fallback: int,
 ) -> int:
     dp_metadata = dp_metadata_list.get(int(stage_idx))
-    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
-    if token_counts is None:
+    if dp_metadata is None:
         return max(1, int(fallback))
+    token_counts = dp_metadata.num_tokens_across_dp_cpu
     counts = _to_int_list(token_counts)
     if len(counts) < attention_size:
         return max(1, int(fallback))
@@ -573,31 +571,34 @@ def _resolve_hidden_size(vllm_config: object) -> int:
 
 
 def _resolve_max_num_reqs(vllm_config: object) -> int:
-    scheduler_config = getattr(vllm_config, "scheduler_config", None)
-    if scheduler_config is None:
-        return 1
-    decode_max_num_seqs = int(getattr(scheduler_config, "decode_max_num_seqs", 0) or 0)
-    return max(int(getattr(scheduler_config, "max_num_seqs", 1)), decode_max_num_seqs)
+    scheduler_config = vllm_config.scheduler_config
+    decode_max_num_seqs = int(scheduler_config.decode_max_num_seqs)
+    max_num_seqs = int(scheduler_config.max_num_seqs)
+    return max(max_num_seqs, decode_max_num_seqs)
 
 
 def _resolve_int_attr(vllm_config: object, name: str, *, default: int) -> int:
-    model_config = getattr(vllm_config, "model_config", None)
-    hf_config = getattr(model_config, "hf_config", None)
-    text_config = getattr(hf_config, "text_config", None)
-    for source in (hf_config, text_config):
-        if source is not None and hasattr(source, name):
-            return int(getattr(source, name))
-    return int(default)
+    del default
+    model_config = vllm_config.model_config
+    hf_config = model_config.hf_config
+    if name == "hidden_size":
+        return int(hf_config.hidden_size)
+    if name == "num_experts_per_tok":
+        return int(hf_config.num_experts_per_tok)
+    if name == "n_routed_experts":
+        return int(hf_config.n_routed_experts)
+    if name == "n_shared_experts":
+        return int(hf_config.n_shared_experts)
+    raise KeyError(name)
 
 
 def _to_int_list(value: Any) -> list[int]:
-    tolist = getattr(value, "tolist", None)
-    if callable(tolist):
-        value = tolist()
-    elif hasattr(value, "item"):
-        value = [value.item()]
-    elif isinstance(value, (int, float)):
+    if isinstance(value, (int, float)):
         value = [value]
+    elif isinstance(value, (list, tuple)):
+        pass
+    else:
+        value = value.tolist()
     return [int(item) for item in value]
 
 
@@ -611,54 +612,46 @@ def _ensure_connector_data(
 
 
 def _set_forward_context_connector_data(data: CAMP2PAFDConnectorMetadata) -> None:
-    try:
-        from vllm.forward_context import get_forward_context
+    from vllm.forward_context import get_forward_context
 
-        get_forward_context().cam_afdconnector_data = data
-    except Exception:
-        return
+    get_forward_context().cam_afdconnector_data = data
 
 
 def _get_forward_context_connector_data() -> CAMP2PAFDConnectorMetadata | None:
-    try:
-        from vllm.forward_context import get_forward_context
+    from vllm.forward_context import get_forward_context
 
-        data = getattr(get_forward_context(), "cam_afdconnector_data", None)
-        return data if isinstance(data, CAMP2PAFDConnectorMetadata) else None
-    except Exception:
-        return None
+    data = get_forward_context().cam_afdconnector_data
+    if not isinstance(data, CAMP2PAFDConnectorMetadata):
+        raise TypeError("forward_context.cam_afdconnector_data has wrong type")
+    return data
 
 
 def _empty_npu_tensor(*, dtype_name: str) -> Any:
-    torch = _torch_module()
-    dtype = getattr(torch, dtype_name)
+    torch = _torch()
+    dtype = {
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+        "int32": torch.int32,
+    }[dtype_name]
     return torch.tensor([], dtype=dtype, device="npu")
 
 
 def _afd_ascend_ops() -> Any:
     ensure_afd_ascend_ops_loaded()
-    return _torch_module().ops.afd_ascend
-
-
-def _torch_module() -> Any:
-    try:
-        import torch
-    except Exception as exc:
-        raise RuntimeError("CAMP2P requires PyTorch at runtime") from exc
-    return torch
-
-
-def _ensure_torch_npu_available() -> None:
-    try:
-        import torch_npu  # noqa: F401
-    except Exception as exc:
-        raise RuntimeError("CAMP2P requires torch-npu at runtime") from exc
+    torch = _torch()
+    return torch.ops.afd_ascend
 
 
 def _hccl_comm_name(group: Any, rank: int) -> str:
-    torch = _torch_module()
+    torch = _torch()
     backend = group._get_backend(torch.device("npu"))
     return str(backend.get_hccl_comm_name(int(rank)))
+
+
+def _torch() -> Any:
+    import torch
+
+    return torch
 
 
 __all__ = [

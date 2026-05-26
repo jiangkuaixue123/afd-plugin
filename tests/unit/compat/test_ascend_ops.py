@@ -59,21 +59,14 @@ def test_ascend_ops_loader_sets_explicit_cust_opapi_path(tmp_path, monkeypatch):
 
 def test_ascend_ops_namespace_check_allows_vllm_ascend_coexistence():
     class _Namespace:
-        def __init__(self, names):
-            self._names = set(names)
-
-        def __getattr__(self, name):
-            if name not in self._names:
-                raise AttributeError(name)
-            return object()
+        a2e = object()
+        e2a = object()
 
     class _Ops:
-        _C_ascend = _Namespace({"a2e", "e2a"})
-        afd_ascend = _Namespace({"a2e", "e2a"})
+        _C_ascend = _Namespace()
+        afd_ascend = _Namespace()
 
     class _Torch:
         ops = _Ops()
 
-    assert ops._has_torch_op(_Torch, "_C_ascend", "a2e")
-    assert ops._has_torch_op(_Torch, "afd_ascend", "a2e")
-    assert ops._has_torch_op(_Torch, "afd_ascend", "e2a")
+    ops._assert_afd_namespace_registered(_Torch)

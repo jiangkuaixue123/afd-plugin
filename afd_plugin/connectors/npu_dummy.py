@@ -178,9 +178,9 @@ class NPUDummyAFDConnector(AFDConnectorBase):
         metadata: AFDConnectorMetadata,
         recv_output: Any,
     ) -> None:
-        payload_metadata = getattr(recv_output, "metadata", None)
+        payload_metadata = recv_output.metadata
         if payload_metadata is not None:
-            metadata.seq_lens = list(getattr(payload_metadata, "seq_lens", []))
+            metadata.seq_lens = list(payload_metadata.seq_lens)
 
     @staticmethod
     def _get_stage_item(
@@ -220,12 +220,13 @@ def _timeout_seconds(timeout_ms: int | None) -> float | None:
 
 def _num_tokens_for_stage(dp_metadata_list: dict[int, Any], stage_idx: int) -> int:
     dp_metadata = dp_metadata_list.get(int(stage_idx))
-    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
-    if token_counts is None:
+    if dp_metadata is None:
         return 1
+    token_counts = dp_metadata.num_tokens_across_dp_cpu
     item = token_counts[0]
-    item_fn = getattr(item, "item", None)
-    return max(1, int(item_fn() if callable(item_fn) else item))
+    if not isinstance(item, (int, float)):
+        item = item.item()
+    return max(1, int(item))
 
 
 __all__ = ["AFDRecvOutput", "NPUDummyAFDConnector"]

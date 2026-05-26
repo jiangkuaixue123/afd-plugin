@@ -65,12 +65,18 @@ class _FakeFFNConnector:
         self.updates.append((dict(dp_metadata_list), kwargs))
 
     def recv_attn_output(self, metadata=None, ubatch_idx=None):
-        del metadata
         for item in tuple(self.attn_outputs):
             if item[1].stage_idx == ubatch_idx:
                 self.attn_outputs.remove(item)
                 return AFDRecvOutput(hidden_states=item[0], metadata=item[1])
         raise IndexError(ubatch_idx)
+
+    def create_recv_metadata(self, **kwargs):
+        return AFDConnectorMetadata.create_ffn_metadata(
+            layer_idx=kwargs["layer_idx"],
+            stage_idx=kwargs["ubatch_idx"],
+            seq_lens=[1],
+        )
 
     def send_ffn_output(self, ffn_output, metadata, **kwargs):
         self.ffn_outputs.append((ffn_output, metadata, kwargs))
@@ -83,7 +89,8 @@ class _FakeFFNConnector:
 
 
 class _FakeModel:
-    def compute_ffn_output(self, hidden_states, layer_idx):
+    def compute_ffn_output(self, hidden_states, layer_idx, **kwargs):
+        del kwargs
         return f"npu-ffn({hidden_states}, layer={layer_idx})"
 
 
@@ -153,7 +160,7 @@ def test_npu_attention_runner_builds_dp_fallback():
     dp_metadata = runner._ensure_dp_metadata(None)
 
     tokens = dp_metadata.num_tokens_across_dp_cpu
-    if hasattr(tokens, "tolist"):
+    if not isinstance(tokens, list):
         tokens = tokens.tolist()
     assert tokens == [7]
 
@@ -164,6 +171,7 @@ def test_npu_ffn_runner_executes_eager_ffn_step():
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
     runner.num_layers = 1
+    runner.max_num_tokens = 1
     metadata = AFDConnectorMetadata.create_attention_metadata(
         layer_idx=0,
         stage_idx=0,
@@ -184,12 +192,13 @@ def test_npu_ffn_runner_executes_eager_ffn_step():
     ]
 
 
-def test_npu_ffn_runner_passthrough_without_compute_hook():
+def test_npu_ffn_runner_requires_compute_hook():
     runner = object.__new__(AFDNPUFFNModelRunner)
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = SimpleNamespace()
     runner.num_layers = 1
+    runner.max_num_tokens = 1
     metadata = AFDConnectorMetadata.create_attention_metadata(
         layer_idx=0,
         stage_idx=0,
@@ -197,9 +206,8 @@ def test_npu_ffn_runner_passthrough_without_compute_hook():
     )
     runner.connector.attn_outputs.append(("hidden", metadata))
 
-    runner.execute_ffn_step(dp_metadata_list={0: _FakeDPMetadata([1])})
-
-    assert runner.connector.ffn_outputs[0][0] == "hidden"
+    with pytest.raises(AttributeError, match="compute_ffn_output"):
+        runner.execute_ffn_step(dp_metadata_list={0: _FakeDPMetadata([1])})
 
 
 def test_npu_ffn_worker_scheduler_execute_model_fails_fast():
