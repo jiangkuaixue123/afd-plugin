@@ -262,23 +262,6 @@ endfunction()
 function(add_ops_src_copy)
     cmake_parse_arguments(SRC_COPY "" "TARGET_NAME;SRC;DST;BE_RELIED;COMPUTE_UNIT" "" ${ARGN})
 
-    set(OPS_UTILS_INC_KERNEL_TARGET ops_utils_inc_kernel_${SRC_COPY_COMPUTE_UNIT})
-    file(GLOB OPS_UTILS_INC_KERNEL_FILES "${OPS_ADV_UTILS_KERNEL_INC}/*.*")
-    if (OPS_UTILS_INC_KERNEL_FILES)
-        if (NOT TARGET ${OPS_UTILS_INC_KERNEL_TARGET})
-            get_filename_component(_ROOT_OPS_SRC_DIR    "${SRC_COPY_DST}" DIRECTORY)
-            set(OPS_UTILS_INC_KERNEL_DIR ${_ROOT_OPS_SRC_DIR}/ascendc/common)
-            add_custom_command(OUTPUT ${OPS_UTILS_INC_KERNEL_DIR}
-                    COMMAND mkdir -p ${OPS_UTILS_INC_KERNEL_DIR}
-                    COMMAND cp -rf ${OPS_ADV_UTILS_KERNEL_INC}/*.* ${OPS_UTILS_INC_KERNEL_DIR}
-            )
-
-            add_custom_target(${OPS_UTILS_INC_KERNEL_TARGET}
-                    DEPENDS ${OPS_UTILS_INC_KERNEL_DIR}
-            )
-        endif ()
-    endif ()
-
     if (NOT TARGET ${SRC_COPY_TARGET_NAME})
         set(_BUILD_FLAG ${SRC_COPY_DST}/${SRC_COPY_TARGET_NAME}.done)
         add_custom_command(OUTPUT ${_BUILD_FLAG}
@@ -290,10 +273,6 @@ function(add_ops_src_copy)
         add_custom_target(${SRC_COPY_TARGET_NAME}
                 DEPENDS ${_BUILD_FLAG}
         )
-    endif ()
-
-    if (TARGET ${OPS_UTILS_INC_KERNEL_TARGET})
-        add_dependencies(${SRC_COPY_TARGET_NAME} ${OPS_UTILS_INC_KERNEL_TARGET})
     endif ()
 
     if (DEFINED SRC_COPY_BE_RELIED)

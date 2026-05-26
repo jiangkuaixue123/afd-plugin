@@ -47,7 +47,6 @@ set(OP_DEBUG_CONFIG               "false"                         CACHE   STRING
 #   Source tree related paths
 get_filename_component(OPS_ADV_DIR                  "${CMAKE_CURRENT_SOURCE_DIR}"           REALPATH)
 get_filename_component(OPS_ADV_CMAKE_DIR            "${OPS_ADV_DIR}/cmake"                  REALPATH)
-get_filename_component(OPS_ADV_UTILS_KERNEL_INC     "${OPS_ADV_DIR}/utils/inc/kernel"   REALPATH)
 
 
 #   Build tree related paths

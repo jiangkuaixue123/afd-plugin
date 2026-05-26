@@ -12,8 +12,6 @@
 #include <cstdint>
 #include <string>
 
-#include "log/ops_log.h"
-#include "error/ops_error.h"
 #include "graph/utils/type_utils.h"
 #include "register/op_def_registry.h"
 #include "../op_kernel/a2e_tiling.h"

@@ -124,7 +124,6 @@ if (BUILD_OPEN_PROJECT)
     )
     target_link_libraries(opsproto PRIVATE
             $<BUILD_INTERFACE:intf_pub>
-            $<BUILD_INTERFACE:ops_utils_proto_headers>
             -Wl,--whole-archive
             rt2_registry
             -Wl,--no-whole-archive
@@ -158,7 +157,6 @@ if (BUILD_OPEN_PROJECT)
     )
     target_link_libraries(optiling PRIVATE
             $<BUILD_INTERFACE:intf_pub>
-            $<BUILD_INTERFACE:ops_utils_tiling_headers>
             -Wl,--whole-archive
             rt2_registry
             -Wl,--no-whole-archive
@@ -223,8 +221,6 @@ if (BUILD_OPEN_PROJECT)
         )
     endif()
 endif ()
-
-add_subdirectory(utils)
 
 set(OP_LIST)
 set(OP_DIR_LIST)
@@ -539,13 +535,6 @@ foreach (_op_name ${OP_LIST})
             OPTIONAL
     )
 endforeach ()
-
-file(GLOB OPS_ADV_UTILS_KERNEL_INSTALL_FILES "${OPS_ADV_UTILS_KERNEL_INC}/*.*")
-if (OPS_ADV_UTILS_KERNEL_INSTALL_FILES)
-    install(DIRECTORY ${OPS_ADV_UTILS_KERNEL_INC}/
-            DESTINATION ${IMPL_INSTALL_DIR}/ascendc/common
-    )
-endif ()
 
 foreach (op_dir ${OP_DIR_LIST})
     get_filename_component(_op_name "${op_dir}" NAME)

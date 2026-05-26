@@ -9,8 +9,6 @@
  */
 
 #include <cstdint>
-#include "log/ops_log.h"
-#include "error/ops_error.h"
 #include "graph/utils/type_utils.h"
 #include "register/op_def_registry.h"
 
