@@ -7,28 +7,13 @@ from __future__ import annotations
 import copy
 import queue
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
-from afd_plugin.connectors.metadata import AFDConnectorMetadata
+from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 
 _CHANNELS: dict[tuple[str, int], _DummyChannel] = {}
-
-
-@dataclass
-class AFDRecvOutput:
-    hidden_states: Any
-    metadata: AFDConnectorMetadata
-    group_list: Any = None
-    topk_weights: Any = None
-    topk_ids: Any = None
-    router_logits: Any = None
-    row_idx: Any = None
-    x_active_mask: Any = None
-    dynamic_scales: Any = None
-    cam_p2p_ep_name: str | None = None
 
 
 class _DummyChannel:
@@ -132,16 +117,14 @@ class NPUDummyAFDConnector(AFDConnectorBase):
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
         **kwargs: Any,
-    ) -> tuple[Any, AFDConnectorMetadata] | AFDRecvOutput:
+    ) -> AFDRecvOutput:
         del kwargs
         hidden_states, metadata = self._get_stage_item(
             self._channel.attn_output_queue,
             ubatch_idx,
             timeout_ms,
         )
-        if self.afd_config.extra_config.get("recv_output_object"):
-            return AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
-        return hidden_states, metadata
+        return AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
 
     def send_ffn_output(
         self,
@@ -195,9 +178,9 @@ class NPUDummyAFDConnector(AFDConnectorBase):
         metadata: AFDConnectorMetadata,
         recv_output: Any,
     ) -> None:
-        payload_metadata = getattr(recv_output, "metadata", None)
+        payload_metadata = recv_output.metadata
         if payload_metadata is not None:
-            metadata.seq_lens = list(getattr(payload_metadata, "seq_lens", []))
+            metadata.seq_lens = list(payload_metadata.seq_lens)
 
     @staticmethod
     def _get_stage_item(
@@ -237,12 +220,13 @@ def _timeout_seconds(timeout_ms: int | None) -> float | None:
 
 def _num_tokens_for_stage(dp_metadata_list: dict[int, Any], stage_idx: int) -> int:
     dp_metadata = dp_metadata_list.get(int(stage_idx))
-    token_counts = getattr(dp_metadata, "num_tokens_across_dp_cpu", None)
-    if token_counts is None:
+    if dp_metadata is None:
         return 1
+    token_counts = dp_metadata.num_tokens_across_dp_cpu
     item = token_counts[0]
-    item_fn = getattr(item, "item", None)
-    return max(1, int(item_fn() if callable(item_fn) else item))
+    if not isinstance(item, (int, float)):
+        item = item.item()
+    return max(1, int(item))
 
 
 __all__ = ["AFDRecvOutput", "NPUDummyAFDConnector"]

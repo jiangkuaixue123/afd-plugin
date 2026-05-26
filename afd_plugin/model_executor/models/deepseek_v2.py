@@ -136,12 +136,11 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self.device = native.current_platform.device_type
 
         self.vocab_size = config.vocab_size
-        self.is_v32 = hasattr(config, "index_topk")
+        self.is_v32 = config.index_topk is not None
         if self.is_v32:
-            topk_tokens = config.index_topk
             topk_indices_buffer = torch.empty(
                 vllm_config.scheduler_config.max_num_batched_tokens,
-                topk_tokens,
+                config.index_topk,
                 dtype=torch.int32,
                 device=self.device,
             )
@@ -256,7 +255,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
         llama_4_scaling: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         afd_connector = afd_metadata.afd_connector
-        stage_idx = int(getattr(afd_metadata, "afd_stage_idx", 0))
+        stage_idx = int(afd_metadata.afd_stage_idx)
 
         for layer_offset, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
@@ -294,7 +293,9 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         layer_idx: int,
+        **kwargs: Any,
     ) -> torch.Tensor:
+        del kwargs
         output = self.layers[layer_idx].compute_ffn_output(hidden_states)
         return output
 
@@ -302,7 +303,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self,
         positions: torch.Tensor,
     ) -> torch.Tensor | None:
-        llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
+        llama_4_scaling_config = self.config.llama_4_scaling
         if llama_4_scaling_config is None:
             return None
         return native._get_llama_4_scaling(
@@ -323,8 +324,9 @@ class AFDDeepseekV2ForCausalLM(native.DeepseekV2ForCausalLM):
         self,
         hidden_states: torch.Tensor,
         layer_idx: int,
+        **kwargs: Any,
     ) -> torch.Tensor:
-        return self.model.compute_ffn_output(hidden_states, layer_idx)
+        return self.model.compute_ffn_output(hidden_states, layer_idx, **kwargs)
 
 
 class AFDDeepseekForCausalLM(AFDDeepseekV2ForCausalLM):

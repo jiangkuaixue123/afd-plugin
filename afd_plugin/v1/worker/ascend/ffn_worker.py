@@ -142,23 +142,19 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
 
 
 def _set_npu_device_if_possible(device: object) -> None:
-    try:
-        import torch
+    if device.type != "npu":
+        return
+    import torch
 
-        if getattr(device, "type", None) == "npu":
-            torch.npu.set_device(device)
-    except Exception:
-        pass
+    torch.npu.set_device(device)
 
 
 def _synchronize_npu_if_possible(device: object) -> None:
-    try:
-        import torch
+    if device.type != "npu":
+        return
+    import torch
 
-        if getattr(device, "type", None) == "npu":
-            torch.npu.synchronize()
-    except Exception:
-        pass
+    torch.npu.synchronize()
 
 
 __all__ = ["AFDNPUFFNWorker"]

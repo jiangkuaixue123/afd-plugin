@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -75,16 +76,10 @@ def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
                     "AFD NPU runtime does not support multistream_info enabled",
                 )
 
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    if parallel_config is not None and bool(
-        getattr(parallel_config, "use_ubatching", False),
-    ):
+    if bool(vllm_config.parallel_config.use_ubatching):
         raise RuntimeError("AFD NPU runtime does not support ubatching/DBO yet")
 
-    model_config = getattr(vllm_config, "model_config", None)
-    if model_config is not None and not bool(
-        getattr(model_config, "enforce_eager", True),
-    ):
+    if not bool(vllm_config.model_config.enforce_eager):
         raise RuntimeError(
             "AFD NPU runtime requires enforce_eager=true until ACL graph support "
             "is implemented",
@@ -97,7 +92,7 @@ def mirror_afd_metadata_on_forward_context(
 ) -> None:
     """Store AFD metadata in canonical kwargs and Ascend's mirrored attribute."""
 
-    if getattr(forward_context, "additional_kwargs", None) is None:
+    if forward_context.additional_kwargs is None:
         forward_context.additional_kwargs = {}
     forward_context.additional_kwargs["afd_metadata"] = afd_metadata
     forward_context.afd_metadata = afd_metadata
@@ -126,16 +121,28 @@ def ascend_forward_context(
     if aclgraph_runtime_mode is None:
         aclgraph_runtime_mode = CUDAGraphMode.NONE
 
-    with set_ascend_forward_context(
-        attn_metadata=None,
-        vllm_config=vllm_config,
-        batch_descriptor=None,
-        aclgraph_runtime_mode=aclgraph_runtime_mode,
-        model_instance=model_instance,
-        afd_metadata=afd_metadata,
-        num_tokens=int(num_tokens),
-        num_tokens_across_dp=num_tokens_across_dp,
+    context_kwargs = {
+        "attn_metadata": None,
+        "vllm_config": vllm_config,
+        "batch_descriptor": None,
+        "aclgraph_runtime_mode": aclgraph_runtime_mode,
+        "model_instance": model_instance,
+        "afd_metadata": afd_metadata,
+        "num_tokens": int(num_tokens),
+        "num_tokens_across_dp": num_tokens_across_dp,
+    }
+    signature = inspect.signature(set_ascend_forward_context)
+    if not any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
     ):
+        context_kwargs = {
+            key: value
+            for key, value in context_kwargs.items()
+            if key in signature.parameters
+        }
+
+    with set_ascend_forward_context(**context_kwargs):
         forward_context = get_forward_context()
         if afd_metadata is not None:
             mirror_afd_metadata_on_forward_context(forward_context, afd_metadata)
@@ -153,17 +160,11 @@ def ensure_vllm_config_has_afd_proxy(
     a read-only compatibility view.
     """
 
-    existing = getattr(vllm_config, "afd_config", None)
-    if existing is not None:
-        return existing
     config = afd_config or parse_afd_config(vllm_config, validate=False)
     if not config.enabled:
         return None
     proxy = _AscendAFDConfigProxy(config)
-    try:
-        vllm_config.afd_config = proxy
-    except Exception:
-        return proxy
+    vllm_config.afd_config = proxy
     return proxy
 
 
@@ -230,9 +231,6 @@ class _AscendAFDConfigProxy:
 
     def compute_hash(self) -> str:
         return self._config.compute_hash()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._config, name)
 
 
 def _truthy(value: Any) -> bool:
