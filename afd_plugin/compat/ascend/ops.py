@@ -91,6 +91,7 @@ def ensure_afd_ascend_ops_loaded() -> None:
 
     _ensure_custom_opp_env()
     try:
+        importlib.import_module("torch")
         importlib.import_module("afd_plugin._C_ascend")
     except Exception as exc:
         raise RuntimeError(

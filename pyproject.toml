@@ -51,6 +51,8 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["afd_plugin*"]
+exclude = ["afd_plugin._cann_ops_custom*"]
+namespaces = false
 
 [tool.setuptools.package-data]
 afd_plugin = ["py.typed", "_cann_ops_custom/**/*"]
