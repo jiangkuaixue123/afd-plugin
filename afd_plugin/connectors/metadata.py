@@ -169,6 +169,7 @@ class AFDConnectorMetadata:
     stage_idx: int
     seq_lens: list[int]
     recv_handle_list: list[Any] | None = None
+    connector_data: Any = None
 
     def __post_init__(self) -> None:
         if not self.seq_lens:
@@ -226,6 +227,9 @@ class AFDRecvOutput:
     x_active_mask: Any = None
     dynamic_scales: Any = None
     cam_p2p_ep_name: str | None = None
+    atten_batch_size: Any = None
+    expand_idx: Any = None
+    ep_recv_counts: Any = None
 
 
 @dataclass(slots=True)

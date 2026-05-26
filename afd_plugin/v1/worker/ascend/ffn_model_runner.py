@@ -152,6 +152,9 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
                         stage_idx=stage_idx,
                         layer_idx=layer_idx,
                     )
+                    update_metadata = getattr(self.connector, "update_metadata", None)
+                    if callable(update_metadata):
+                        update_metadata(metadata, payload)
                     metadata.layer_idx = layer_idx
                     metadata.stage_idx = stage_idx
                     if forward_context is not None:

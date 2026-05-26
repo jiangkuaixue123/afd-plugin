@@ -58,6 +58,7 @@ class _FakeFFNConnector:
         self.attn_outputs = deque()
         self.ffn_outputs = []
         self.updates = []
+        self.metadata_updates = []
 
     def update_state_from_dp_metadata(self, dp_metadata_list, **kwargs):
         self.dp_metadata_list = dict(dp_metadata_list)
@@ -73,6 +74,9 @@ class _FakeFFNConnector:
 
     def send_ffn_output(self, ffn_output, metadata, **kwargs):
         self.ffn_outputs.append((ffn_output, metadata, kwargs))
+
+    def update_metadata(self, metadata, recv_output):
+        self.metadata_updates.append((metadata, recv_output))
 
     def close(self):
         return None
@@ -174,6 +178,9 @@ def test_npu_ffn_runner_executes_eager_ffn_step():
     ]
     assert runner.connector.ffn_outputs == [
         ("npu-ffn(hidden, layer=0)", metadata, {"ubatch_idx": 0}),
+    ]
+    assert runner.connector.metadata_updates == [
+        (metadata, AFDRecvOutput(hidden_states="hidden", metadata=metadata)),
     ]
 
 
