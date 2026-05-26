@@ -8,8 +8,12 @@ def test_ascend_a2e_e2a_sources_are_vendored():
     required = [
         "csrc/a2e/op_host/aclnn_a2e.cpp",
         "csrc/a2e/op_kernel/a2e.cpp",
+        "csrc/a2e/op_kernel/comm_args.h",
+        "csrc/a2e/op_kernel/moe_distribute_base.h",
         "csrc/e2a/op_host/aclnn_e2a.cpp",
         "csrc/e2a/op_kernel/e2a.cpp",
+        "csrc/e2a/op_kernel/comm_args.h",
+        "csrc/e2a/op_kernel/moe_distribute_base.h",
         "csrc/build_aclnn.sh",
         "csrc/torch_extension/CMakeLists.txt",
         "csrc/torch_extension/torch_binding.cpp",
