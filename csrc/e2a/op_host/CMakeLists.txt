@@ -22,16 +22,6 @@ target_sources(opapi PRIVATE
         aclnn_e2a.cpp
 )
 
-if (NOT BUILD_OPEN_PROJECT)
-    target_sources(aclnn_ops_train PRIVATE
-        aclnn_e2a.cpp
-    )
-
-    target_sources(aclnn_ops_infer PRIVATE
-        aclnn_e2a.cpp
-    )
-endif ()
-
 target_sources(optiling PRIVATE
         e2a_tiling.cpp
 )
