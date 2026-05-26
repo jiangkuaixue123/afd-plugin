@@ -148,9 +148,6 @@ if (BUILD_OPEN_PROJECT)
 
     # op tiling
     add_library(optiling SHARED)
-    target_sources(optiling PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/utils/src/fallback_comm.cpp
-    )
     target_compile_options(optiling PRIVATE
             $<$<COMPILE_LANGUAGE:CXX>:-std=c++11>
             -fvisibility=hidden
