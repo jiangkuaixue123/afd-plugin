@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -126,16 +127,28 @@ def ascend_forward_context(
     if aclgraph_runtime_mode is None:
         aclgraph_runtime_mode = CUDAGraphMode.NONE
 
-    with set_ascend_forward_context(
-        attn_metadata=None,
-        vllm_config=vllm_config,
-        batch_descriptor=None,
-        aclgraph_runtime_mode=aclgraph_runtime_mode,
-        model_instance=model_instance,
-        afd_metadata=afd_metadata,
-        num_tokens=int(num_tokens),
-        num_tokens_across_dp=num_tokens_across_dp,
+    context_kwargs = {
+        "attn_metadata": None,
+        "vllm_config": vllm_config,
+        "batch_descriptor": None,
+        "aclgraph_runtime_mode": aclgraph_runtime_mode,
+        "model_instance": model_instance,
+        "afd_metadata": afd_metadata,
+        "num_tokens": int(num_tokens),
+        "num_tokens_across_dp": num_tokens_across_dp,
+    }
+    signature = inspect.signature(set_ascend_forward_context)
+    if not any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
     ):
+        context_kwargs = {
+            key: value
+            for key, value in context_kwargs.items()
+            if key in signature.parameters
+        }
+
+    with set_ascend_forward_context(**context_kwargs):
         forward_context = get_forward_context()
         if afd_metadata is not None:
             mirror_afd_metadata_on_forward_context(forward_context, afd_metadata)
