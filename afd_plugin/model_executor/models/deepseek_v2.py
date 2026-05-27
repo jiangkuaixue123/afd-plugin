@@ -304,7 +304,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self,
         positions: torch.Tensor,
     ) -> torch.Tensor | None:
-        llama_4_scaling_config = self.config.llama_4_scaling
+        llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
         if llama_4_scaling_config is None:
             return None
         return native._get_llama_4_scaling(

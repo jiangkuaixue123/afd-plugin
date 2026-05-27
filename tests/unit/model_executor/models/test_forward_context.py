@@ -56,6 +56,13 @@ def test_deepseek_afd_wrapper_treats_index_topk_as_optional():
     assert "topk_tokens = config.index_topk" in source
 
 
+def test_deepseek_afd_wrapper_treats_llama_4_scaling_as_optional():
+    source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
+
+    assert 'getattr(self.config, "llama_4_scaling", None)' in source
+    assert "self.config.llama_4_scaling" not in source
+
+
 def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
     source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
     forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(
