@@ -24,7 +24,11 @@ from afd_plugin.v1.worker.attention_model_runner import (
     _resolve_world_ranks,
     _with_dp_derived_afd_rank,
 )
-from afd_plugin.v1.worker.cuda_graph import make_ffn_graph_key
+from afd_plugin.v1.worker.cuda_graph import (
+    AFDGraphRunMode,
+    graph_run_mode,
+    make_ffn_graph_key,
+)
 from afd_plugin.v1.worker.ffn_model_runner import _set_moe_layer_index
 
 _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
@@ -66,8 +70,9 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
             self.afd_config,
         )
         self.num_layers = _resolve_num_hidden_layers(self.model_config)
-        self.use_aclgraph = False
+        self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
         self._acl_graphs: dict[tuple, dict[str, Any]] = {}
+        self.graph_pool = _resolve_graph_pool() if self.use_aclgraph else None
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -93,12 +98,16 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         is_graph_capturing: bool = False,
         is_warmup: bool = False,
     ) -> None:
-        del is_warmup
         if dp_metadata_list is None:
             raise RuntimeError("AFD NPU FFN requires dp_metadata_list")
-        if is_graph_capturing:
-            raise RuntimeError("AFD NPU FFN ACL graph capture is not supported yet")
-        self._ffn_forward(dp_metadata_list=dp_metadata_list)
+        if _runner_uses_aclgraph(self) and (is_graph_capturing or is_warmup):
+            self.capture_model(
+                dp_metadata_list=dp_metadata_list,
+                is_warmup=is_warmup,
+                is_attn_graph_capturing=is_graph_capturing,
+            )
+            return None
+        self.execute_model(dp_metadata_list=dp_metadata_list)
         return None
 
     def execute_model(
@@ -113,21 +122,45 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         del scheduler_output, intermediate_tensors
         if dp_metadata_list is None:
             raise RuntimeError("AFD NPU FFN is connector-driven")
-        return self.execute_ffn_step(
-            dp_metadata_list=dp_metadata_list,
-            is_graph_capturing=is_graph_capturing,
-            is_warmup=is_warmup,
+        graph_key = self._make_graph_key(dp_metadata_list)
+        graph_info = _runner_acl_graphs(self).get(graph_key)
+        graph_enabled = _runner_uses_aclgraph(self)
+        run_mode = graph_run_mode(
+            is_warmup=is_warmup and graph_enabled,
+            is_graph_capturing=is_graph_capturing and graph_enabled,
+            graph_enabled=graph_enabled,
+            graph_exists=graph_info is not None,
         )
+        if run_mode is AFDGraphRunMode.REPLAY:
+            graph_info["graph"].replay()
+            return None
+        if run_mode in (AFDGraphRunMode.WARMUP, AFDGraphRunMode.CAPTURE):
+            return self.execute_ffn_step(
+                dp_metadata_list=dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
+                is_warmup=is_warmup,
+            )
+
+        self._ffn_forward(dp_metadata_list=dp_metadata_list)
+        return None
 
     @staticmethod
     def _make_graph_key(dp_metadata_list: dict[int, Any]) -> tuple:
         return make_ffn_graph_key(dp_metadata_list)
 
-    def _ffn_forward(self, *, dp_metadata_list: dict[int, Any]) -> Any:
-        self.connector.update_state_from_dp_metadata(
-            dp_metadata_list,
-            is_graph_capturing=False,
-        )
+    def _ffn_forward(
+        self,
+        *,
+        dp_metadata_list: dict[int, Any],
+        aclgraph_runtime_mode: Any = None,
+        is_graph_capturing: bool = False,
+        update_connector_state: bool = True,
+    ) -> Any:
+        if update_connector_state:
+            self.connector.update_state_from_dp_metadata(
+                dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
+            )
         num_stages = max(len(dp_metadata_list), 1)
         afd_metadata = AFDMetadata(
             afd_tokens_start_loc=[],
@@ -148,6 +181,7 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
             model_instance=self.model,
             num_tokens=num_tokens,
             num_tokens_across_dp=num_tokens_across_dp,
+            aclgraph_runtime_mode=aclgraph_runtime_mode,
         ) as forward_context:
             for layer_idx in range(max(int(self.num_layers or 0), 1)):
                 for stage_idx in stage_ids:
@@ -191,6 +225,93 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
                         ubatch_idx=stage_idx,
                     )
         return rank_ffn_output
+
+    def capture_model(
+        self,
+        dp_metadata_list: dict[int, Any] | None = None,
+        is_warmup: bool = False,
+        is_attn_graph_capturing: bool = True,
+    ) -> int:
+        if not self.use_aclgraph:
+            return 0
+        if dp_metadata_list is None:
+            raise RuntimeError("AFD NPU FFN capture requires dp_metadata_list")
+
+        start_free_memory = self._npu_free_memory()
+        self._set_cudagraph_capturing_enabled(True)
+        try:
+            with self._graph_capture_context():
+                if is_warmup:
+                    self._ffn_forward(
+                        dp_metadata_list=dp_metadata_list,
+                        is_graph_capturing=False,
+                    )
+                else:
+                    self._capture_graphs(
+                        aclgraph_runtime_mode=_full_aclgraph_runtime_mode(),
+                        dp_metadata_list=dp_metadata_list,
+                        is_attn_graph_capturing=is_attn_graph_capturing,
+                    )
+        finally:
+            self._set_cudagraph_capturing_enabled(False)
+
+        end_free_memory = self._npu_free_memory()
+        return max(0, int(start_free_memory - end_free_memory))
+
+    def _capture_graphs(
+        self,
+        *,
+        aclgraph_runtime_mode: Any,
+        dp_metadata_list: dict[int, Any],
+        is_attn_graph_capturing: bool = True,
+    ) -> None:
+        graph_key = self._make_graph_key(dp_metadata_list)
+        if graph_key in self._acl_graphs:
+            return
+
+        graph = self._new_npu_graph()
+        self.connector.update_state_from_dp_metadata(
+            dp_metadata_list,
+            is_graph_capturing=is_attn_graph_capturing,
+        )
+        with self._npu_graph_context(graph):
+            output = self._ffn_forward(
+                dp_metadata_list=dp_metadata_list,
+                aclgraph_runtime_mode=aclgraph_runtime_mode,
+                is_graph_capturing=is_attn_graph_capturing,
+                update_connector_state=False,
+            )
+        self._acl_graphs[graph_key] = {
+            "graph": graph,
+            "output": output,
+        }
+
+    def _new_npu_graph(self) -> Any:
+        import torch
+
+        return torch.npu.NPUGraph()
+
+    def _npu_graph_context(self, graph: Any) -> Any:
+        import torch
+
+        return torch.npu.graph(graph, pool=self.graph_pool)
+
+    def _graph_capture_context(self) -> Any:
+        from vllm_ascend.worker.model_runner_v1 import graph_capture
+
+        return graph_capture(device=self.device)
+
+    @staticmethod
+    def _set_cudagraph_capturing_enabled(enabled: bool) -> None:
+        from vllm.compilation.monitor import set_cudagraph_capturing_enabled
+
+        set_cudagraph_capturing_enabled(enabled)
+
+    @staticmethod
+    def _npu_free_memory() -> int:
+        import torch
+
+        return int(torch.npu.mem_get_info()[0])
 
     def _recv_attn_output(self, stage_idx: int, layer_idx: int) -> Any:
         metadata = self.connector.create_recv_metadata(
@@ -285,6 +406,40 @@ def _first_token_count(num_tokens_across_dp: Any) -> int:
 
 def _tensor_tokens(hidden_states: Any) -> int:
     return max(1, int(hidden_states.shape[0]))
+
+
+def _use_npu_aclgraph(vllm_config: object, runner: object) -> bool:
+    inherited = bool(runner.use_aclgraph)
+    if bool(vllm_config.model_config.enforce_eager):
+        return False
+
+    mode_name = vllm_config.compilation_config.cudagraph_mode.name
+    return inherited or mode_name in {
+        "FULL",
+        "FULL_AND_PIECEWISE",
+        "FULL_DECODE_ONLY",
+        "PIECEWISE",
+    }
+
+
+def _resolve_graph_pool() -> Any:
+    from vllm.platforms import current_platform
+
+    return current_platform.get_global_graph_pool()
+
+
+def _full_aclgraph_runtime_mode() -> Any:
+    from vllm.config import CUDAGraphMode
+
+    return CUDAGraphMode.FULL
+
+
+def _runner_acl_graphs(runner: object) -> dict[tuple, dict[str, Any]]:
+    return runner._acl_graphs
+
+
+def _runner_uses_aclgraph(runner: object) -> bool:
+    return bool(runner.use_aclgraph)
 
 
 __all__ = ["AFDNPUFFNModelRunner"]

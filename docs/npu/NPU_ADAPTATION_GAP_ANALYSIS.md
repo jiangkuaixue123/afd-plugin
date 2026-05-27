@@ -338,7 +338,7 @@ runtime/control-plane 骨架：
   发送、FFN daemon loop、`recv -> compute_ffn_output/passthrough -> send` 的最小路径。
 - **fail-fast 范围**：NPU runtime 已对 `compute_gate_on_attention=true`、
   `quant_mode != 0`、通信多流和 ubatching/DBO 做显式拒绝。ACL graph 控制面已进入
-  Phase 5，只有不受支持的 graph mode 会 fail fast。
+  Phase 5；vLLM / vLLM-Ascend graph 结构直接访问原始成员，不做兼容式探测或结构兜底。
 - **dummy connector**：`NPUDummyAFDConnector` 已实现进程内 DP metadata、Attention
   payload 和 FFN output 队列，可用于 Attention/FFN lifecycle smoke；单测覆盖
   control/payload roundtrip。

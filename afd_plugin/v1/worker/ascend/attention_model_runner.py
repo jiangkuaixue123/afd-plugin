@@ -80,6 +80,17 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         )
         return super()._build_attention_metadata(*args, **kwargs)
 
+    def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
+        previous = self._afd_is_graph_capturing
+        self._afd_is_graph_capturing = bool(
+            kwargs.get("is_graph_capturing", previous),
+        )
+        try:
+            return super()._dummy_run(*args, **kwargs)
+        finally:
+            self._afd_is_graph_capturing = previous
+            self._afd_pending_metadata = None
+
     def _build_afd_metadata(
         self,
         ubatch_slices: Any,

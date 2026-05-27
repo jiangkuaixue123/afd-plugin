@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +124,9 @@ def _vllm_config(*, role="attention", extra_config=None, **parallel_overrides):
         },
         parallel_config=_parallel_config(**parallel_overrides),
         model_config=SimpleNamespace(enforce_eager=True),
+        compilation_config=SimpleNamespace(
+            cudagraph_mode=SimpleNamespace(name="FULL"),
+        ),
     )
 
 
@@ -165,6 +169,21 @@ def test_npu_attention_runner_builds_dp_fallback():
     assert tokens == [7]
 
 
+def test_npu_attention_runner_sends_graph_flags():
+    runner = object.__new__(AFDNPUAttentionModelRunner)
+    runner.vllm_config = _vllm_config(role="attention")
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = True
+    runner._afd_is_graph_capturing = True
+    runner._afd_transaction_counter = 0
+    runner._afd_pending_metadata = runner._build_afd_metadata(None, 3)
+
+    runner._send_dp_metadata(SimpleNamespace(num_tokens_across_dp_cpu=[3]), None)
+
+    assert runner.afd_connector.dp_metadata_updates[0][1:] == (True, True)
+    assert runner.afd_connector.sent_dp_metadata_lists[0][1:] == (True, True)
+
+
 def test_npu_ffn_runner_executes_eager_ffn_step():
     runner = object.__new__(AFDNPUFFNModelRunner)
     runner.vllm_config = _vllm_config(role="ffn")
@@ -172,6 +191,8 @@ def test_npu_ffn_runner_executes_eager_ffn_step():
     runner.model = _FakeModel()
     runner.num_layers = 1
     runner.max_num_tokens = 1
+    runner.use_aclgraph = False
+    runner._acl_graphs = {}
     metadata = AFDConnectorMetadata.create_attention_metadata(
         layer_idx=0,
         stage_idx=0,
@@ -192,6 +213,102 @@ def test_npu_ffn_runner_executes_eager_ffn_step():
     ]
 
 
+class _FakeGraph:
+    def __init__(self):
+        self.replay_count = 0
+
+    def replay(self):
+        self.replay_count += 1
+
+
+def test_npu_ffn_runner_replays_acl_graph_when_key_exists():
+    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner.vllm_config = _vllm_config(role="ffn")
+    runner.connector = _FakeFFNConnector()
+    runner.model = _FakeModel()
+    runner.num_layers = 1
+    runner.max_num_tokens = 1
+    runner.use_aclgraph = True
+    dp_metadata = {0: _FakeDPMetadata([1])}
+    graph = _FakeGraph()
+    runner._acl_graphs = {runner._make_graph_key(dp_metadata): {"graph": graph}}
+
+    runner.execute_model(dp_metadata_list=dp_metadata)
+
+    assert graph.replay_count == 1
+    assert runner.connector.ffn_outputs == []
+
+
+def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
+    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner.vllm_config = _vllm_config(role="ffn")
+    runner.connector = _FakeFFNConnector()
+    runner.model = _FakeModel()
+    runner.num_layers = 1
+    runner.max_num_tokens = 1
+    runner.use_aclgraph = True
+    runner._acl_graphs = {}
+    runner._graph_capture_context = lambda: nullcontext()
+    runner._set_cudagraph_capturing_enabled = lambda enabled: None
+    runner._npu_free_memory = lambda: 0
+    metadata = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=0,
+        seq_len=1,
+    )
+    runner.connector.attn_outputs.append(("hidden", metadata))
+
+    runner.execute_ffn_step(
+        dp_metadata_list={0: _FakeDPMetadata([1])},
+        is_warmup=True,
+    )
+
+    assert runner._acl_graphs == {}
+    assert runner.connector.ffn_outputs == [
+        ("npu-ffn(hidden, layer=0)", metadata, {"ubatch_idx": 0}),
+    ]
+
+
+def test_npu_ffn_runner_capture_stores_acl_graph_and_skips_duplicate_state_update(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "afd_plugin.v1.worker.ascend.ffn_model_runner._full_aclgraph_runtime_mode",
+        lambda: "FULL",
+    )
+    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner.vllm_config = _vllm_config(role="ffn")
+    runner.connector = _FakeFFNConnector()
+    runner.model = _FakeModel()
+    runner.num_layers = 1
+    runner.max_num_tokens = 1
+    runner.use_aclgraph = True
+    runner._acl_graphs = {}
+    runner.graph_pool = None
+    runner._graph_capture_context = lambda: nullcontext()
+    runner._npu_graph_context = lambda graph: nullcontext()
+    runner._new_npu_graph = _FakeGraph
+    runner._set_cudagraph_capturing_enabled = lambda enabled: None
+    runner._npu_free_memory = lambda: 0
+    metadata = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=0,
+        seq_len=1,
+    )
+    dp_metadata = {0: _FakeDPMetadata([1])}
+    runner.connector.attn_outputs.append(("hidden", metadata))
+
+    runner.execute_ffn_step(
+        dp_metadata_list=dp_metadata,
+        is_graph_capturing=True,
+    )
+
+    assert runner._make_graph_key(dp_metadata) in runner._acl_graphs
+    assert runner.connector.updates == [
+        (dp_metadata, {"is_graph_capturing": True}),
+    ]
+
+
 def test_npu_ffn_runner_requires_compute_hook():
     runner = object.__new__(AFDNPUFFNModelRunner)
     runner.vllm_config = _vllm_config(role="ffn")
@@ -199,6 +316,8 @@ def test_npu_ffn_runner_requires_compute_hook():
     runner.model = SimpleNamespace()
     runner.num_layers = 1
     runner.max_num_tokens = 1
+    runner.use_aclgraph = False
+    runner._acl_graphs = {}
     metadata = AFDConnectorMetadata.create_attention_metadata(
         layer_idx=0,
         stage_idx=0,
@@ -230,7 +349,7 @@ def test_npu_feature_validation_rejects_unsupported_switches():
             )
 
 
-def test_npu_feature_validation_rejects_ubatching_and_graph():
+def test_npu_feature_validation_rejects_ubatching_and_allows_acl_graph_config():
     with pytest.raises(RuntimeError, match="ubatching"):
         fail_if_unsupported_npu_afd_features(
             _vllm_config(use_ubatching=True, num_ubatches=2),
@@ -238,8 +357,7 @@ def test_npu_feature_validation_rejects_ubatching_and_graph():
 
     config = _vllm_config()
     config.model_config.enforce_eager = False
-    with pytest.raises(RuntimeError, match="enforce_eager"):
-        fail_if_unsupported_npu_afd_features(config)
+    fail_if_unsupported_npu_afd_features(config)
 
 
 def test_npudummyconnector_round_trips_control_and_payload():

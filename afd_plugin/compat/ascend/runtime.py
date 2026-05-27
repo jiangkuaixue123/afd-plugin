@@ -80,10 +80,11 @@ def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
         raise RuntimeError("AFD NPU runtime does not support ubatching/DBO yet")
 
     if not bool(vllm_config.model_config.enforce_eager):
-        raise RuntimeError(
-            "AFD NPU runtime requires enforce_eager=true until ACL graph support "
-            "is implemented",
-        )
+        _npu_aclgraph_mode_name(vllm_config)
+
+
+def _npu_aclgraph_mode_name(vllm_config: object) -> str:
+    return vllm_config.compilation_config.cudagraph_mode.name
 
 
 def mirror_afd_metadata_on_forward_context(
