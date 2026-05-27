@@ -21,7 +21,7 @@ class _FakeDPMetadata:
 def _vllm_config():
     return SimpleNamespace(
         parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
-        scheduler_config=SimpleNamespace(max_num_seqs=8, decode_max_num_seqs=0),
+        scheduler_config=SimpleNamespace(max_num_seqs=8),
         model_config=SimpleNamespace(
             hf_config=SimpleNamespace(
                 hidden_size=16,
@@ -53,6 +53,7 @@ def test_camp2p_factory_creates_import_safe_connector():
 
     assert isinstance(connector, CAMP2PAFDConnector)
     assert not connector.is_initialized
+    assert connector.max_num_reqs == 8
 
 
 def test_camp2p_topology_matches_original_rank_layout():

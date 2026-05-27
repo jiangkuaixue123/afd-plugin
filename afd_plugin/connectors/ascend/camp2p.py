@@ -572,9 +572,7 @@ def _resolve_hidden_size(vllm_config: object) -> int:
 
 def _resolve_max_num_reqs(vllm_config: object) -> int:
     scheduler_config = vllm_config.scheduler_config
-    decode_max_num_seqs = int(scheduler_config.decode_max_num_seqs)
-    max_num_seqs = int(scheduler_config.max_num_seqs)
-    return max(max_num_seqs, decode_max_num_seqs)
+    return int(scheduler_config.max_num_seqs)
 
 
 def _resolve_int_attr(vllm_config: object, name: str, *, default: int) -> int:
@@ -637,7 +635,6 @@ def _empty_npu_tensor(*, dtype_name: str) -> Any:
 
 
 def _afd_ascend_ops() -> Any:
-    ensure_afd_ascend_ops_loaded()
     torch = _torch()
     return torch.ops.afd_ascend
 
