@@ -48,6 +48,14 @@ def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
     assert "self.do_not_compile = True" not in source
 
 
+def test_deepseek_afd_wrapper_treats_index_topk_as_optional():
+    source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
+
+    assert 'self.is_v32 = hasattr(config, "index_topk")' in source
+    assert "self.is_v32 = config.index_topk is not None" not in source
+    assert "topk_tokens = config.index_topk" in source
+
+
 def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
     source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
     forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(

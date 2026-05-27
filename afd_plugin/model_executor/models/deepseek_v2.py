@@ -136,11 +136,12 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self.device = native.current_platform.device_type
 
         self.vocab_size = config.vocab_size
-        self.is_v32 = config.index_topk is not None
+        self.is_v32 = hasattr(config, "index_topk")
         if self.is_v32:
+            topk_tokens = config.index_topk
             topk_indices_buffer = torch.empty(
                 vllm_config.scheduler_config.max_num_batched_tokens,
-                config.index_topk,
+                topk_tokens,
                 dtype=torch.int32,
                 device=self.device,
             )
