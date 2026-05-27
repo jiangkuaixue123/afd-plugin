@@ -337,7 +337,8 @@ runtime/control-plane 骨架：
   workspace 初始化、Ascend forward context metadata mirror、Attention DP metadata
   发送、FFN daemon loop、`recv -> compute_ffn_output/passthrough -> send` 的最小路径。
 - **fail-fast 范围**：NPU runtime 已对 `compute_gate_on_attention=true`、
-  `quant_mode != 0`、通信多流、ubatching/DBO 和非 eager/ACL graph 做显式拒绝。
+  `quant_mode != 0`、通信多流和 ubatching/DBO 做显式拒绝。ACL graph 控制面已进入
+  Phase 5，只有不受支持的 graph mode 会 fail fast。
 - **dummy connector**：`NPUDummyAFDConnector` 已实现进程内 DP metadata、Attention
   payload 和 FFN output 队列，可用于 Attention/FFN lifecycle smoke；单测覆盖
   control/payload roundtrip。
@@ -414,13 +415,15 @@ runtime/control-plane 骨架：
    无 ACL graph、无通信多流。后续可把该验证固化为 Ascend-gated 多进程
    connector/runtime 测试。
 
-7. **NPU Phase 5：`torch.compile` 与 ACL graph，待推进**
-   在 1A1F 单流 eager 闭环已经可跑通的基础上，优先支持 vLLM-Ascend 的
-   `torch.compile` / ACL graph 路径。实现时优先参考原始 NPU AFD 实现，重点复用
-   vLLM-Ascend 已有 graph dispatch、capture/replay 状态机、custom op 注册路径和
-   Ascend forward context 语义；connector 通信副作用仍需避免被错误 capture。
-   该阶段应先覆盖单流 `camp2pconnector`，并保留对通信多流、量化和
-   `compute_gate_on_attention` 的 fail fast。
+7. **NPU Phase 5：`torch.compile` 与 ACL graph，控制面已完成开发，待 Ascend 验证**
+   在 1A1F 单流 eager 闭环已经可跑通的基础上，已放开受支持 graph mode 下的非
+   eager NPU AFD validation，Attention 侧会把 graph capture / warmup flags 随 DP
+   metadata 传递到 FFN，FFN 侧已有 warmup eager、capture 和 replay cache 控制流。
+   当前实现仍优先复用 vLLM-Ascend 的 graph capture context、NPUGraph 和 Ascend
+   forward context 语义；connector DP metadata 控制状态会在 capture 前更新，避免
+   重复控制面更新。该阶段仍先覆盖单流 `camp2pconnector`，并保留对通信多流、量化和
+   `compute_gate_on_attention` 的 fail fast。真实 Ascend 环境还需要补充 NPU-gated
+   serving / connector 验证。
 
 8. **NPU Phase 6：ubatch/DBO，待 Phase 5 后推进**
    在 ACL graph / compile 语义稳定后支持 ubatch。重点对齐 vLLM-Ascend
