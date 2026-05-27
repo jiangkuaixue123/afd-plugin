@@ -63,6 +63,19 @@ def test_deepseek_afd_wrapper_treats_llama_4_scaling_as_optional():
     assert "self.config.llama_4_scaling" not in source
 
 
+def test_deepseek_afd_wrapper_uses_metadata_seq_len_inside_compile():
+    source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
+    forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(
+        "    def compute_ffn_output(",
+        1,
+    )[0]
+
+    assert "seq_len=_afd_metadata_seq_len(afd_metadata, stage_idx)" in forward_with_afd
+    assert "hidden_states.shape[0]" not in forward_with_afd
+    assert "def _afd_metadata_seq_len(" in source
+    assert 'getattr(afd_metadata, "afd_tokens_lens", None)' in source
+
+
 def test_deepseek_afd_attention_path_uses_decoder_layer_forward():
     source = Path("afd_plugin/model_executor/models/deepseek_v2.py").read_text()
     forward_with_afd = source.split("    def forward_with_afd(", 1)[1].split(

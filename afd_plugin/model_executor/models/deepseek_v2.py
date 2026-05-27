@@ -276,7 +276,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
             metadata = AFDConnectorMetadata.create_attention_metadata(
                 layer_idx=layer.layer_idx,
                 stage_idx=stage_idx,
-                seq_len=int(hidden_states.shape[0]),
+                seq_len=_afd_metadata_seq_len(afd_metadata, stage_idx),
             )
             afd_connector.send_attn_output(hidden_states, metadata)
             hidden_states = maybe_apply_dbo_yield(
@@ -314,6 +314,17 @@ class AFDDeepseekV2Model(torch.nn.Module):
             scaling_beta=llama_4_scaling_config["beta"],
             positions=positions,
         )
+
+
+def _afd_metadata_seq_len(afd_metadata: object, stage_idx: int) -> int:
+    seq_lens = getattr(afd_metadata, "afd_tokens_lens", None)
+    if not seq_lens:
+        raise RuntimeError("AFD metadata does not include token lengths")
+
+    # Ubatch child metadata carries only the current stage length while keeping
+    # the original global stage index for connector routing.
+    seq_idx = int(stage_idx) if int(stage_idx) < len(seq_lens) else 0
+    return max(1, int(seq_lens[seq_idx]))
 
 
 class AFDDeepseekV2ForCausalLM(native.DeepseekV2ForCausalLM):
