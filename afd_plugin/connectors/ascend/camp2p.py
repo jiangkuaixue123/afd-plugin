@@ -20,6 +20,8 @@ from afd_plugin.connectors.base import AFDConnectorBase
 from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 from afd_plugin.distributed import init_afd_process_group, topology_from_config
 
+_CAMP2P_CUSTOM_OPS_REGISTERED = False
+
 
 @dataclass(slots=True)
 class CAMP2PAFDConnectorMetadata:
@@ -135,6 +137,8 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             return
         ensure_afd_ascend_ops_loaded()
         import torch_npu  # noqa: F401
+
+        _register_camp2p_custom_ops()
 
         self.afd_pg = init_afd_process_group(
             backend="hccl",
@@ -280,20 +284,22 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         **kwargs: Any,
     ) -> Any:
         self._require_initialized()
-        if not metadata.validate_tensor_shape(tuple(hidden_states.shape)):
+        if not _is_torch_compiling() and not metadata.validate_tensor_shape(
+            tuple(hidden_states.shape),
+        ):
             raise ValueError(
                 f"hidden_states shape {hidden_states.shape!r} does not match "
                 f"CAMP2P metadata token count {metadata.total_tokens}",
             )
         connector_data = self._metadata_data_or_default(metadata, hidden_states)
         _set_forward_context_connector_data(connector_data)
-        ops = _afd_ascend_ops()
         topk_ids = kwargs.get("topk_ids")
         topk_weights = kwargs.get("topk_weights")
-        outputs = ops.a2e(
+        torch = _torch()
+        hidden_states = torch.ops.vllm.afd_camp2p_send_attn_output(
             hidden_states,
-            topk_ids,
             topk_weights,
+            topk_ids,
             connector_data.batch_size,
             connector_data.h,
             connector_data.k,
@@ -304,10 +310,6 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             connector_data.aiv_num,
             0,
         )
-        connector_data.handle = list(outputs[:5])
-        connector_data.atten_batch_size = outputs[3]
-        connector_data.x_active_mask = outputs[4]
-        _set_forward_context_connector_data(connector_data)
         return hidden_states, None
 
     def recv_ffn_output(self, handle: Any = None, **kwargs: Any) -> Any:
@@ -317,11 +319,11 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         if ref_tensor is None:
             raise RuntimeError("CAMP2P recv_ffn_output requires ref_tensor")
         connector_data = _get_forward_context_connector_data()
-        if connector_data is None or connector_data.atten_batch_size is None:
-            raise RuntimeError("CAMP2P Attention side is missing A2E handle data")
-        return _afd_ascend_ops().e2a(
+        if connector_data is None:
+            raise RuntimeError("CAMP2P Attention side is missing connector data")
+        torch = _torch()
+        return torch.ops.vllm.afd_camp2p_recv_ffn_output(
             ref_tensor,
-            connector_data.atten_batch_size,
             connector_data.batch_size,
             connector_data.h,
             connector_data.k,
@@ -618,10 +620,215 @@ def _set_forward_context_connector_data(data: CAMP2PAFDConnectorMetadata) -> Non
 def _get_forward_context_connector_data() -> CAMP2PAFDConnectorMetadata | None:
     from vllm.forward_context import get_forward_context
 
-    data = get_forward_context().cam_afdconnector_data
+    data = getattr(get_forward_context(), "cam_afdconnector_data", None)
+    if data is None:
+        return None
     if not isinstance(data, CAMP2PAFDConnectorMetadata):
         raise TypeError("forward_context.cam_afdconnector_data has wrong type")
     return data
+
+
+def _register_camp2p_custom_ops() -> None:
+    global _CAMP2P_CUSTOM_OPS_REGISTERED
+    if _CAMP2P_CUSTOM_OPS_REGISTERED:
+        return
+
+    import torch
+    from typing import Optional
+    from vllm.utils.torch_utils import direct_register_custom_op
+
+    def send_attn_output_impl(
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor | None,
+        topk_ids: torch.Tensor | None,
+        batch_size: int,
+        hidden_size: int,
+        topk: int,
+        ffn_size: int,
+        attn_size: int,
+        world_rank: int,
+        group_ep: str,
+        aiv_num: int,
+        compute_gate: int,
+    ) -> torch.Tensor:
+        connector_data = _get_forward_context_connector_data()
+        if connector_data is None:
+            connector_data = CAMP2PAFDConnectorMetadata()
+        connector_data.batch_size = int(batch_size)
+        connector_data.h = int(hidden_size)
+        connector_data.k = int(topk)
+        connector_data.aiv_num = int(aiv_num)
+        connector_data.group_ep = group_ep
+
+        outputs = _afd_ascend_ops().a2e(
+            hidden_states,
+            topk_ids,
+            topk_weights,
+            connector_data.batch_size,
+            connector_data.h,
+            connector_data.k,
+            int(ffn_size),
+            int(attn_size),
+            int(world_rank),
+            group_ep,
+            connector_data.aiv_num,
+            int(compute_gate),
+        )
+        connector_data.handle = list(outputs[:5])
+        connector_data.atten_batch_size = outputs[3]
+        connector_data.x_active_mask = outputs[4]
+        _set_forward_context_connector_data(connector_data)
+        return hidden_states
+
+    def send_attn_output_fake_impl(
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor | None,
+        topk_ids: torch.Tensor | None,
+        batch_size: int,
+        hidden_size: int,
+        topk: int,
+        ffn_size: int,
+        attn_size: int,
+        world_rank: int,
+        group_ep: str,
+        aiv_num: int,
+        compute_gate: int,
+    ) -> torch.Tensor:
+        del (
+            topk_weights,
+            topk_ids,
+            batch_size,
+            hidden_size,
+            topk,
+            ffn_size,
+            attn_size,
+            world_rank,
+            group_ep,
+            aiv_num,
+            compute_gate,
+        )
+        return hidden_states
+
+    def recv_ffn_output_impl(
+        ref_tensor: torch.Tensor,
+        batch_size: int,
+        hidden_size: int,
+        topk: int,
+        ffn_size: int,
+        attn_size: int,
+        world_rank: int,
+        group_ep: str,
+        aiv_num: int,
+    ) -> torch.Tensor:
+        connector_data = _get_forward_context_connector_data()
+        if connector_data is None or connector_data.atten_batch_size is None:
+            raise RuntimeError("CAMP2P Attention side is missing A2E handle data")
+        connector_data.batch_size = int(batch_size)
+        connector_data.h = int(hidden_size)
+        connector_data.k = int(topk)
+        connector_data.aiv_num = int(aiv_num)
+        connector_data.group_ep = group_ep
+        return _afd_ascend_ops().e2a(
+            ref_tensor,
+            connector_data.atten_batch_size,
+            connector_data.batch_size,
+            connector_data.h,
+            connector_data.k,
+            int(ffn_size),
+            int(attn_size),
+            int(world_rank),
+            group_ep,
+            connector_data.aiv_num,
+        )
+
+    def recv_ffn_output_fake_impl(
+        ref_tensor: torch.Tensor,
+        batch_size: int,
+        hidden_size: int,
+        topk: int,
+        ffn_size: int,
+        attn_size: int,
+        world_rank: int,
+        group_ep: str,
+        aiv_num: int,
+    ) -> torch.Tensor:
+        del (
+            batch_size,
+            hidden_size,
+            topk,
+            ffn_size,
+            attn_size,
+            world_rank,
+            group_ep,
+            aiv_num,
+        )
+        return ref_tensor
+
+    send_annotations = {
+        "hidden_states": torch.Tensor,
+        "topk_weights": Optional[torch.Tensor],
+        "topk_ids": Optional[torch.Tensor],
+        "batch_size": int,
+        "hidden_size": int,
+        "topk": int,
+        "ffn_size": int,
+        "attn_size": int,
+        "world_rank": int,
+        "group_ep": str,
+        "aiv_num": int,
+        "compute_gate": int,
+        "return": torch.Tensor,
+    }
+    recv_annotations = {
+        "ref_tensor": torch.Tensor,
+        "batch_size": int,
+        "hidden_size": int,
+        "topk": int,
+        "ffn_size": int,
+        "attn_size": int,
+        "world_rank": int,
+        "group_ep": str,
+        "aiv_num": int,
+        "return": torch.Tensor,
+    }
+    send_attn_output_impl.__annotations__ = send_annotations
+    send_attn_output_fake_impl.__annotations__ = send_annotations
+    recv_ffn_output_impl.__annotations__ = recv_annotations
+    recv_ffn_output_fake_impl.__annotations__ = recv_annotations
+
+    try:
+        direct_register_custom_op(
+            op_name="afd_camp2p_send_attn_output",
+            op_func=send_attn_output_impl,
+            mutates_args=[],
+            fake_impl=send_attn_output_fake_impl,
+            dispatch_key="PrivateUse1",
+        )
+        direct_register_custom_op(
+            op_name="afd_camp2p_recv_ffn_output",
+            op_func=recv_ffn_output_impl,
+            mutates_args=[],
+            fake_impl=recv_ffn_output_fake_impl,
+            dispatch_key="PrivateUse1",
+        )
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        duplicate = any(
+            marker in message
+            for marker in ("already", "duplicate", "same name", "defined")
+        )
+        if not duplicate:
+            raise
+    _CAMP2P_CUSTOM_OPS_REGISTERED = True
+
+
+def _is_torch_compiling() -> bool:
+    torch = _torch()
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and hasattr(compiler, "is_compiling"):
+        return bool(compiler.is_compiling())
+    dynamo = getattr(torch, "_dynamo", None)
+    return bool(dynamo is not None and dynamo.is_compiling())
 
 
 def _empty_npu_tensor(*, dtype_name: str) -> Any:
