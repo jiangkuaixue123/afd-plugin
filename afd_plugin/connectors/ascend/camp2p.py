@@ -345,7 +345,9 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             self.ffn_size,
             self.attn_size,
             self.world_rank,
-            self._group_ep(int(metadata.stage_idx)),
+            self._group_ep(0),
+            self._group_ep(1),
+            self._group_ep(2),
             connector_data.aiv_num,
             0,
         )
@@ -363,7 +365,6 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         if _camp2p_stub_io_enabled():
             return ref_tensor
         torch = _torch()
-        ubatch_idx = int(kwargs.get("ubatch_idx", 0) or 0)
         return torch.ops.vllm.afd_camp2p_recv_ffn_output(
             ref_tensor,
             connector_data.batch_size,
@@ -372,7 +373,9 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             self.ffn_size,
             self.attn_size,
             self.world_rank,
-            self._group_ep(ubatch_idx),
+            self._group_ep(0),
+            self._group_ep(1),
+            self._group_ep(2),
             connector_data.aiv_num,
         )
 
@@ -683,6 +686,25 @@ def _get_forward_context_connector_data() -> CAMP2PAFDConnectorMetadata | None:
     return data
 
 
+def _current_forward_ubatch_idx() -> int:
+    from vllm.forward_context import get_forward_context
+
+    return int(getattr(get_forward_context(), "ubatch_idx", 0) or 0)
+
+
+def _select_group_ep(
+    ubatch_idx: int,
+    group_ep0: str,
+    group_ep1: str,
+    group_ep2: str,
+) -> str:
+    if ubatch_idx == 1:
+        return group_ep1
+    if ubatch_idx == 2:
+        return group_ep2
+    return group_ep0
+
+
 def _register_camp2p_custom_ops() -> None:
     global _CAMP2P_CUSTOM_OPS_REGISTERED
     if _CAMP2P_CUSTOM_OPS_REGISTERED:
@@ -702,7 +724,9 @@ def _register_camp2p_custom_ops() -> None:
         ffn_size: int,
         attn_size: int,
         world_rank: int,
-        group_ep: str,
+        group_ep0: str,
+        group_ep1: str,
+        group_ep2: str,
         aiv_num: int,
         compute_gate: int,
     ) -> torch.Tensor:
@@ -713,6 +737,12 @@ def _register_camp2p_custom_ops() -> None:
         connector_data.h = int(hidden_size)
         connector_data.k = int(topk)
         connector_data.aiv_num = int(aiv_num)
+        group_ep = _select_group_ep(
+            _current_forward_ubatch_idx(),
+            group_ep0,
+            group_ep1,
+            group_ep2,
+        )
         connector_data.group_ep = group_ep
 
         if _camp2p_stub_io_enabled():
@@ -755,7 +785,9 @@ def _register_camp2p_custom_ops() -> None:
         ffn_size: int,
         attn_size: int,
         world_rank: int,
-        group_ep: str,
+        group_ep0: str,
+        group_ep1: str,
+        group_ep2: str,
         aiv_num: int,
         compute_gate: int,
     ) -> torch.Tensor:
@@ -768,7 +800,9 @@ def _register_camp2p_custom_ops() -> None:
             ffn_size,
             attn_size,
             world_rank,
-            group_ep,
+            group_ep0,
+            group_ep1,
+            group_ep2,
             aiv_num,
             compute_gate,
         )
@@ -782,7 +816,9 @@ def _register_camp2p_custom_ops() -> None:
         ffn_size: int,
         attn_size: int,
         world_rank: int,
-        group_ep: str,
+        group_ep0: str,
+        group_ep1: str,
+        group_ep2: str,
         aiv_num: int,
     ) -> torch.Tensor:
         connector_data = _get_forward_context_connector_data()
@@ -792,6 +828,12 @@ def _register_camp2p_custom_ops() -> None:
         connector_data.h = int(hidden_size)
         connector_data.k = int(topk)
         connector_data.aiv_num = int(aiv_num)
+        group_ep = _select_group_ep(
+            _current_forward_ubatch_idx(),
+            group_ep0,
+            group_ep1,
+            group_ep2,
+        )
         connector_data.group_ep = group_ep
         if _camp2p_stub_io_enabled():
             return ref_tensor
@@ -816,7 +858,9 @@ def _register_camp2p_custom_ops() -> None:
         ffn_size: int,
         attn_size: int,
         world_rank: int,
-        group_ep: str,
+        group_ep0: str,
+        group_ep1: str,
+        group_ep2: str,
         aiv_num: int,
     ) -> torch.Tensor:
         del (
@@ -826,7 +870,9 @@ def _register_camp2p_custom_ops() -> None:
             ffn_size,
             attn_size,
             world_rank,
-            group_ep,
+            group_ep0,
+            group_ep1,
+            group_ep2,
             aiv_num,
         )
         return ref_tensor
@@ -841,7 +887,9 @@ def _register_camp2p_custom_ops() -> None:
         "ffn_size": int,
         "attn_size": int,
         "world_rank": int,
-        "group_ep": str,
+        "group_ep0": str,
+        "group_ep1": str,
+        "group_ep2": str,
         "aiv_num": int,
         "compute_gate": int,
         "return": torch.Tensor,
@@ -854,7 +902,9 @@ def _register_camp2p_custom_ops() -> None:
         "ffn_size": int,
         "attn_size": int,
         "world_rank": int,
-        "group_ep": str,
+        "group_ep0": str,
+        "group_ep1": str,
+        "group_ep2": str,
         "aiv_num": int,
         "return": torch.Tensor,
     }
