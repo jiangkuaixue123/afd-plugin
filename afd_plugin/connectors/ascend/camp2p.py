@@ -925,13 +925,14 @@ def _print_camp2p_stub_io_notice() -> None:
 
 
 def _stub_atten_batch_size(batch_size: int) -> Any:
+    del batch_size
     torch = _torch()
-    return torch.tensor([max(1, int(batch_size))], dtype=torch.int32, device="npu")
+    return torch.empty((1,), dtype=torch.int32, device="npu")
 
 
 def _stub_x_active_mask(batch_size: int) -> Any:
     torch = _torch()
-    return torch.ones(max(1, int(batch_size)), dtype=torch.bool, device="npu")
+    return torch.empty((max(1, int(batch_size)),), dtype=torch.bool, device="npu")
 
 
 def _stub_recv_attn_outputs(
@@ -941,13 +942,13 @@ def _stub_recv_attn_outputs(
     batch_size = max(1, int(connector_data.batch_size))
     hidden_size = max(1, int(connector_data.h))
     topk = max(1, int(connector_data.k))
-    hidden_states = torch.zeros(
+    hidden_states = torch.empty(
         (batch_size, hidden_size),
         dtype=torch.bfloat16,
         device="npu",
     )
-    topk_ids = torch.zeros((batch_size, topk), dtype=torch.int32, device="npu")
-    topk_weights = torch.zeros(
+    topk_ids = torch.empty((batch_size, topk), dtype=torch.int32, device="npu")
+    topk_weights = torch.empty(
         (batch_size, topk),
         dtype=torch.float32,
         device="npu",
