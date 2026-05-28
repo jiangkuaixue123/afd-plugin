@@ -116,6 +116,7 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
         _set_npu_device_if_possible(self.device)
         while not event.is_set():
             try:
+                print("[AFDNPUFFNWorker] waiting dp metadata", flush=True)
                 (
                     dp_metadata_list,
                     is_attn_graph_capturing,
@@ -124,12 +125,19 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
             except TimeoutError:
                 continue
 
+            print(
+                "[AFDNPUFFNWorker] received dp metadata "
+                f"stages={list(dp_metadata_list)} "
+                f"is_graph_capturing={is_attn_graph_capturing} "
+                f"is_warmup={is_warmup}",
+                flush=True,
+            )
             self.model_runner.execute_ffn_step(
                 dp_metadata_list=dp_metadata_list,
                 is_graph_capturing=is_attn_graph_capturing,
                 is_warmup=is_warmup,
             )
-            _synchronize_npu_if_possible(self.device)
+            print("[AFDNPUFFNWorker] finished ffn step", flush=True)
 
     def stop_ffn_server_loop(self) -> None:
         event = self._ffn_shutdown_event
@@ -153,14 +161,6 @@ def _set_npu_device_if_possible(device: object) -> None:
     import torch
 
     torch.npu.set_device(device)
-
-
-def _synchronize_npu_if_possible(device: object) -> None:
-    if device.type != "npu":
-        return
-    import torch
-
-    torch.npu.synchronize()
 
 
 __all__ = ["AFDNPUFFNWorker"]

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import inspect
+import textwrap
 from typing import Any
 
 from afd_plugin.compat.ascend import (
@@ -33,6 +35,8 @@ _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm_ascend.worker.model_runner_v1",
     "NPUModelRunner",
 )
+
+_PATCHED_ASCEND_BUILD_ATTENTION_METADATA: Any | None = None
 
 
 class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
@@ -114,14 +118,26 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             int(values.get("num_tokens", 0)),
         )
         if ubatch_slices is not None:
-            kwargs = dict(kwargs)
-            kwargs["ubatch_slices"] = None
             print(
                 "[AFDNPUAttentionModelRunner] build attention metadata "
-                "with single metadata dict for NPU ubatch",
+                "with per-ubatch split metadata",
                 flush=True,
             )
+            self._ensure_ubatch_metadata_builders()
+            return _patched_ascend_build_attention_metadata()(self, *args, **kwargs)
         return super()._build_attention_metadata(*args, **kwargs)
+
+    def _ensure_ubatch_metadata_builders(self) -> None:
+        num_ubatches = int(self.vllm_config.parallel_config.num_ubatches)
+        for kv_cache_group in self.attn_groups:
+            for attn_group in kv_cache_group:
+                if len(attn_group.metadata_builders) >= num_ubatches:
+                    continue
+                attn_group.create_metadata_builders(
+                    self.vllm_config,
+                    self.device,
+                    num_metadata_builders=num_ubatches,
+                )
 
     def _determine_batch_execution_and_padding(self, *args: Any, **kwargs: Any) -> Any:
         enable_npu_afd_ubatching_if_requested(self.vllm_config)
@@ -278,11 +294,18 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             self.afd_connector.world_rank,
         )
         if should_send:
+            print(
+                "[AFDNPUAttentionModelRunner] send dp metadata "
+                f"stages={list(dp_metadata_list)} "
+                f"ubatches={None if ubatch_slices is None else len(ubatch_slices)}",
+                flush=True,
+            )
             self.afd_connector.send_dp_metadata_list(
                 dp_metadata_list,
                 is_graph_capturing=is_graph_capturing,
                 is_warmup=is_warmup,
             )
+            print("[AFDNPUAttentionModelRunner] sent dp metadata", flush=True)
 
     def _ensure_dp_metadata(self, dp_metadata: Any) -> Any:
         if dp_metadata is not None:
@@ -357,6 +380,183 @@ def _is_uniform_decode(
         and (int(max_num_scheduled_tokens) == int(uniform_decode_query_len))
         and (int(num_tokens) == int(max_num_scheduled_tokens) * int(num_reqs)),
     )
+
+
+def _patched_ascend_build_attention_metadata() -> Any:
+    global _PATCHED_ASCEND_BUILD_ATTENTION_METADATA
+    if _PATCHED_ASCEND_BUILD_ATTENTION_METADATA is not None:
+        return _PATCHED_ASCEND_BUILD_ATTENTION_METADATA
+
+    import vllm_ascend.worker.model_runner_v1 as ascend_model_runner
+
+    source = textwrap.dedent(
+        inspect.getsource(ascend_model_runner.NPUModelRunner._build_attention_metadata),
+    )
+    new = """\
+{loop_indent}for attn_gid in range(len(self.attn_groups[kv_cache_gid])):
+{body_indent}if ubatch_slices is not None:
+{body_indent}    for ubid, _cm in enumerate(
+{body_indent}        split_attn_metadata(ubatch_slices, cm)
+{body_indent}    ):
+{body_indent}        _build_attn_group_metadata(kv_cache_gid, attn_gid, _cm, ubid)
+{body_indent}else:
+{body_indent}    _build_attn_group_metadata(kv_cache_gid, attn_gid, cm)
+"""
+    source = _replace_ascend_attention_metadata_split_loop(source, new)
+    namespace = dict(vars(ascend_model_runner))
+    namespace["split_attn_metadata"] = _split_ascend_attn_metadata
+    exec(compile(source, "<afd_npu_attention_metadata_patch>", "exec"), namespace)
+    _PATCHED_ASCEND_BUILD_ATTENTION_METADATA = namespace["_build_attention_metadata"]
+    return _PATCHED_ASCEND_BUILD_ATTENTION_METADATA
+
+
+def _split_ascend_attn_metadata(
+    ubatch_slices: list[Any],
+    common_attn_metadata: Any,
+) -> list[Any]:
+    return [
+        _make_ascend_metadata_with_slice(ubatch_slice, common_attn_metadata)
+        for ubatch_slice in ubatch_slices
+    ]
+
+
+def _make_ascend_metadata_with_slice(ubatch_slice: Any, attn_metadata: Any) -> Any:
+    from dataclasses import replace
+
+    import torch
+
+    assert not ubatch_slice.is_empty(), f"Ubatch slice {ubatch_slice} is empty"
+
+    request_slice = ubatch_slice.request_slice
+    token_slice = ubatch_slice.token_slice
+    start_locs = attn_metadata.query_start_loc_cpu
+    first_req = int(request_slice.start)
+    first_tok = int(token_slice.start)
+    last_req = int(request_slice.stop) - 1
+    last_tok = int(token_slice.stop) - 1
+
+    assert start_locs[first_req] <= first_tok < start_locs[first_req + 1], (
+        "Token slice start outside of first request"
+    )
+
+    splits_first_request = first_tok > start_locs[first_req]
+    splits_last_request = last_tok < start_locs[last_req + 1] - 1
+
+    query_start_loc_cpu = _slice_query_start_locs(start_locs, request_slice)
+    query_start_loc = _slice_query_start_locs(
+        attn_metadata.query_start_loc,
+        request_slice,
+    )
+
+    if splits_first_request:
+        tokens_skipped = first_tok - start_locs[first_req]
+        query_start_loc[1:] -= tokens_skipped
+        query_start_loc_cpu[1:] -= tokens_skipped
+
+    seq_lens = attn_metadata.seq_lens[request_slice]
+    seq_lens_cpu = _slice_optional(attn_metadata.seq_lens_cpu, request_slice)
+    optimistic_seq_lens_cpu = _slice_optional(
+        getattr(attn_metadata, "_seq_lens_cpu", None),
+        request_slice,
+    )
+
+    if splits_last_request:
+        tokens_skipped = start_locs[last_req + 1] - token_slice.stop
+        query_start_loc[-1] -= tokens_skipped
+        query_start_loc_cpu[-1] -= tokens_skipped
+        seq_lens = seq_lens.clone()
+        seq_lens[-1] -= tokens_skipped
+        if seq_lens_cpu is not None:
+            seq_lens_cpu = seq_lens_cpu.clone()
+            seq_lens_cpu[-1] -= tokens_skipped
+        if optimistic_seq_lens_cpu is not None:
+            optimistic_seq_lens_cpu = optimistic_seq_lens_cpu.clone()
+            optimistic_seq_lens_cpu[-1] -= tokens_skipped
+
+    seq_lens_for_max = (
+        seq_lens_cpu
+        if seq_lens_cpu is not None
+        else optimistic_seq_lens_cpu
+        if optimistic_seq_lens_cpu is not None
+        else seq_lens.cpu()
+    )
+    max_seq_len = int(seq_lens_for_max.max())
+    max_query_len = int(
+        torch.max(
+            torch.abs(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]),
+        ).item(),
+    )
+    if max_query_len == 0:
+        max_query_len = int(attn_metadata.max_query_len)
+
+    actual_seq_lengths_q = []
+    if getattr(attn_metadata, "actual_seq_lengths_q", None):
+        actual_seq_lengths_q = query_start_loc_cpu[1:].tolist()
+
+    return replace(
+        attn_metadata,
+        query_start_loc=query_start_loc,
+        query_start_loc_cpu=query_start_loc_cpu,
+        seq_lens=seq_lens,
+        seq_lens_cpu=seq_lens_cpu,
+        _seq_lens_cpu=optimistic_seq_lens_cpu,
+        num_computed_tokens_cpu=_slice_optional(
+            attn_metadata.num_computed_tokens_cpu,
+            request_slice,
+        ),
+        _num_computed_tokens_cpu=_slice_optional(
+            getattr(attn_metadata, "_num_computed_tokens_cpu", None),
+            request_slice,
+        ),
+        num_reqs=int(request_slice.stop) - int(request_slice.start),
+        num_actual_tokens=int(token_slice.stop) - int(token_slice.start),
+        num_input_tokens=int(token_slice.stop) - int(token_slice.start),
+        max_query_len=max_query_len,
+        max_seq_len=max_seq_len,
+        block_table_tensor=attn_metadata.block_table_tensor[request_slice],
+        slot_mapping=attn_metadata.slot_mapping[token_slice],
+        positions=_slice_optional(attn_metadata.positions, token_slice),
+        actual_seq_lengths_q=actual_seq_lengths_q,
+    )
+
+
+def _slice_query_start_locs(query_start_loc: Any, request_slice: slice) -> Any:
+    return (
+        query_start_loc[request_slice.start : request_slice.stop + 1]
+        - query_start_loc[request_slice.start]
+    )
+
+
+def _slice_optional(value: Any, value_slice: slice) -> Any:
+    if value is None:
+        return None
+    return value[value_slice]
+
+
+def _replace_ascend_attention_metadata_split_loop(source: str, template: str) -> str:
+    lines = source.splitlines()
+    loop_marker = "for attn_gid in range(len(self.attn_groups[kv_cache_gid])):"
+    call_marker = "_build_attn_group_metadata(kv_cache_gid, attn_gid, cm)"
+    for idx, line in enumerate(lines):
+        if loop_marker not in line:
+            continue
+        next_idx = idx + 1
+        while next_idx < len(lines) and not lines[next_idx].strip():
+            next_idx += 1
+        if next_idx >= len(lines) or call_marker not in lines[next_idx]:
+            continue
+
+        loop_indent = line[: len(line) - len(line.lstrip())]
+        body_line = lines[next_idx]
+        body_indent = body_line[: len(body_line) - len(body_line.lstrip())]
+        replacement = template.format(
+            loop_indent=loop_indent,
+            body_indent=body_indent,
+        ).splitlines()
+        lines[idx : next_idx + 1] = replacement
+        return "\n".join(lines) + "\n"
+
+    raise RuntimeError("Unable to patch vllm-ascend attention metadata split point")
 
 
 __all__ = ["AFDNPUAttentionModelRunner"]

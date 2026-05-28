@@ -27,8 +27,14 @@ def maybe_apply_dbo_yield(
         return tensor
 
     try:
-        from vllm.v1.worker import ubatching  # noqa: F401
+        from vllm.v1.worker import ubatching
     except Exception:
+        return tensor
+
+    if not _torch_is_compiling():
+        if ubatching.dbo_enabled():
+            print(f"[AFDDBO] yield role={role}", flush=True)
+            ubatching.dbo_yield()
         return tensor
 
     if not _AFD_DBO_YIELD_OP_REGISTERED:

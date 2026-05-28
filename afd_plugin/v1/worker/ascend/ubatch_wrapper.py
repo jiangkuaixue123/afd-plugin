@@ -192,7 +192,18 @@ class AFDNPUUBatchWrapper(_GPUUBatchWrapper):  # type: ignore[misc, valid-type]
 
         @torch.inference_mode()
         def _ubatch_thread(results: list[tuple[int, Any]], metadata: Any) -> None:
+            torch.npu.set_device(self.device)
+            _print_npu_ubatch(
+                "ubatch thread waiting",
+                ubatch_idx=metadata.context.id,
+                num_tokens=metadata.num_tokens,
+            )
             with metadata.context:
+                _print_npu_ubatch(
+                    "ubatch thread running",
+                    ubatch_idx=metadata.context.id,
+                    num_tokens=metadata.num_tokens,
+                )
                 model_output = model(
                     input_ids=metadata.input_ids,
                     positions=metadata.positions,
@@ -200,7 +211,10 @@ class AFDNPUUBatchWrapper(_GPUUBatchWrapper):  # type: ignore[misc, valid-type]
                     inputs_embeds=metadata.inputs_embeds,
                 )
             results.append((metadata.context.id, model_output))
-            torch.npu.synchronize()
+            _print_npu_ubatch(
+                "ubatch thread finished",
+                ubatch_idx=metadata.context.id,
+            )
 
         with _torch_cuda_wrapper():
             results: list[tuple[int, Any]] = []
