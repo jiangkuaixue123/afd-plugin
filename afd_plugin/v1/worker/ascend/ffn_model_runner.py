@@ -133,6 +133,13 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
             graph_enabled=graph_enabled,
             graph_exists=graph_info is not None,
         )
+        print(
+            "[AFDNPUFFNModelRunner] graph key "
+            f"key={graph_key} run_mode={run_mode.name} "
+            f"graph_enabled={graph_enabled} graph_exists={graph_info is not None} "
+            f"is_graph_capturing={is_graph_capturing} is_warmup={is_warmup}",
+            flush=True,
+        )
         if run_mode is AFDGraphRunMode.REPLAY:
             graph_info["graph"].replay()
             return None
@@ -291,6 +298,11 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         graph_key = self._make_graph_key(dp_metadata_list)
         if graph_key in self._acl_graphs:
             return
+        print(
+            "[AFDNPUFFNModelRunner] capture graph key "
+            f"key={graph_key} is_attn_graph_capturing={is_attn_graph_capturing}",
+            flush=True,
+        )
 
         graph = self._new_npu_graph()
         self.connector.update_state_from_dp_metadata(
