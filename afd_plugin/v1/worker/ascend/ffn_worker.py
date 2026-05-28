@@ -10,9 +10,11 @@ from typing import Any
 
 from afd_plugin.compat.ascend import (
     apply_afd_ascend_patches_if_needed,
+    enable_npu_afd_ubatching_if_requested,
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
+    npu_afd_num_ubatches,
 )
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
@@ -50,12 +52,16 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
             expected_role="ffn",
             expected_worker_qualname_override=NPU_FFN_WORKER_FQCN,
         )
+        enable_npu_afd_ubatching_if_requested(self.vllm_config)
         fail_if_unsupported_npu_afd_features(self.vllm_config)
         if self.use_v2_model_runner:
             raise RuntimeError("AFD NPU FFN supports only vllm-ascend MRv1")
 
         self.device = self._init_device()
-        init_ascend_workspace_for_afd(self.device, num_ubatches=1)
+        init_ascend_workspace_for_afd(
+            self.device,
+            num_ubatches=npu_afd_num_ubatches(self.vllm_config),
+        )
         self.model_runner = AFDNPUFFNModelRunner(self.vllm_config, self.device)
 
     def get_kv_cache_spec(self) -> dict[str, Any]:

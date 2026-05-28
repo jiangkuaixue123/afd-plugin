@@ -8,9 +8,11 @@ from typing import Any
 
 from afd_plugin.compat.ascend import (
     apply_afd_ascend_patches_if_needed,
+    enable_npu_afd_ubatching_if_requested,
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
+    npu_afd_num_ubatches,
 )
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ascend.attention_model_runner import (
@@ -49,6 +51,7 @@ class AFDNPUAttentionWorker(_NPUWorker):  # type: ignore[misc, valid-type]
             expected_role="attention",
             expected_worker_qualname_override=NPU_ATTENTION_WORKER_FQCN,
         )
+        enable_npu_afd_ubatching_if_requested(self.vllm_config)
         fail_if_unsupported_npu_afd_features(self.vllm_config)
         if self.use_v2_model_runner:
             raise RuntimeError(
@@ -56,7 +59,10 @@ class AFDNPUAttentionWorker(_NPUWorker):  # type: ignore[misc, valid-type]
             )
 
         self.device = self._init_device()
-        init_ascend_workspace_for_afd(self.device, num_ubatches=1)
+        init_ascend_workspace_for_afd(
+            self.device,
+            num_ubatches=npu_afd_num_ubatches(self.vllm_config),
+        )
         self.model_runner = AFDNPUAttentionModelRunner(
             self.vllm_config,
             self.device,

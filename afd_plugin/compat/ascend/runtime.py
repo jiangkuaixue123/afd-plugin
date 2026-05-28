@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -44,6 +45,43 @@ def init_ascend_workspace_for_afd(device: object, *, num_ubatches: int = 1) -> N
     init_workspace_manager(device, int(num_ubatches))
 
 
+def npu_afd_num_ubatches(vllm_config: object) -> int:
+    if not npu_afd_ubatching_requested(vllm_config):
+        return 1
+    afd_config = parse_afd_config(vllm_config, validate=False)
+    requested = afd_config.extra_config.get("num_ubatches")
+    if requested is not None:
+        return int(requested)
+    parallel_config = vllm_config.parallel_config
+    num_ubatches = int(getattr(parallel_config, "num_ubatches", 0))
+    return 2 if num_ubatches <= 1 else num_ubatches
+
+
+def npu_afd_ubatching_requested(vllm_config: object) -> bool:
+    parallel_config = vllm_config.parallel_config
+    if bool(getattr(parallel_config, "use_ubatching", False)):
+        return True
+    if _truthy(os.getenv("AFD_NPU_ENABLE_UBATCHING")):
+        return True
+    afd_config = parse_afd_config(vllm_config, validate=False)
+    extra = afd_config.extra_config or {}
+    return any(
+        _truthy(extra.get(key))
+        for key in (
+            "enable_ubatching",
+            "enable_dbo",
+            "force_enable_ubatching",
+        )
+    )
+
+
+def enable_npu_afd_ubatching_if_requested(vllm_config: object) -> None:
+    if not npu_afd_ubatching_requested(vllm_config):
+        return
+    parallel_config = vllm_config.parallel_config
+    parallel_config.enable_dbo = True
+
+
 def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
     """Fail fast for NPU AFD features intentionally outside the first version."""
 
@@ -76,8 +114,14 @@ def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
                     "AFD NPU runtime does not support multistream_info enabled",
                 )
 
-    if bool(vllm_config.parallel_config.use_ubatching):
-        raise RuntimeError("AFD NPU runtime does not support ubatching/DBO yet")
+    if npu_afd_ubatching_requested(vllm_config):
+        num_ubatches = npu_afd_num_ubatches(vllm_config)
+        if num_ubatches != 2:
+            raise RuntimeError(
+                "AFD NPU runtime currently supports ubatching/DBO only with "
+                "exactly two ubatches; "
+                f"got num_ubatches={num_ubatches}",
+            )
 
     if not bool(vllm_config.model_config.enforce_eager):
         _npu_aclgraph_mode_name(vllm_config)

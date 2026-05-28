@@ -248,6 +248,12 @@ class AFDMetadata:
     ubatch_idx: int = 0
     transaction_id: str | None = None
     afd_tokens_unpadded_lens: list[int] = field(default_factory=list)
+    input_ids_list: list[Any] = field(default_factory=list)
+    positions_list: list[Any] = field(default_factory=list)
+    inputs_embeds_list: list[Any] = field(default_factory=list)
+    intermediate_tensors_list: list[Any] = field(default_factory=list)
+    attn_metadata_list: list[Any] = field(default_factory=list)
+    dp_metadata_list: list[Any] = field(default_factory=list)
 
     def clone(self) -> AFDMetadata:
         cloned = copy.copy(self)
@@ -255,6 +261,12 @@ class AFDMetadata:
         cloned.afd_reqs_start_loc = list(self.afd_reqs_start_loc)
         cloned.afd_tokens_lens = list(self.afd_tokens_lens)
         cloned.afd_tokens_unpadded_lens = list(self.afd_tokens_unpadded_lens)
+        cloned.input_ids_list = list(self.input_ids_list)
+        cloned.positions_list = list(self.positions_list)
+        cloned.inputs_embeds_list = list(self.inputs_embeds_list)
+        cloned.intermediate_tensors_list = list(self.intermediate_tensors_list)
+        cloned.attn_metadata_list = list(self.attn_metadata_list)
+        cloned.dp_metadata_list = list(self.dp_metadata_list)
         return cloned
 
 

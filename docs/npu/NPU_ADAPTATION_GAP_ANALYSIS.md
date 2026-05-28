@@ -368,8 +368,8 @@ runtime/control-plane 骨架：
 
 - 尚未做 NPU model wrapper / Ascend fused MoE / token dispatcher 的真实迁移，也没有
   完整 NPU 端到端 serving 测试矩阵。
-- ACL graph、ubatching/DBO、通信多流、`compute_gate_on_attention`、量化和权重加载
-  裁剪仍是后续阶段能力。
+- ACL graph 仍待 Ascend 验证；ubatching/DBO 已开始控制面首版接入；通信多流、
+  `compute_gate_on_attention`、量化和权重加载裁剪仍是后续阶段能力。
 
 ## NPU 阶段刷新
 
@@ -425,12 +425,14 @@ runtime/control-plane 骨架：
    `compute_gate_on_attention` 的 fail fast。真实 Ascend 环境还需要补充 NPU-gated
    serving / connector 验证。
 
-8. **NPU Phase 6：ubatch/DBO，待 Phase 5 后推进**
-   在 ACL graph / compile 语义稳定后支持 ubatch。重点对齐 vLLM-Ascend
+8. **NPU Phase 6：ubatch/DBO，控制面首版开发中**
+   在 ACL graph / compile 控制面之后支持受控 2-way ubatch。重点对齐 vLLM-Ascend
    `npu_ubatch_wrapper.py`、原始 AFD metadata list 语义和每个 ubatch 独立
    `AFDMetadata` / DP metadata 的传递规则，明确 `afd_stage_idx`、token slice、
    request slice、padded/unpadded token lens 与 FFN daemon loop 的关系。第一版仍以
-   单流 `camp2pconnector` 为目标，不同时引入通信多流。
+   单流 `camp2pconnector` 为目标，不同时引入通信多流。当前已放开 NPU
+   `num_ubatches=2` 的 validation，Attention 侧发送 per-ubatch DP metadata，
+   FFN 侧按 stage 消费并回传；仍需真实 Ascend serving / graph 组合验证。
 
 9. **NPU Phase 7：模型/MoE 语义，顺延**
    迁移不依赖 `compute_gate_on_attention` 的 Ascend fused MoE、token dispatcher 和

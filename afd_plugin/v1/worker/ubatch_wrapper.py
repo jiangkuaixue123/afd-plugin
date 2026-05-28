@@ -49,6 +49,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         forward_context = get_forward_context()
         ubatch_slices = forward_context.ubatch_slices
         if ubatch_slices is None:
+            _print_afd_ubatch("native path: no ubatch_slices")
             return super().__call__(*args, **kwargs)
 
         cudagraph_runtime_mode = forward_context.cudagraph_runtime_mode
@@ -58,6 +59,12 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             parent_additional_kwargs = dict(forward_context.additional_kwargs)
 
         num_tokens = sum(int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices)
+        _print_afd_ubatch(
+            "entered ubatch path",
+            num_ubatches=len(ubatch_slices),
+            num_tokens=num_tokens,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+        )
         dp_metadata = build_ubatch_dp_metadata_list(
             self.vllm_config,
             ubatch_slices,
@@ -81,6 +88,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 cudagraph_runtime_mode=CUDAGraphMode.NONE,
             )
             with self.sm_control:
+                _print_afd_ubatch("capture ubatches", num_tokens=num_tokens)
                 return self._capture_ubatches(ubatch_metadata, self.runnable)
 
         if (
@@ -91,6 +99,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
 
             get_offloader().sync_prev_onload()
             cudagraph_metadata = self.cudagraphs[num_tokens]
+            _print_afd_ubatch("replay ubatch graph", num_tokens=num_tokens)
             cudagraph_metadata.cudagraph.replay()
             return cudagraph_metadata.outputs
 
@@ -108,6 +117,7 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             cudagraph_runtime_mode=CUDAGraphMode.NONE,
         )
         with self.sm_control:
+            _print_afd_ubatch("run ubatches eagerly", num_tokens=num_tokens)
             return self._run_ubatches(ubatch_metadata, self.runnable)
 
     def _install_missing_afd_metadata(
@@ -117,10 +127,16 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
     ) -> None:
         provider = self._afd_context_provider
         if provider is None:
+            _print_afd_ubatch("missing AFD provider; using native metadata")
             self._afd_use_native_ubatch_metadata = True
             return
 
         num_tokens_unpadded = sum(int(ub.num_tokens) for ub in ubatch_slices)
+        _print_afd_ubatch(
+            "install missing AFD metadata",
+            num_ubatches=len(ubatch_slices),
+            num_tokens_unpadded=num_tokens_unpadded,
+        )
         afd_metadata = provider._build_afd_metadata(
             ubatch_slices,
             num_tokens_unpadded,
@@ -185,6 +201,12 @@ class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 afd_metadata,
                 ubatch_slices,
                 idx,
+            )
+            _print_afd_ubatch(
+                "build child forward context",
+                ubatch_idx=idx,
+                token_start=ubatch_afd_metadata.afd_tokens_start_loc[0],
+                num_tokens=ubatch_afd_metadata.afd_tokens_lens[0],
             )
             forward_contexts.append(
                 create_forward_context(
@@ -335,6 +357,14 @@ def _current_cuda_stream() -> Any:
     import torch
 
     return torch.cuda.current_stream()
+
+
+def _print_afd_ubatch(message: str, **fields: Any) -> None:
+    if fields:
+        details = " ".join(f"{key}={value}" for key, value in fields.items())
+        print(f"[AFDUBatchWrapper] {message} {details}", flush=True)
+        return
+    print(f"[AFDUBatchWrapper] {message}", flush=True)
 
 
 def _is_afd_enabled(vllm_config: object) -> bool:

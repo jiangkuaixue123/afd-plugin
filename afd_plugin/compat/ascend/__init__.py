@@ -14,16 +14,20 @@ from afd_plugin.compat.ascend.ops import (
 from afd_plugin.compat.ascend.runtime import (
     apply_afd_ascend_patches_if_needed,
     ascend_forward_context,
+    enable_npu_afd_ubatching_if_requested,
     ensure_ascend_runtime_available,
     ensure_vllm_config_has_afd_proxy,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
     mirror_afd_metadata_on_forward_context,
+    npu_afd_num_ubatches,
+    npu_afd_ubatching_requested,
 )
 
 __all__ = [
     "apply_afd_ascend_patches_if_needed",
     "ascend_forward_context",
+    "enable_npu_afd_ubatching_if_requested",
     "AFD_ASCEND_OPS_NAMESPACE",
     "AFD_ASCEND_VENDOR_NAME",
     "AFD_CUST_OPAPI_ENV",
@@ -36,4 +40,6 @@ __all__ = [
     "has_afd_ascend_ops",
     "init_ascend_workspace_for_afd",
     "mirror_afd_metadata_on_forward_context",
+    "npu_afd_num_ubatches",
+    "npu_afd_ubatching_requested",
 ]

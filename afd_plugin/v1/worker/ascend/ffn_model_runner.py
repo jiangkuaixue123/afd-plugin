@@ -8,6 +8,7 @@ from typing import Any
 
 from afd_plugin.compat.ascend import (
     ascend_forward_context,
+    enable_npu_afd_ubatching_if_requested,
     ensure_vllm_config_has_afd_proxy,
     fail_if_unsupported_npu_afd_features,
     mirror_afd_metadata_on_forward_context,
@@ -60,6 +61,7 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         self.afd_config = afd_config
         if not self.afd_config.enabled:
             raise ValueError("AFD NPU FFN runtime requires enabled=true")
+        enable_npu_afd_ubatching_if_requested(vllm_config)
         fail_if_unsupported_npu_afd_features(vllm_config)
         self.afd_config = _with_dp_derived_afd_rank(vllm_config, self.afd_config)
         rank, local_rank = _resolve_world_ranks()

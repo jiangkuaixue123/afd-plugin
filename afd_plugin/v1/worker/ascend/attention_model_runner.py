@@ -7,19 +7,27 @@ from __future__ import annotations
 from typing import Any
 
 from afd_plugin.compat.ascend import (
+    enable_npu_afd_ubatching_if_requested,
     ensure_vllm_config_has_afd_proxy,
     fail_if_unsupported_npu_afd_features,
     mirror_afd_metadata_on_forward_context,
+    npu_afd_ubatching_requested,
 )
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.attention_model_runner import (
+    _batch_execution_values,
+    _check_ubatch_thresholds,
     _forward_context_num_tokens,
     _full_cudagraph_padded_tokens,
+    _has_enough_tokens_for_ubatches,
+    _resolve_cudagraph_mode_none,
     _resolve_world_ranks,
     _with_dp_derived_afd_rank,
 )
+from afd_plugin.v1.worker.ascend.ubatch_wrapper import AFDNPUUBatchWrapper
+from afd_plugin.v1.worker.ubatch_wrapper import build_ubatch_dp_metadata_list
 
 _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm_ascend.worker.model_runner_v1",
@@ -46,6 +54,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         self.afd_config = afd_config
         if not self.afd_config.enabled:
             raise ValueError("AFD NPU Attention runtime requires enabled=true")
+        enable_npu_afd_ubatching_if_requested(vllm_config)
         fail_if_unsupported_npu_afd_features(vllm_config)
         self.afd_config = _with_dp_derived_afd_rank(vllm_config, self.afd_config)
         rank, local_rank = _resolve_world_ranks()
@@ -59,11 +68,35 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         self._is_warmup = False
         self._afd_is_graph_capturing = False
         self._afd_pending_metadata: AFDMetadata | None = None
+        self._afd_pending_ubatch_slices: Any = None
         self._afd_transaction_counter = 0
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
         return parse_afd_config(vllm_config, expected_role="attention")
+
+    def load_model(self, *args: Any, **kwargs: Any) -> Any:
+        result = super().load_model(*args, **kwargs)
+        if npu_afd_ubatching_requested(self.vllm_config):
+            self._install_afd_npu_ubatch_wrapper()
+        return result
+
+    def _install_afd_npu_ubatch_wrapper(self) -> None:
+        if isinstance(self.model, AFDNPUUBatchWrapper):
+            return
+
+        runtime_mode = _resolve_cudagraph_mode_none()
+        self.model = AFDNPUUBatchWrapper(
+            self.model,
+            self.vllm_config,
+            runtime_mode,
+            self.device,
+        )
+        print(
+            "[AFDNPUAttentionModelRunner] installed AFDNPUUBatchWrapper "
+            f"num_ubatches={self.vllm_config.parallel_config.num_ubatches}",
+            flush=True,
+        )
 
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
         from vllm.forward_context import get_forward_context
@@ -74,11 +107,86 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
 
     def _build_attention_metadata(self, *args: Any, **kwargs: Any) -> Any:
         values = _attention_metadata_values(args, kwargs)
+        ubatch_slices = values.get("ubatch_slices")
+        self._afd_pending_ubatch_slices = ubatch_slices
         self._afd_pending_metadata = self._build_afd_metadata(
-            values.get("ubatch_slices"),
+            ubatch_slices,
             int(values.get("num_tokens", 0)),
         )
+        if ubatch_slices is not None:
+            kwargs = dict(kwargs)
+            kwargs["ubatch_slices"] = None
+            print(
+                "[AFDNPUAttentionModelRunner] build attention metadata "
+                "with single metadata dict for NPU ubatch",
+                flush=True,
+            )
         return super()._build_attention_metadata(*args, **kwargs)
+
+    def _determine_batch_execution_and_padding(self, *args: Any, **kwargs: Any) -> Any:
+        enable_npu_afd_ubatching_if_requested(self.vllm_config)
+        result = super()._determine_batch_execution_and_padding(*args, **kwargs)
+        (
+            cudagraph_mode,
+            batch_descriptor,
+            should_ubatch,
+            num_tokens_across_dp,
+            cudagraph_stats,
+        ) = result
+        values = _batch_execution_values(args, kwargs)
+        num_tokens = int(values.get("num_tokens", 0))
+        if should_ubatch and not _has_enough_tokens_for_ubatches(
+            self.vllm_config,
+            num_tokens,
+        ):
+            should_ubatch = False
+        elif not should_ubatch:
+            should_ubatch = self._should_ubatch_without_vllm_dp(*args, **kwargs)
+
+        print(
+            "[AFDNPUAttentionModelRunner] determine ubatch "
+            f"base_should_ubatch={result[2]} final_should_ubatch={should_ubatch} "
+            f"num_tokens={num_tokens} num_reqs={values.get('num_reqs')} "
+            f"enable_dbo={getattr(self.vllm_config.parallel_config, 'enable_dbo', None)} "
+            f"use_ubatching={getattr(self.vllm_config.parallel_config, 'use_ubatching', None)} "
+            f"num_ubatches={getattr(self.vllm_config.parallel_config, 'num_ubatches', None)}",
+            flush=True,
+        )
+        return (
+            cudagraph_mode,
+            batch_descriptor,
+            should_ubatch,
+            num_tokens_across_dp,
+            cudagraph_stats,
+        )
+
+    def _should_ubatch_without_vllm_dp(self, *args: Any, **kwargs: Any) -> bool:
+        parallel_config = self.vllm_config.parallel_config
+        if int(parallel_config.data_parallel_size) > 1:
+            return False
+        if not bool(parallel_config.use_ubatching):
+            return False
+        if not bool(kwargs.get("allow_microbatching", True)):
+            return False
+
+        values = _batch_execution_values(args, kwargs)
+        num_tokens = int(values["num_tokens"])
+        if not _has_enough_tokens_for_ubatches(self.vllm_config, num_tokens):
+            return False
+
+        uniform_decode = _is_uniform_decode(
+            speculative_config=getattr(self, "speculative_config", None),
+            uniform_decode_query_len=int(self.uniform_decode_query_len),
+            num_tokens=num_tokens,
+            num_reqs=int(values["num_reqs"]),
+            max_num_scheduled_tokens=int(values["max_num_scheduled_tokens"]),
+            force_uniform_decode=values.get("force_uniform_decode"),
+        )
+        return _check_ubatch_thresholds(
+            parallel_config,
+            num_tokens,
+            bool(uniform_decode),
+        )
 
     def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
         previous = self._afd_is_graph_capturing
@@ -90,6 +198,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         finally:
             self._afd_is_graph_capturing = previous
             self._afd_pending_metadata = None
+            self._afd_pending_ubatch_slices = None
 
     def _build_afd_metadata(
         self,
@@ -124,6 +233,12 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         self,
         forward_context: object,
     ) -> None:
+        if (
+            getattr(forward_context, "ubatch_slices", None) is None
+            and self._afd_pending_ubatch_slices is not None
+        ):
+            forward_context.ubatch_slices = self._afd_pending_ubatch_slices
+
         if self._afd_pending_metadata is None:
             self._afd_pending_metadata = self._build_afd_metadata(
                 forward_context.ubatch_slices,
@@ -143,9 +258,15 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
 
     def _send_dp_metadata(self, dp_metadata: Any, ubatch_slices: Any) -> None:
         if ubatch_slices and len(ubatch_slices) > 1:
-            raise RuntimeError("AFD NPU Attention does not support ubatching yet")
-        dp_metadata = self._ensure_dp_metadata(dp_metadata)
-        dp_metadata_list = {0: dp_metadata}
+            dp_metadata_list = {
+                idx: metadata
+                for idx, metadata in enumerate(
+                    build_ubatch_dp_metadata_list(self.vllm_config, ubatch_slices),
+                )
+            }
+        else:
+            dp_metadata = self._ensure_dp_metadata(dp_metadata)
+            dp_metadata_list = {0: dp_metadata}
         is_warmup = bool(self._is_warmup)
         is_graph_capturing = bool(self._afd_is_graph_capturing)
         self.afd_connector.update_state_from_dp_metadata(
@@ -218,6 +339,24 @@ def _attention_metadata_values(
     values = dict(zip(names, args, strict=False))
     values.update(kwargs)
     return values
+
+
+def _is_uniform_decode(
+    *,
+    speculative_config: object | None,
+    uniform_decode_query_len: int,
+    num_tokens: int,
+    num_reqs: int,
+    max_num_scheduled_tokens: int,
+    force_uniform_decode: object | None,
+) -> bool:
+    if force_uniform_decode is not None:
+        return bool(force_uniform_decode)
+    return bool(
+        (speculative_config is None)
+        and (int(max_num_scheduled_tokens) == int(uniform_decode_query_len))
+        and (int(num_tokens) == int(max_num_scheduled_tokens) * int(num_reqs)),
+    )
 
 
 __all__ = ["AFDNPUAttentionModelRunner"]

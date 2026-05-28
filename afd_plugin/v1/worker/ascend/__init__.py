@@ -8,10 +8,12 @@ from afd_plugin.v1.worker.ascend.attention_model_runner import (
 from afd_plugin.v1.worker.ascend.attention_worker import AFDNPUAttentionWorker
 from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
 from afd_plugin.v1.worker.ascend.ffn_worker import AFDNPUFFNWorker
+from afd_plugin.v1.worker.ascend.ubatch_wrapper import AFDNPUUBatchWrapper
 
 __all__ = [
     "AFDNPUAttentionModelRunner",
     "AFDNPUAttentionWorker",
     "AFDNPUFFNModelRunner",
     "AFDNPUFFNWorker",
+    "AFDNPUUBatchWrapper",
 ]
