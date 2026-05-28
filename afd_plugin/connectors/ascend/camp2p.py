@@ -102,6 +102,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         self.scheduler_config = vllm_config.scheduler_config
         self.max_num_reqs = _resolve_max_num_reqs(vllm_config)
         self.afd_pg: Any | None = None
+        self.afd_ubatch_pgs: list[Any] = []
         self.p2p_pg: Any | None = None
         self.ffn_pg: Any | None = None
         self.hccl_comm_name = ""
@@ -150,6 +151,24 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         )
         self.hccl_comm_name = _hccl_comm_name(self.afd_pg, self.world_rank)
         self.hccl_comm_name_list = [self.hccl_comm_name]
+        self.afd_ubatch_pgs = [self.afd_pg]
+
+        for ubatch_idx in range(
+            1,
+            _resolve_num_ubatches(self.vllm_config, self.afd_config),
+        ):
+            ubatch_pg = init_afd_process_group(
+                backend="hccl",
+                init_method=f"tcp://{self.afd_config.host}:{self.afd_config.port}",
+                world_size=self.ffn_size + self.attn_size,
+                rank=self.world_rank,
+                group_name=f"afd_ubatch_{ubatch_idx}",
+                timeout=timedelta(minutes=30),
+            )
+            self.afd_ubatch_pgs.append(ubatch_pg)
+            self.hccl_comm_name_list.append(
+                _hccl_comm_name(ubatch_pg, self.world_rank),
+            )
 
         if self.afd_config.role == "ffn":
             self.ffn_pg = init_afd_process_group(
@@ -322,6 +341,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         if connector_data is None:
             raise RuntimeError("CAMP2P Attention side is missing connector data")
         torch = _torch()
+        ubatch_idx = int(kwargs.get("ubatch_idx", 0) or 0)
         return torch.ops.vllm.afd_camp2p_recv_ffn_output(
             ref_tensor,
             connector_data.batch_size,
@@ -330,7 +350,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             self.ffn_size,
             self.attn_size,
             self.world_rank,
-            self._group_ep(int(kwargs.get("ubatch_idx", 0) or 0)),
+            self._group_ep(ubatch_idx),
             connector_data.aiv_num,
         )
 
@@ -389,6 +409,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         connector_data = _ensure_connector_data(metadata)
         if connector_data.atten_batch_size is None:
             raise RuntimeError("CAMP2P FFN side is missing A2E atten_batch_size")
+        ubatch_idx = int(kwargs.get("ubatch_idx", metadata.stage_idx) or 0)
         _afd_ascend_ops().e2a(
             ffn_output,
             connector_data.atten_batch_size,
@@ -398,7 +419,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             self.ffn_size,
             self.attn_size,
             self.world_rank,
-            self._group_ep(int(kwargs.get("ubatch_idx", metadata.stage_idx) or 0)),
+            self._group_ep(ubatch_idx),
             connector_data.aiv_num,
         )
         return None
@@ -570,6 +591,13 @@ def _resolve_aiv_num(afd_config: AFDConfig) -> int:
 
 def _resolve_hidden_size(vllm_config: object) -> int:
     return _resolve_int_attr(vllm_config, "hidden_size", default=1)
+
+
+def _resolve_num_ubatches(vllm_config: object, afd_config: AFDConfig) -> int:
+    if "num_ubatches" in afd_config.extra_config:
+        return max(1, int(afd_config.extra_config["num_ubatches"]))
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    return max(1, int(getattr(parallel_config, "num_ubatches", 1)))
 
 
 def _resolve_max_num_reqs(vllm_config: object) -> int:
