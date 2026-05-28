@@ -9,6 +9,7 @@ only when the connector is initialized or used.
 
 from __future__ import annotations
 
+import os
 import pickle
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,6 +22,14 @@ from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 from afd_plugin.distributed import init_afd_process_group, topology_from_config
 
 _CAMP2P_CUSTOM_OPS_REGISTERED = False
+_CAMP2P_STUB_IO_ENABLED = False
+_CAMP2P_STUB_IO_NOTICE_PRINTED = False
+_CAMP2P_STUB_IO_ENV = "AFD_CAMP2P_STUB_IO"
+_CAMP2P_STUB_IO_EXTRA_KEYS = (
+    "stub_io",
+    "camp2p_stub_io",
+    "enable_camp2p_stub_io",
+)
 
 
 @dataclass(slots=True)
@@ -139,6 +148,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         ensure_afd_ascend_ops_loaded()
         import torch_npu  # noqa: F401
 
+        _configure_camp2p_stub_io(self.afd_config)
         _register_camp2p_custom_ops()
 
         self.afd_pg = init_afd_process_group(
@@ -314,6 +324,16 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         _set_forward_context_connector_data(connector_data)
         topk_ids = kwargs.get("topk_ids")
         topk_weights = kwargs.get("topk_weights")
+        if _camp2p_stub_io_enabled():
+            connector_data.group_ep = self._group_ep(int(metadata.stage_idx))
+            connector_data.atten_batch_size = _stub_atten_batch_size(
+                connector_data.batch_size,
+            )
+            connector_data.x_active_mask = _stub_x_active_mask(
+                connector_data.batch_size,
+            )
+            _set_forward_context_connector_data(connector_data)
+            return hidden_states, None
         torch = _torch()
         hidden_states = torch.ops.vllm.afd_camp2p_send_attn_output(
             hidden_states,
@@ -340,6 +360,8 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         connector_data = _get_forward_context_connector_data()
         if connector_data is None:
             raise RuntimeError("CAMP2P Attention side is missing connector data")
+        if _camp2p_stub_io_enabled():
+            return ref_tensor
         torch = _torch()
         ubatch_idx = int(kwargs.get("ubatch_idx", 0) or 0)
         return torch.ops.vllm.afd_camp2p_recv_ffn_output(
@@ -370,20 +392,23 @@ class CAMP2PAFDConnector(AFDConnectorBase):
                 layer_idx=int(kwargs.get("layer_idx", 0)),
             )
         connector_data = _ensure_connector_data(metadata)
-        outputs = _afd_ascend_ops().a2e(
-            _empty_npu_tensor(dtype_name="bfloat16"),
-            _empty_npu_tensor(dtype_name="int32"),
-            _empty_npu_tensor(dtype_name="float32"),
-            connector_data.batch_size,
-            connector_data.h,
-            connector_data.k,
-            self.ffn_size,
-            self.attn_size,
-            self.world_rank,
-            self._group_ep(ubatch_idx),
-            connector_data.aiv_num,
-            0,
-        )
+        if _camp2p_stub_io_enabled():
+            outputs = _stub_recv_attn_outputs(connector_data)
+        else:
+            outputs = _afd_ascend_ops().a2e(
+                _empty_npu_tensor(dtype_name="bfloat16"),
+                _empty_npu_tensor(dtype_name="int32"),
+                _empty_npu_tensor(dtype_name="float32"),
+                connector_data.batch_size,
+                connector_data.h,
+                connector_data.k,
+                self.ffn_size,
+                self.attn_size,
+                self.world_rank,
+                self._group_ep(ubatch_idx),
+                connector_data.aiv_num,
+                0,
+            )
         connector_data.handle = list(outputs[:5])
         connector_data.atten_batch_size = outputs[3]
         connector_data.x_active_mask = outputs[4]
@@ -410,6 +435,8 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         if connector_data.atten_batch_size is None:
             raise RuntimeError("CAMP2P FFN side is missing A2E atten_batch_size")
         ubatch_idx = int(kwargs.get("ubatch_idx", metadata.stage_idx) or 0)
+        if _camp2p_stub_io_enabled():
+            return None
         _afd_ascend_ops().e2a(
             ffn_output,
             connector_data.atten_batch_size,
@@ -688,6 +715,16 @@ def _register_camp2p_custom_ops() -> None:
         connector_data.aiv_num = int(aiv_num)
         connector_data.group_ep = group_ep
 
+        if _camp2p_stub_io_enabled():
+            connector_data.atten_batch_size = _stub_atten_batch_size(
+                connector_data.batch_size,
+            )
+            connector_data.x_active_mask = _stub_x_active_mask(
+                connector_data.batch_size,
+            )
+            _set_forward_context_connector_data(connector_data)
+            return hidden_states
+
         outputs = _afd_ascend_ops().a2e(
             hidden_states,
             topk_ids,
@@ -756,6 +793,8 @@ def _register_camp2p_custom_ops() -> None:
         connector_data.k = int(topk)
         connector_data.aiv_num = int(aiv_num)
         connector_data.group_ep = group_ep
+        if _camp2p_stub_io_enabled():
+            return ref_tensor
         return _afd_ascend_ops().e2a(
             ref_tensor,
             connector_data.atten_batch_size,
@@ -857,6 +896,77 @@ def _is_torch_compiling() -> bool:
         return bool(compiler.is_compiling())
     dynamo = getattr(torch, "_dynamo", None)
     return bool(dynamo is not None and dynamo.is_compiling())
+
+
+def _configure_camp2p_stub_io(afd_config: AFDConfig) -> None:
+    global _CAMP2P_STUB_IO_ENABLED
+    extra = afd_config.extra_config or {}
+    _CAMP2P_STUB_IO_ENABLED = any(
+        _truthy(extra.get(key)) for key in _CAMP2P_STUB_IO_EXTRA_KEYS
+    )
+    if _camp2p_stub_io_enabled():
+        _print_camp2p_stub_io_notice()
+
+
+def _camp2p_stub_io_enabled() -> bool:
+    return _CAMP2P_STUB_IO_ENABLED or _truthy(os.getenv(_CAMP2P_STUB_IO_ENV))
+
+
+def _print_camp2p_stub_io_notice() -> None:
+    global _CAMP2P_STUB_IO_NOTICE_PRINTED
+    if _CAMP2P_STUB_IO_NOTICE_PRINTED:
+        return
+    print(
+        "AFD_CAMP2P_STUB_IO=1: CAMP2P tensor data-path send/recv "
+        "calls are stubbed for torch.compile diagnostics.",
+        flush=True,
+    )
+    _CAMP2P_STUB_IO_NOTICE_PRINTED = True
+
+
+def _stub_atten_batch_size(batch_size: int) -> Any:
+    torch = _torch()
+    return torch.tensor([max(1, int(batch_size))], dtype=torch.int32, device="npu")
+
+
+def _stub_x_active_mask(batch_size: int) -> Any:
+    torch = _torch()
+    return torch.ones(max(1, int(batch_size)), dtype=torch.bool, device="npu")
+
+
+def _stub_recv_attn_outputs(
+    connector_data: CAMP2PAFDConnectorMetadata,
+) -> tuple[Any, Any, Any, Any, Any]:
+    torch = _torch()
+    batch_size = max(1, int(connector_data.batch_size))
+    hidden_size = max(1, int(connector_data.h))
+    topk = max(1, int(connector_data.k))
+    hidden_states = torch.zeros(
+        (batch_size, hidden_size),
+        dtype=torch.bfloat16,
+        device="npu",
+    )
+    topk_ids = torch.zeros((batch_size, topk), dtype=torch.int32, device="npu")
+    topk_weights = torch.zeros(
+        (batch_size, topk),
+        dtype=torch.float32,
+        device="npu",
+    )
+    atten_batch_size = _stub_atten_batch_size(batch_size)
+    x_active_mask = _stub_x_active_mask(batch_size)
+    return hidden_states, topk_ids, topk_weights, atten_batch_size, x_active_mask
+
+
+def _truthy(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return bool(value)
 
 
 def _empty_npu_tensor(*, dtype_name: str) -> Any:
