@@ -18,7 +18,7 @@ Defaults:
   `cudagraph_mode=FULL_DECODE_ONLY`
 - XAYF topologies use native vLLM DP: Attention runs with `DP=X, TP=1`, FFN
   runs with `DP=Y, TP=1`, and both roles pass `--enable-expert-parallel`
-- graph tests pass `DecodeBenchConnector`, align `max-num-seqs`,
+- graph tests pass `AFDDecodeBenchConnector`, align `max-num-seqs`,
   `max-num-batched-tokens`, and CUDA graph capture size
 - the DBO graph test exercises the two-stage ubatch CUDA graph path
 
