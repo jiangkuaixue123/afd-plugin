@@ -134,7 +134,7 @@ def _run_e2e(case: NPUE2ECase, devices: list[str]) -> None:
                 "--dbo-decode-token-threshold",
                 os.environ.get("AFD_NPU_E2E_DBO_DECODE_THRESHOLD", "2"),
                 "--dbo-prefill-token-threshold",
-                os.environ.get("AFD_NPU_E2E_DBO_PREFILL_THRESHOLD", str(capture_size)),
+                os.environ.get("AFD_NPU_E2E_DBO_PREFILL_THRESHOLD", "2"),
             ],
         )
     subprocess.run(command, cwd=REPO_ROOT, check=True)

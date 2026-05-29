@@ -79,7 +79,9 @@ def enable_npu_afd_ubatching_if_requested(vllm_config: object) -> None:
     if not npu_afd_ubatching_requested(vllm_config):
         return
     parallel_config = vllm_config.parallel_config
+    num_ubatches = npu_afd_num_ubatches(vllm_config)
     parallel_config.enable_dbo = True
+    parallel_config.ubatch_size = num_ubatches
 
 
 def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:

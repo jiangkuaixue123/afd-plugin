@@ -82,7 +82,7 @@ def main() -> int:
             print(f"\n=== Completion response: request {request_idx} ===")
             print(json.dumps(response, ensure_ascii=False, indent=2))
 
-        assert_log_expectations(args, logs)
+        assert_log_expectations(args, logs, responses)
         return 0
     finally:
         terminate_processes(processes)
@@ -310,11 +310,13 @@ def build_vllm_command(args: argparse.Namespace, *, role: str) -> list[str]:
         prefill_threshold = (
             args.dbo_prefill_token_threshold
             if args.dbo_prefill_token_threshold is not None
-            else args.graph_capture_size
+            else args.dbo_decode_token_threshold
         )
         cmd.extend(
             [
                 "--enable-dbo",
+                "--ubatch-size",
+                "2",
                 "--dbo-decode-token-threshold",
                 str(args.dbo_decode_token_threshold),
                 "--dbo-prefill-token-threshold",
@@ -562,9 +564,11 @@ def _request_count(args: argparse.Namespace) -> int:
 def assert_log_expectations(
     args: argparse.Namespace,
     logs: dict[str, list[str]],
+    responses: list[dict[str, Any]] | None = None,
 ) -> None:
     ffn_log = "".join(logs["ffn"])
     attention_log = "".join(logs["attention"])
+    combined_log = f"{attention_log}\n{ffn_log}"
     if args.enable_ubatching:
         _require_log(
             attention_log,
@@ -578,15 +582,22 @@ def assert_log_expectations(
         )
     if args.full_graph:
         _require_log(
-            ffn_log,
-            "AFD_NPU_E2E: FFN ACL graph captured",
-            "FFN ACL graph capture was not observed",
+            attention_log,
+            "AFDDecodeBenchConnector",
+            "Attention did not start with AFDDecodeBenchConnector for FULL graph",
         )
         _require_log(
-            ffn_log,
-            "AFD_NPU_E2E: FFN ACL graph replayed",
-            "FFN ACL graph replay was not observed",
+            combined_log,
+            "Graph capturing finished",
+            "vLLM-Ascend graph capture was not observed",
         )
+        if responses is not None:
+            expected_responses = _request_count(args) * 2
+            if len(responses) < expected_responses:
+                raise AssertionError(
+                    "FULL graph replay round did not complete successfully; "
+                    f"expected {expected_responses} responses, got {len(responses)}",
+                )
 
 
 def _require_log(log: str, needle: str, message: str) -> None:

@@ -121,8 +121,9 @@ def test_npu_runner_ubatching_sets_cli_and_afd_extra_config():
     additional_config = json.loads(_arg_value(command, "--additional-config"))
 
     assert "--enable-dbo" in command
+    assert _arg_value(command, "--ubatch-size") == "2"
     assert _arg_value(command, "--dbo-decode-token-threshold") == "2"
-    assert _arg_value(command, "--dbo-prefill-token-threshold") == "12"
+    assert _arg_value(command, "--dbo-prefill-token-threshold") == "2"
     assert additional_config["afd"]["extra_config"]["enable_ubatching"] is True
     assert additional_config["afd"]["extra_config"]["num_ubatches"] == 2
 
@@ -180,13 +181,14 @@ def test_npu_runner_log_expectations_require_graph_and_ubatch_markers():
         {
             "attention": [
                 "AFD_NPU_E2E: Attention sending 2 ubatch DP metadata slices",
+                "AFDDecodeBenchConnector",
+                "Graph capturing finished",
             ],
             "ffn": [
                 "AFD_NPU_E2E: FFN processing 2 ubatch stages",
-                "AFD_NPU_E2E: FFN ACL graph captured",
-                "AFD_NPU_E2E: FFN ACL graph replayed",
             ],
         },
+        [{"id": request_idx} for request_idx in range(24)],
     )
 
 

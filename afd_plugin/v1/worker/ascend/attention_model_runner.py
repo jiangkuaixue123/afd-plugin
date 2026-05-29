@@ -168,6 +168,16 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
                 )
                 if fallback_num_tokens_across_dp is not None:
                     num_tokens_across_dp = fallback_num_tokens_across_dp
+            if npu_afd_ubatching_requested(self.vllm_config):
+                logger.info(
+                    "AFD_NPU_E2E: Attention ubatch decision "
+                    "use_ubatching=%s num_ubatches=%s num_tokens=%d "
+                    "should_ubatch=%s",
+                    bool(self.vllm_config.parallel_config.use_ubatching),
+                    int(self.vllm_config.parallel_config.num_ubatches),
+                    num_tokens,
+                    bool(should_ubatch),
+                )
 
             return (
                 cudagraph_mode,
