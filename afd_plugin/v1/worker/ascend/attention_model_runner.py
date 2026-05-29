@@ -73,6 +73,9 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         self._afd_is_graph_capturing = False
         self._afd_pending_metadata: AFDMetadata | None = None
         self._afd_pending_ubatch_slices: Any = None
+        self._afd_dp_ubatch_sync_context: dict[str, Any] | None = None
+        self._afd_last_dp_should_ubatch: bool | None = None
+        self._afd_last_dp_num_tokens_across_dp: Any = None
         self._afd_transaction_counter = 0
 
     @staticmethod
@@ -141,55 +144,73 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
 
     def _determine_batch_execution_and_padding(self, *args: Any, **kwargs: Any) -> Any:
         enable_npu_afd_ubatching_if_requested(self.vllm_config)
-        result = super()._determine_batch_execution_and_padding(*args, **kwargs)
-        (
-            cudagraph_mode,
-            batch_descriptor,
-            should_ubatch,
-            num_tokens_across_dp,
-            cudagraph_stats,
-        ) = result
-        values = _batch_execution_values(args, kwargs)
-        num_tokens = int(values.get("num_tokens", 0))
-        if should_ubatch and not _has_enough_tokens_for_ubatches(
-            self.vllm_config,
-            num_tokens,
-        ):
-            should_ubatch = False
-        elif not should_ubatch:
-            should_ubatch = self._should_ubatch_without_vllm_dp(*args, **kwargs)
-
-        print(
-            "[AFDNPUAttentionModelRunner] determine ubatch "
-            f"base_should_ubatch={result[2]} final_should_ubatch={should_ubatch} "
-            f"num_tokens={num_tokens} num_reqs={values.get('num_reqs')} "
-            f"enable_dbo={getattr(self.vllm_config.parallel_config, 'enable_dbo', None)} "
-            f"use_ubatching={getattr(self.vllm_config.parallel_config, 'use_ubatching', None)} "
-            f"num_ubatches={getattr(self.vllm_config.parallel_config, 'num_ubatches', None)}",
-            flush=True,
+        previous_context = self._afd_dp_ubatch_sync_context
+        self._afd_dp_ubatch_sync_context = (
+            self._make_afd_dp_ubatch_sync_context(*args, **kwargs)
         )
-        return (
-            cudagraph_mode,
-            batch_descriptor,
-            should_ubatch,
-            num_tokens_across_dp,
-            cudagraph_stats,
-        )
+        self._afd_last_dp_should_ubatch = None
+        self._afd_last_dp_num_tokens_across_dp = None
+        try:
+            result = super()._determine_batch_execution_and_padding(*args, **kwargs)
+            (
+                cudagraph_mode,
+                batch_descriptor,
+                should_ubatch,
+                num_tokens_across_dp,
+                cudagraph_stats,
+            ) = result
+            values = _batch_execution_values(args, kwargs)
+            num_tokens = int(values.get("num_tokens", 0))
+            if should_ubatch and not _has_enough_tokens_for_ubatches(
+                self.vllm_config,
+                num_tokens,
+            ):
+                should_ubatch = False
+            if not should_ubatch:
+                (
+                    should_ubatch,
+                    fallback_num_tokens_across_dp,
+                ) = self._should_ubatch_with_afd_fallback(
+                    *args,
+                    **kwargs,
+                )
+                if fallback_num_tokens_across_dp is not None:
+                    num_tokens_across_dp = fallback_num_tokens_across_dp
 
-    def _should_ubatch_without_vllm_dp(self, *args: Any, **kwargs: Any) -> bool:
+            parallel_config = self.vllm_config.parallel_config
+            print(
+                "[AFDNPUAttentionModelRunner] determine ubatch "
+                f"base_should_ubatch={result[2]} final_should_ubatch={should_ubatch} "
+                f"num_tokens={num_tokens} num_reqs={values.get('num_reqs')} "
+                f"enable_dbo={parallel_config.enable_dbo} "
+                f"use_ubatching={parallel_config.use_ubatching} "
+                f"num_ubatches={parallel_config.num_ubatches}",
+                flush=True,
+            )
+            return (
+                cudagraph_mode,
+                batch_descriptor,
+                should_ubatch,
+                num_tokens_across_dp,
+                cudagraph_stats,
+            )
+        finally:
+            self._afd_dp_ubatch_sync_context = previous_context
+
+    def _make_afd_dp_ubatch_sync_context(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any] | None:
         parallel_config = self.vllm_config.parallel_config
-        if int(parallel_config.data_parallel_size) > 1:
-            return False
+        if int(parallel_config.data_parallel_size) <= 1:
+            return None
         if not bool(parallel_config.use_ubatching):
-            return False
-        if not bool(kwargs.get("allow_microbatching", True)):
-            return False
+            return None
 
         values = _batch_execution_values(args, kwargs)
         num_tokens = int(values["num_tokens"])
-        if not _has_enough_tokens_for_ubatches(self.vllm_config, num_tokens):
-            return False
-
+        allow_microbatching = bool(values.get("allow_microbatching", True))
         uniform_decode = _is_uniform_decode(
             speculative_config=getattr(self, "speculative_config", None),
             uniform_decode_query_len=int(self.uniform_decode_query_len),
@@ -198,11 +219,137 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             max_num_scheduled_tokens=int(values["max_num_scheduled_tokens"]),
             force_uniform_decode=values.get("force_uniform_decode"),
         )
-        return _check_ubatch_thresholds(
-            parallel_config,
-            num_tokens,
-            bool(uniform_decode),
+        should_attempt_ubatch = (
+            allow_microbatching
+            and _has_enough_tokens_for_ubatches(self.vllm_config, num_tokens)
+            and _check_ubatch_thresholds(
+                parallel_config,
+                num_tokens,
+                bool(uniform_decode),
+            )
         )
+        return {
+            "num_tokens_unpadded": num_tokens,
+            "should_attempt_ubatch": bool(should_attempt_ubatch),
+        }
+
+    def _should_ubatch_with_afd_fallback(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[bool, Any | None]:
+        parallel_config = self.vllm_config.parallel_config
+        if not bool(parallel_config.use_ubatching):
+            return False, None
+
+        values = _batch_execution_values(args, kwargs)
+        if not bool(values.get("allow_microbatching", True)):
+            return False, None
+
+        num_tokens = int(values["num_tokens"])
+        if not _has_enough_tokens_for_ubatches(self.vllm_config, num_tokens):
+            return False, None
+
+        if int(parallel_config.data_parallel_size) <= 1:
+            uniform_decode = _is_uniform_decode(
+                speculative_config=getattr(self, "speculative_config", None),
+                uniform_decode_query_len=int(self.uniform_decode_query_len),
+                num_tokens=num_tokens,
+                num_reqs=int(values["num_reqs"]),
+                max_num_scheduled_tokens=int(values["max_num_scheduled_tokens"]),
+                force_uniform_decode=values.get("force_uniform_decode"),
+            )
+            return (
+                _check_ubatch_thresholds(
+                    parallel_config,
+                    num_tokens,
+                    bool(uniform_decode),
+                ),
+                None,
+            )
+
+        if self._afd_last_dp_should_ubatch is None:
+            return False, None
+        return (
+            bool(self._afd_last_dp_should_ubatch),
+            self._afd_last_dp_num_tokens_across_dp,
+        )
+
+    def _sync_metadata_across_dp(
+        self,
+        num_tokens: int,
+        is_draft_model: bool = False,
+        cudagraph_mode: Any = None,
+        allow_dp_padding: bool = False,
+    ) -> Any:
+        if cudagraph_mode is None:
+            cudagraph_mode = _resolve_cudagraph_mode_none()
+
+        context = self._afd_dp_ubatch_sync_context
+        if self.dp_size == 1 or context is None:
+            return super()._sync_metadata_across_dp(
+                num_tokens,
+                is_draft_model=is_draft_model,
+                cudagraph_mode=cudagraph_mode,
+                allow_dp_padding=allow_dp_padding,
+            )
+
+        from vllm_ascend.utils import should_skip_allreduce_across_dp_group
+
+        if should_skip_allreduce_across_dp_group(self.vllm_config, is_draft_model):
+            result = super()._sync_metadata_across_dp(
+                num_tokens,
+                is_draft_model=is_draft_model,
+                cudagraph_mode=cudagraph_mode,
+                allow_dp_padding=allow_dp_padding,
+            )
+            self._afd_last_dp_should_ubatch = False
+            self._afd_last_dp_num_tokens_across_dp = result[1]
+            return result
+
+        import torch
+        import torch.distributed as dist
+        from vllm.config import CUDAGraphMode
+        from vllm.distributed.parallel_state import get_dp_group
+        from vllm.v1.worker.ubatch_utils import is_last_ubatch_empty
+
+        packed_tensor = torch.zeros(4, self.dp_size, device="cpu", dtype=torch.int32)
+        packed_tensor[0][self.dp_rank] = int(context["num_tokens_unpadded"])
+        packed_tensor[1][self.dp_rank] = int(num_tokens)
+        packed_tensor[2][self.dp_rank] = int(cudagraph_mode.value)
+        packed_tensor[3][self.dp_rank] = (
+            1 if bool(context["should_attempt_ubatch"]) else 0
+        )
+        dist.all_reduce(packed_tensor, group=get_dp_group().cpu_group)
+
+        num_tokens_across_dp = packed_tensor[1, :]
+        max_tokens_across_dp = int(num_tokens_across_dp.max().item())
+        synced_cudagraph_mode = CUDAGraphMode(
+            int(packed_tensor[2, :].min().item()),
+        )
+        should_ubatch = bool(torch.all(packed_tensor[3, :] == 1).item())
+        if should_ubatch:
+            orig_min_num_tokens = int(packed_tensor[0, :].min().item())
+            if is_last_ubatch_empty(
+                orig_min_num_tokens,
+                max_tokens_across_dp,
+                int(self.vllm_config.parallel_config.num_ubatches),
+            ):
+                should_ubatch = False
+
+        should_dp_pad = bool(allow_dp_padding or is_draft_model or should_ubatch)
+        if should_dp_pad:
+            num_tokens_after_padding = torch.tensor(
+                [max_tokens_across_dp] * self.dp_size,
+                device="cpu",
+                dtype=torch.int32,
+            )
+        else:
+            num_tokens_after_padding = num_tokens_across_dp.cpu()
+
+        self._afd_last_dp_should_ubatch = should_ubatch
+        self._afd_last_dp_num_tokens_across_dp = num_tokens_after_padding
+        return max_tokens_across_dp, num_tokens_after_padding, synced_cudagraph_mode
 
     def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
         previous = self._afd_is_graph_capturing
