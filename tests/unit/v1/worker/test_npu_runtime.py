@@ -10,9 +10,7 @@ from afd_plugin.compat.ascend import (
     fail_if_unsupported_npu_afd_features,
     npu_afd_num_ubatches,
 )
-from afd_plugin.config import AFDConfig
 from afd_plugin.connectors import (
-    AFDConnectorFactory,
     AFDConnectorMetadata,
     AFDRecvOutput,
 )
@@ -135,7 +133,7 @@ def _vllm_config(*, role="attention", extra_config=None, **parallel_overrides):
             "afd": {
                 "enabled": True,
                 "role": role,
-                "connector": "npudummyconnector",
+                "connector": "camp2pconnector",
                 "extra_config": extra_config or {},
             },
         },
@@ -508,55 +506,6 @@ def test_npu_workers_initialize_workspace_with_configured_ubatches(monkeypatch):
     assert calls == [(device, 2), (device, 2)]
     assert attention_worker.model_runner is attention_runner
     assert ffn_worker.model_runner is ffn_runner
-
-
-def test_npudummyconnector_round_trips_control_and_payload():
-    attn = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        _vllm_config(role="attention"),
-        AFDConfig(
-            enabled=True,
-            role="attention",
-            connector="npudummyconnector",
-            port=22345,
-        ),
-    )
-    ffn = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        _vllm_config(role="ffn"),
-        AFDConfig(
-            enabled=True,
-            role="ffn",
-            connector="npudummyconnector",
-            port=22345,
-        ),
-    )
-    attn.init_afd_connector()
-    ffn.init_afd_connector()
-    dp_metadata = {0: _FakeDPMetadata([2])}
-
-    attn.send_dp_metadata_list(dp_metadata, is_warmup=True)
-    received, is_graph_capturing, is_warmup = ffn.recv_dp_metadata_list(
-        timeout_ms=10,
-    )
-
-    assert received == dp_metadata
-    assert not is_graph_capturing
-    assert is_warmup
-
-    metadata = AFDConnectorMetadata.create_attention_metadata(
-        layer_idx=0,
-        stage_idx=0,
-        seq_len=1,
-    )
-    attn.send_attn_output("hidden", metadata)
-    recv_output = ffn.recv_attn_output(timeout_ms=10)
-    assert recv_output == AFDRecvOutput(hidden_states="hidden", metadata=metadata)
-
-    ffn.send_ffn_output("ffn", metadata)
-    assert attn.recv_ffn_output(timeout_ms=10) == "ffn"
 
 
 def _metadata_tokens(metadata):

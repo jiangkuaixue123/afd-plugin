@@ -101,18 +101,8 @@ vllm serve ... \
   --additional-config '{"afd": {"enabled": true, "role": "attention", "connector": "camp2pconnector"}}'
 ```
 
-不引入 `vllm fserver`，也不使用 `vllm.afd_connectors` entry point。
-
-Phase 1 可以先使用开发调试专用的 `npudummyconnector`：
-
-```bash
-vllm serve ... \
-  --worker-cls afd_plugin.v1.worker.ascend.AFDNPUAttentionWorker \
-  --additional-config '{"afd": {"enabled": true, "role": "attention", "connector": "npudummyconnector"}}'
-```
-
-`npudummyconnector` 只用于打通 NPU runtime，不作为生产 connector。真实 connector
-仍然是后续接入的 `camp2pconnector`。
+不引入 `vllm fserver`，也不使用 `vllm.afd_connectors` entry point。NPU 路径只注册
+并验证真实 connector `camp2pconnector`；已移除早期开发调试用 dummy connector。
 
 ## Worker 设计
 
@@ -399,8 +389,7 @@ NPU runner:
 - vLLM `v0.19.1`；
 - vLLM-Ascend `v0.19.1rc1`；
 - `--additional-config '{"afd": ...}'`；
-- `npudummyconnector`，用于本地/NPU 环境 dummy run；
-- 后续接入 `camp2pconnector`；
+- `camp2pconnector`；
 - 单流通信；
 - 完整权重加载；
 - eager 路径或经验证不会 capture 通信副作用的最小 graph 路径。
@@ -424,12 +413,11 @@ NPU runner:
    `AFDNPUAttentionModelRunner`，不先创建原生 `NPUModelRunner` 再替换。
 4. 实现 `AFDNPUAttentionModelRunner(NPUModelRunner)`，只覆盖 `__init__`、
    `_model_forward` 和必要的 AFD metadata helper。
-5. 实现 `npudummyconnector`，先跑通 Attention 侧 connector 创建、
-   `AFDMetadata` 构造、`dp_metadata_list` 发送和 forward context 注入。
-6. 用 `npudummyconnector` 做 NPU dummy run，验证 worker/model runner 生命周期和
-   class path，不要求真实 A2E/E2A 通信。
-7. 第一版允许 NPU runner 内少量重复 AFD glue，用于快速打通 dummy 闭环。
+5. 接入 `camp2pconnector`，跑通 Attention 侧 connector 创建、`AFDMetadata`
+   构造、`dp_metadata_list` 发送和 forward context 注入。
+6. 使用 `camp2pconnector` 验证 worker/model runner 生命周期、class path 和真实
+   A2E/E2A 通信。
+7. 第一版允许 NPU runner 内少量重复 AFD glue，用于快速收敛真实通信闭环。
 8. 从 GPU `AFDAttentionModelRunner` 抽出设备无关
    `AFDAttentionRuntimeCoordinator`，逐步减少两边重复逻辑。
-9. 接入 `camp2pconnector` 后，增加 Ascend-gated import、validation 和最小
-   multi-process 通信测试。
+9. 增加 Ascend-gated import、validation 和最小 multi-process 通信测试。
