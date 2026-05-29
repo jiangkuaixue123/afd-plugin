@@ -203,9 +203,7 @@ def test_npu_runner_env_keeps_ascend_platform_plugin_enabled(monkeypatch, tmp_pa
     assert env["VLLM_USE_V1"] == "1"
     assert env["VLLM_PLUGINS"] == "ascend,afd"
     assert env["PYTHONPATH"].split(":") == [
-        str(tmp_path / "vllm"),
         str(tmp_path / "afd-plugin"),
-        str(tmp_path / "vllm-ascend"),
         "/existing/pythonpath",
     ]
 

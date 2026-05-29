@@ -371,15 +371,7 @@ def build_env(visible_devices: str) -> dict[str, str]:
     env["VLLM_PLUGINS"] = "ascend,afd"
     env["PYTHONUNBUFFERED"] = "1"
     current_pythonpath = env.get("PYTHONPATH")
-    pythonpath_entries = [
-        str(path)
-        for path in (
-            REPO_ROOT.parent / "vllm",
-            REPO_ROOT,
-            REPO_ROOT.parent / "vllm-ascend",
-        )
-        if path.exists()
-    ]
+    pythonpath_entries = [str(REPO_ROOT)]
     if current_pythonpath:
         pythonpath_entries.append(current_pythonpath)
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
