@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from afd_plugin.compat.ascend import (
@@ -36,6 +37,7 @@ _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm_ascend.worker.model_runner_v1",
     "NPUModelRunner",
 )
+logger = logging.getLogger(__name__)
 
 
 class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
@@ -135,6 +137,7 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         )
         if run_mode is AFDGraphRunMode.REPLAY:
             graph_info["graph"].replay()
+            logger.info("AFD_NPU_E2E: FFN ACL graph replayed key=%s", graph_key)
             return None
         if run_mode in (AFDGraphRunMode.WARMUP, AFDGraphRunMode.CAPTURE):
             return self.execute_ffn_step(
@@ -164,6 +167,8 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
                 is_graph_capturing=is_graph_capturing,
             )
         num_stages = max(len(dp_metadata_list), 1)
+        if num_stages > 1:
+            logger.info("AFD_NPU_E2E: FFN processing %d ubatch stages", num_stages)
         afd_metadata = AFDMetadata(
             afd_tokens_start_loc=[],
             afd_reqs_start_loc=[],
@@ -287,6 +292,7 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
             "graph": graph,
             "output": output,
         }
+        logger.info("AFD_NPU_E2E: FFN ACL graph captured key=%s", graph_key)
 
     def _new_npu_graph(self) -> Any:
         import torch

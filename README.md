@@ -208,6 +208,21 @@ The GPU tests default to `AFD_GPU_E2E_GPUS=0,1,2,3` and cover eager
 `1A1F`/`2A2F`, `FULL_DECODE_ONLY` CUDA graph `1A1F`/`2A2F`, and
 `FULL_DECODE_ONLY` `2A2F` with DBO ubatch replay.
 
+Opt-in NPU E2E tests require vLLM-Ascend, Ascend devices, and a local
+DeepSeekV2-Lite model path:
+
+```bash
+AFD_NPU_E2E_MODEL=/path/to/DeepSeek-V2-Lite \
+AFD_NPU_E2E_DEVICES=0,1,2,3 \
+uv run pytest -q -m npu tests/e2e/npu/deepseek_v2_lite
+```
+
+The NPU matrix covers eager and FULL graph modes for `1A1F`, `2A2F`, and
+`2A1F`, each with ubatching enabled and disabled. Engine logs are written by
+case under `/tmp/afd_npu_e2e_logs`, with separate `ffn.log` and
+`attention.log` files. Set `AFD_NPU_E2E_LOG_DIR` to override the root. See
+[docs/npu/NPU_E2E_TESTS.md](docs/npu/NPU_E2E_TESTS.md).
+
 ## Docs
 
 - [docs/PHASE0_COMPATIBILITY_INVENTORY.md](docs/PHASE0_COMPATIBILITY_INVENTORY.md)

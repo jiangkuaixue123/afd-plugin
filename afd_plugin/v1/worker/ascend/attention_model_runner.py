@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import textwrap
 from typing import Any
 
@@ -35,6 +36,7 @@ _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm_ascend.worker.model_runner_v1",
     "NPUModelRunner",
 )
+logger = logging.getLogger(__name__)
 
 _PATCHED_ASCEND_BUILD_ATTENTION_METADATA: Any | None = None
 
@@ -407,6 +409,10 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
                     build_ubatch_dp_metadata_list(self.vllm_config, ubatch_slices),
                 )
             }
+            logger.info(
+                "AFD_NPU_E2E: Attention sending %d ubatch DP metadata slices",
+                len(dp_metadata_list),
+            )
         else:
             dp_metadata = self._ensure_dp_metadata(dp_metadata)
             dp_metadata_list = {0: dp_metadata}
