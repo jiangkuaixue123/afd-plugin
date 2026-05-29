@@ -155,7 +155,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
 
         for ubatch_idx in range(
             1,
-            _resolve_num_ubatches(self.vllm_config, self.afd_config),
+            _resolve_num_ubatches(self.vllm_config),
         ):
             ubatch_pg = init_afd_process_group(
                 backend="hccl",
@@ -596,11 +596,9 @@ def _resolve_hidden_size(vllm_config: object) -> int:
     return _resolve_int_attr(vllm_config, "hidden_size", default=1)
 
 
-def _resolve_num_ubatches(vllm_config: object, afd_config: AFDConfig) -> int:
-    if "num_ubatches" in afd_config.extra_config:
-        return max(1, int(afd_config.extra_config["num_ubatches"]))
-    parallel_config = getattr(vllm_config, "parallel_config", None)
-    return max(1, int(getattr(parallel_config, "num_ubatches", 1)))
+def _resolve_num_ubatches(vllm_config: object) -> int:
+    parallel_config = vllm_config.parallel_config
+    return max(1, int(parallel_config.num_ubatches))
 
 
 def _resolve_max_num_reqs(vllm_config: object) -> int:

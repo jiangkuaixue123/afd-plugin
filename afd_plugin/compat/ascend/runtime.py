@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import inspect
-import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -28,14 +27,16 @@ def ensure_ascend_runtime_available() -> None:
 def apply_afd_ascend_patches_if_needed() -> None:
     """Apply plugin-owned Ascend patches.
 
-    The first NPU runtime version does not need a monkey patch.  The function is
-    intentionally present and idempotent so future patches have one guarded
-    entry point.
+    This intentionally stays idempotent because it may be called both during
+    plugin registration and when explicit NPU worker class paths are imported.
     """
 
     global _PATCHES_APPLIED
     if _PATCHES_APPLIED:
         return
+    from afd_plugin.compat.patches.ascend_platform import apply_ascend_platform_patch
+
+    apply_ascend_platform_patch()
     _PATCHES_APPLIED = True
 
 
@@ -48,38 +49,17 @@ def init_ascend_workspace_for_afd(device: object, *, num_ubatches: int = 1) -> N
 def npu_afd_num_ubatches(vllm_config: object) -> int:
     if not npu_afd_ubatching_requested(vllm_config):
         return 1
-    afd_config = parse_afd_config(vllm_config, validate=False)
-    requested = afd_config.extra_config.get("num_ubatches")
-    if requested is not None:
-        return int(requested)
     parallel_config = vllm_config.parallel_config
-    num_ubatches = int(getattr(parallel_config, "num_ubatches", 0))
-    return 2 if num_ubatches <= 1 else num_ubatches
+    return int(parallel_config.num_ubatches)
 
 
 def npu_afd_ubatching_requested(vllm_config: object) -> bool:
     parallel_config = vllm_config.parallel_config
-    if bool(getattr(parallel_config, "use_ubatching", False)):
-        return True
-    if _truthy(os.getenv("AFD_NPU_ENABLE_UBATCHING")):
-        return True
-    afd_config = parse_afd_config(vllm_config, validate=False)
-    extra = afd_config.extra_config or {}
-    return any(
-        _truthy(extra.get(key))
-        for key in (
-            "enable_ubatching",
-            "enable_dbo",
-            "force_enable_ubatching",
-        )
-    )
+    return bool(parallel_config.use_ubatching)
 
 
 def enable_npu_afd_ubatching_if_requested(vllm_config: object) -> None:
-    if not npu_afd_ubatching_requested(vllm_config):
-        return
-    parallel_config = vllm_config.parallel_config
-    parallel_config.enable_dbo = True
+    del vllm_config
 
 
 def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:

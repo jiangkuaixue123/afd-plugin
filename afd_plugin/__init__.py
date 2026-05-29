@@ -92,10 +92,12 @@ def register_afd() -> None:
 
     try:
         from afd_plugin.compat.patches import (
+            apply_ascend_platform_patch,
             apply_config_validation_patch,
             apply_engine_core_patch,
         )
 
+        apply_ascend_platform_patch()
         apply_config_validation_patch()
         apply_engine_core_patch()
     except Exception:

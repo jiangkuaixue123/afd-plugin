@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.compat.ascend import (
+    enable_npu_afd_ubatching_if_requested,
     fail_if_unsupported_npu_afd_features,
     npu_afd_num_ubatches,
 )
@@ -119,6 +120,8 @@ def _parallel_config(**overrides):
     values = {
         "data_parallel_size": 1,
         "data_parallel_rank": 0,
+        "enable_dbo": False,
+        "ubatch_size": 0,
         "use_ubatching": False,
         "num_ubatches": 1,
         "worker_cls": "unused",
@@ -446,6 +449,37 @@ def test_npu_feature_validation_allows_two_way_ubatching_and_acl_graph_config():
     config = _vllm_config()
     config.model_config.enforce_eager = False
     fail_if_unsupported_npu_afd_features(config)
+
+
+def test_npu_ubatching_preserves_native_ubatch_size():
+    config = _vllm_config(
+        use_ubatching=True,
+        num_ubatches=2,
+        enable_dbo=False,
+        ubatch_size=2,
+    )
+
+    enable_npu_afd_ubatching_if_requested(config)
+
+    assert config.parallel_config.enable_dbo is False
+    assert config.parallel_config.ubatch_size == 2
+    assert npu_afd_num_ubatches(config) == 2
+
+
+def test_npu_ubatching_ignores_removed_extra_config_fields():
+    config = _vllm_config(
+        extra_config={
+            "enable_ubatching": True,
+            "enable_dbo": True,
+            "force_enable_ubatching": True,
+            "num_ubatches": 2,
+        },
+    )
+
+    enable_npu_afd_ubatching_if_requested(config)
+
+    assert config.parallel_config.enable_dbo is False
+    assert npu_afd_num_ubatches(config) == 1
 
 
 def test_npu_workers_initialize_workspace_with_configured_ubatches(monkeypatch):
