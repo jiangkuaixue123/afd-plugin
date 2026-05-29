@@ -132,7 +132,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
 
     def load_model(self, *args: Any, **kwargs: Any) -> Any:
         use_ubatching = _is_ubatching_enabled(self.vllm_config)
-        print(f"jcz load_model use_ubatching:{use_ubatching}", flush=True)
         with _use_afd_ubatch_wrapper_during_load(use_ubatching):
             result = super().load_model(*args, **kwargs)
         if use_ubatching:

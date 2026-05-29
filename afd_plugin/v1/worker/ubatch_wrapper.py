@@ -360,11 +360,7 @@ def _current_cuda_stream() -> Any:
 
 
 def _print_afd_ubatch(message: str, **fields: Any) -> None:
-    if fields:
-        details = " ".join(f"{key}={value}" for key, value in fields.items())
-        print(f"[AFDUBatchWrapper] {message} {details}", flush=True)
-        return
-    print(f"[AFDUBatchWrapper] {message}", flush=True)
+    del message, fields
 
 
 def _is_afd_enabled(vllm_config: object) -> bool:

@@ -133,13 +133,6 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
             graph_enabled=graph_enabled,
             graph_exists=graph_info is not None,
         )
-        print(
-            "[AFDNPUFFNModelRunner] graph key "
-            f"key={graph_key} run_mode={run_mode.name} "
-            f"graph_enabled={graph_enabled} graph_exists={graph_info is not None} "
-            f"is_graph_capturing={is_graph_capturing} is_warmup={is_warmup}",
-            flush=True,
-        )
         if run_mode is AFDGraphRunMode.REPLAY:
             graph_info["graph"].replay()
             return None
@@ -183,11 +176,6 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         num_tokens_across_dp = _first_dp_token_counts(dp_metadata_list)
         num_tokens = _first_token_count(num_tokens_across_dp)
         rank_ffn_output = None
-        print(
-            "[AFDNPUFFNModelRunner] ffn forward start "
-            f"stages={stage_ids} num_tokens={num_tokens}",
-            flush=True,
-        )
 
         with ascend_forward_context(
             vllm_config=self.vllm_config,
@@ -199,21 +187,11 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         ) as forward_context:
             for layer_idx in range(max(int(self.num_layers or 0), 1)):
                 for stage_idx in stage_ids:
-                    print(
-                        "[AFDNPUFFNModelRunner] recv attn output "
-                        f"layer={layer_idx} stage={stage_idx}",
-                        flush=True,
-                    )
                     recv_output = self._recv_attn_output(stage_idx, layer_idx)
                     hidden_states, metadata, payload = _normalize_recv_output(
                         recv_output,
                         stage_idx=stage_idx,
                         layer_idx=layer_idx,
-                    )
-                    print(
-                        "[AFDNPUFFNModelRunner] compute ffn "
-                        f"layer={layer_idx} stage={stage_idx}",
-                        flush=True,
                     )
                     self.connector.update_metadata(metadata, payload)
                     metadata.layer_idx = layer_idx
@@ -243,17 +221,11 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
                         x_active_mask=payload.x_active_mask,
                         cam_p2p_ep_name=payload.cam_p2p_ep_name or "",
                     )
-                    print(
-                        "[AFDNPUFFNModelRunner] send ffn output "
-                        f"layer={layer_idx} stage={stage_idx}",
-                        flush=True,
-                    )
                     self.connector.send_ffn_output(
                         rank_ffn_output,
                         metadata,
                         ubatch_idx=stage_idx,
                     )
-        print("[AFDNPUFFNModelRunner] ffn forward done", flush=True)
         return rank_ffn_output
 
     def capture_model(
@@ -298,11 +270,6 @@ class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
         graph_key = self._make_graph_key(dp_metadata_list)
         if graph_key in self._acl_graphs:
             return
-        print(
-            "[AFDNPUFFNModelRunner] capture graph key "
-            f"key={graph_key} is_attn_graph_capturing={is_attn_graph_capturing}",
-            flush=True,
-        )
 
         graph = self._new_npu_graph()
         self.connector.update_state_from_dp_metadata(

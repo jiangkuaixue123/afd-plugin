@@ -99,11 +99,6 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             runtime_mode,
             self.device,
         )
-        print(
-            "[AFDNPUAttentionModelRunner] installed AFDNPUUBatchWrapper "
-            f"num_ubatches={self.vllm_config.parallel_config.num_ubatches}",
-            flush=True,
-        )
 
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
         from vllm.forward_context import get_forward_context
@@ -121,11 +116,6 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             int(values.get("num_tokens", 0)),
         )
         if ubatch_slices is not None:
-            print(
-                "[AFDNPUAttentionModelRunner] build attention metadata "
-                "with per-ubatch split metadata",
-                flush=True,
-            )
             self._ensure_ubatch_metadata_builders()
             return _patched_ascend_build_attention_metadata()(self, *args, **kwargs)
         return super()._build_attention_metadata(*args, **kwargs)
@@ -177,16 +167,6 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
                 if fallback_num_tokens_across_dp is not None:
                     num_tokens_across_dp = fallback_num_tokens_across_dp
 
-            parallel_config = self.vllm_config.parallel_config
-            print(
-                "[AFDNPUAttentionModelRunner] determine ubatch "
-                f"base_should_ubatch={result[2]} final_should_ubatch={should_ubatch} "
-                f"num_tokens={num_tokens} num_reqs={values.get('num_reqs')} "
-                f"enable_dbo={parallel_config.enable_dbo} "
-                f"use_ubatching={parallel_config.use_ubatching} "
-                f"num_ubatches={parallel_config.num_ubatches}",
-                flush=True,
-            )
             return (
                 cudagraph_mode,
                 batch_descriptor,
@@ -441,18 +421,11 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
             self.afd_connector.world_rank,
         )
         if should_send:
-            print(
-                "[AFDNPUAttentionModelRunner] send dp metadata "
-                f"stages={list(dp_metadata_list)} "
-                f"ubatches={None if ubatch_slices is None else len(ubatch_slices)}",
-                flush=True,
-            )
             self.afd_connector.send_dp_metadata_list(
                 dp_metadata_list,
                 is_graph_capturing=is_graph_capturing,
                 is_warmup=is_warmup,
             )
-            print("[AFDNPUAttentionModelRunner] sent dp metadata", flush=True)
 
     def _ensure_dp_metadata(self, dp_metadata: Any) -> Any:
         if dp_metadata is not None:

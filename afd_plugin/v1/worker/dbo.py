@@ -33,7 +33,6 @@ def maybe_apply_dbo_yield(
 
     if not _torch_is_compiling():
         if ubatching.dbo_enabled():
-            print(f"[AFDDBO] yield role={role}", flush=True)
             ubatching.dbo_yield()
         return tensor
 

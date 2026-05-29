@@ -591,11 +591,7 @@ def _vllm_logging_level() -> str:
 
 
 def _print_npu_ubatch(message: str, **fields: Any) -> None:
-    if fields:
-        details = " ".join(f"{key}={value}" for key, value in fields.items())
-        print(f"[AFDNPUUBatchWrapper] {message} {details}", flush=True)
-        return
-    print(f"[AFDNPUUBatchWrapper] {message}", flush=True)
+    del message, fields
 
 
 __all__ = ["AFDNPUUBatchWrapper"]
