@@ -18,6 +18,7 @@ from afd_plugin.compat.ascend import (
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
 from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.ascend.ubatch_wrapper import AFDNPUUBatchWrapper
 from afd_plugin.v1.worker.attention_model_runner import (
     _batch_execution_values,
     _check_ubatch_thresholds,
@@ -28,7 +29,6 @@ from afd_plugin.v1.worker.attention_model_runner import (
     _resolve_world_ranks,
     _with_dp_derived_afd_rank,
 )
-from afd_plugin.v1.worker.ascend.ubatch_wrapper import AFDNPUUBatchWrapper
 from afd_plugin.v1.worker.ubatch_wrapper import build_ubatch_dp_metadata_list
 
 _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
@@ -145,8 +145,8 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
     def _determine_batch_execution_and_padding(self, *args: Any, **kwargs: Any) -> Any:
         enable_npu_afd_ubatching_if_requested(self.vllm_config)
         previous_context = self._afd_dp_ubatch_sync_context
-        self._afd_dp_ubatch_sync_context = (
-            self._make_afd_dp_ubatch_sync_context(*args, **kwargs)
+        self._afd_dp_ubatch_sync_context = self._make_afd_dp_ubatch_sync_context(
+            *args, **kwargs
         )
         self._afd_last_dp_should_ubatch = None
         self._afd_last_dp_num_tokens_across_dp = None
@@ -398,7 +398,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
     ) -> None:
         if (
             getattr(forward_context, "ubatch_slices", None) is None
-            and self._afd_pending_ubatch_slices is not None
+            and getattr(self, "_afd_pending_ubatch_slices", None) is not None
         ):
             forward_context.ubatch_slices = self._afd_pending_ubatch_slices
 

@@ -40,9 +40,7 @@ def test_ascend_ops_use_isolated_namespace_and_vendor_path():
     ).read_text()
     torch_cmake = (root / "csrc/torch_extension/CMakeLists.txt").read_text()
     cann_cmake = (root / "csrc/CMakeLists.txt").read_text()
-    op_api_common = (
-        root / "csrc/aclnn_torch_adapter/op_api_common.h"
-    ).read_text()
+    op_api_common = (root / "csrc/aclnn_torch_adapter/op_api_common.h").read_text()
 
     assert "TORCH_LIBRARY(afd_ascend" in torch_binding
     assert "TORCH_LIBRARY(_C_ascend" not in torch_binding

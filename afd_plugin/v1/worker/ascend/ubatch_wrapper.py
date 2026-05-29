@@ -15,8 +15,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-import vllm.envs as envs
-
 from afd_plugin.connectors import AFDMetadata
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ubatch_wrapper import (
@@ -79,12 +77,12 @@ class AFDNPUUBatchWrapper(_GPUUBatchWrapper):  # type: ignore[misc, valid-type]
         self._graph_pool = None
         self.sm_control = _EmptyContextManager()
         self.device = device
-        self.is_debugging_mode = envs.VLLM_LOGGING_LEVEL == "DEBUG"
+        self.is_debugging_mode = _vllm_logging_level() == "DEBUG"
         self._runnable_str = str(runnable) if self.is_debugging_mode else None
 
         if _runtime_mode_name(runtime_mode) != "NONE":
-            from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
             from vllm.platforms import current_platform
+            from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
 
             self.aclgraph_wrapper = ACLGraphWrapper(
                 runnable,
@@ -584,6 +582,12 @@ def _runtime_mode_name(runtime_mode: object) -> str:
     if isinstance(name, str):
         return name
     return str(runtime_mode).rsplit(".", 1)[-1]
+
+
+def _vllm_logging_level() -> str:
+    import vllm.envs as envs
+
+    return envs.VLLM_LOGGING_LEVEL
 
 
 def _print_npu_ubatch(message: str, **fields: Any) -> None:

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import torch
-
 from vllm.distributed.kv_transfer.kv_connector.v1 import (
     KVConnectorBase_V1,
     KVConnectorRole,
@@ -50,9 +49,9 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 
     def __init__(
         self,
-        vllm_config: "VllmConfig",
+        vllm_config: VllmConfig,
         role: KVConnectorRole,
-        kv_cache_config: "KVCacheConfig | None" = None,
+        kv_cache_config: KVCacheConfig | None = None,
     ) -> None:
         super().__init__(vllm_config, role, kv_cache_config)
 
@@ -71,7 +70,7 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
         assert self.connector_worker is not None
         self.connector_worker.register_kv_caches(kv_caches)
 
-    def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
+    def start_load_kv(self, forward_context: ForwardContext, **kwargs: Any) -> None:
         # Keep the original AFD decode-bench behavior: only emulate external KV
         # availability on the scheduler side, without writing dummy values into
         # the worker KV cache.
@@ -98,7 +97,7 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 
     def get_num_new_matched_tokens(
         self,
-        request: "Request",
+        request: Request,
         num_computed_tokens: int,
     ) -> tuple[int | None, bool]:
         assert self.connector_scheduler is not None
@@ -109,8 +108,8 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 
     def update_state_after_alloc(
         self,
-        request: "Request",
-        blocks: "KVCacheBlocks",
+        request: Request,
+        blocks: KVCacheBlocks,
         num_external_tokens: int,
     ) -> None:
         assert self.connector_scheduler is not None
@@ -122,14 +121,14 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 
     def build_connector_meta(
         self,
-        scheduler_output: "SchedulerOutput",
+        scheduler_output: SchedulerOutput,
     ) -> KVConnectorMetadata:
         assert self.connector_scheduler is not None
         return self.connector_scheduler.build_connector_meta(scheduler_output)
 
     def request_finished(
         self,
-        request: "Request",
+        request: Request,
         block_ids: list[int],
     ) -> tuple[bool, dict[str, Any] | None]:
         assert self.connector_scheduler is not None
@@ -138,7 +137,7 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 
     def request_finished_all_groups(
         self,
-        request: "Request",
+        request: Request,
         block_ids: tuple[list[int], ...],
     ) -> tuple[bool, dict[str, Any] | None]:
         assert self.connector_scheduler is not None
@@ -149,7 +148,7 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
 class AFDDecodeBenchConnectorScheduler:
     """Scheduler-side implementation for AFDDecodeBenchConnector."""
 
-    def __init__(self, vllm_config: "VllmConfig") -> None:
+    def __init__(self, vllm_config: VllmConfig) -> None:
         self.vllm_config = vllm_config
         self.block_size = vllm_config.cache_config.block_size
         self._filled_requests: set[str] = set()
@@ -157,7 +156,7 @@ class AFDDecodeBenchConnectorScheduler:
 
     def get_num_new_matched_tokens(
         self,
-        request: "Request",
+        request: Request,
         num_computed_tokens: int,
     ) -> tuple[int, bool]:
         req_id = request.request_id
@@ -178,8 +177,8 @@ class AFDDecodeBenchConnectorScheduler:
 
     def update_state_after_alloc(
         self,
-        request: "Request",
-        blocks: "KVCacheBlocks",
+        request: Request,
+        blocks: KVCacheBlocks,
         num_external_tokens: int,
     ) -> None:
         if num_external_tokens == 0:
@@ -205,7 +204,7 @@ class AFDDecodeBenchConnectorScheduler:
 
     def build_connector_meta(
         self,
-        scheduler_output: "SchedulerOutput",
+        scheduler_output: SchedulerOutput,
     ) -> KVConnectorMetadata:
         meta = AFDDecodeBenchConnectorMetadata(
             reqs_to_fill=self._pending_fills.copy(),
@@ -213,7 +212,7 @@ class AFDDecodeBenchConnectorScheduler:
         self._pending_fills.clear()
         return meta
 
-    def request_finished(self, request: "Request") -> None:
+    def request_finished(self, request: Request) -> None:
         self._filled_requests.discard(request.request_id)
 
 
@@ -222,8 +221,8 @@ class AFDDecodeBenchConnectorWorker:
 
     def __init__(
         self,
-        vllm_config: "VllmConfig",
-        kv_cache_config: "KVCacheConfig | None" = None,
+        vllm_config: VllmConfig,
+        kv_cache_config: KVCacheConfig | None = None,
     ) -> None:
         self.vllm_config = vllm_config
         self.kv_cache_config = kv_cache_config
@@ -242,8 +241,7 @@ class AFDDecodeBenchConnectorWorker:
         self.group_to_layers = self._build_group_to_layers(kv_caches)
 
         logger.debug(
-            "AFDDecodeBenchConnector: registered %d KV cache layers across %d "
-            "groups",
+            "AFDDecodeBenchConnector: registered %d KV cache layers across %d groups",
             len(kv_caches),
             len(self.group_to_layers),
         )

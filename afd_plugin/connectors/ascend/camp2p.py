@@ -711,7 +711,6 @@ def _register_camp2p_custom_ops() -> None:
         return
 
     import torch
-    from typing import Optional
     from vllm.utils.torch_utils import direct_register_custom_op
 
     def send_attn_output_impl(
@@ -879,8 +878,8 @@ def _register_camp2p_custom_ops() -> None:
 
     send_annotations = {
         "hidden_states": torch.Tensor,
-        "topk_weights": Optional[torch.Tensor],
-        "topk_ids": Optional[torch.Tensor],
+        "topk_weights": torch.Tensor | None,
+        "topk_ids": torch.Tensor | None,
         "batch_size": int,
         "hidden_size": int,
         "topk": int,
