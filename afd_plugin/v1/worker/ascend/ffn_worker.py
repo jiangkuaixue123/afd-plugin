@@ -79,8 +79,10 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
 
     def start_ffn_server_loop(self) -> None:
         if self._ffn_thread is not None and self._ffn_thread.is_alive():
+            self.raise_ffn_loop_error_if_any()
             return
 
+        self.raise_ffn_loop_error_if_any()
         connector = self.model_runner.connector
         if not connector.is_initialized:
             self.model_runner.initialize_afd_connector()
@@ -125,16 +127,25 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
             )
             _synchronize_npu_if_possible(self.device)
 
+    def raise_ffn_loop_error_if_any(self) -> None:
+        error = self._ffn_loop_error
+        if error is not None:
+            self._ffn_loop_error = None
+            raise RuntimeError("AFD NPU FFN worker loop failed") from error
+
     def stop_ffn_server_loop(self) -> None:
         event = self._ffn_shutdown_event
         if event is not None:
             event.set()
-        self.model_runner.shutdown()
-        thread = self._ffn_thread
-        if thread is not None:
-            thread.join(timeout=5)
-        self._ffn_thread = None
-        self._ffn_shutdown_event = None
+        try:
+            self.model_runner.shutdown()
+        finally:
+            thread = self._ffn_thread
+            if thread is not None:
+                thread.join(timeout=5)
+            self._ffn_thread = None
+            self._ffn_shutdown_event = None
+        self.raise_ffn_loop_error_if_any()
 
     def shutdown(self) -> None:
         self.stop_ffn_server_loop()

@@ -15,7 +15,6 @@ AFDRole = Literal["attention", "ffn"]
 SUPPORTED_AFD_ROLES: Final[tuple[str, ...]] = ("attention", "ffn")
 SUPPORTED_AFD_CONNECTORS: Final[tuple[str, ...]] = (
     "p2pconnector",
-    "npudummyconnector",
     "camp2pconnector",
 )
 

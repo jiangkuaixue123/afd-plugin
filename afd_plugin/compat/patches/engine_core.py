@@ -281,6 +281,7 @@ def _run_ffn_busy_loop(self: Any, core_module: Any) -> None:
         self.model_executor.collective_rpc("start_ffn_server_loop")
         started = True
         while _is_running(self, core_module):
+            self.model_executor.collective_rpc("raise_ffn_loop_error_if_any")
             time.sleep(0.5)
     except KeyboardInterrupt:
         core_logger.info("AFD FFN EngineCore shutting down after KeyboardInterrupt")

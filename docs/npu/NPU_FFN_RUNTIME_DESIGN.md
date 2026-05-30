@@ -40,13 +40,12 @@ NPU 参考实现里 `NPUFFNModelRunner` 是
 语义抽到 `AFDFFNRuntimeCoordinator` 或同等 helper，然后 GPU/NPU runner 分别继承
 各自平台基类。
 
-第一版为了快速打通 NPU runtime dummy 闭环，NPU runner 中可以保留少量重复 glue，
+第一版为了快速打通 NPU runtime 闭环，NPU runner 中可以保留少量重复 glue，
 但这些重复应被标记为待抽取，不能长期分叉。
 
-为了降低 NPU Worker / ModelRunner 的开发成本，Phase 1 先引入
-`npudummyconnector`。它只负责让 FFN daemon loop 能收到 Attention 侧 metadata，并
-完成本地 passthrough 或最小 `compute_ffn_output` 调用；不依赖真实 A2E/E2A、HCCL
-或 CAM op。等 NPU Attention/FFN 生命周期稳定后，再接入 `camp2pconnector`。
+早期 Phase 1 曾引入开发调试用 dummy connector 来降低 NPU Worker /
+ModelRunner 的开发成本。该 connector 已移除；FFN daemon loop 的 smoke 和真实通信
+验证统一走 `camp2pconnector`。
 
 ## 复杂度判断
 
@@ -68,7 +67,7 @@ FFN ModelRunner 是主要复杂度所在：
 AFDNPUFFNModelRunner:
   中高复杂度
   - 继承 NPUModelRunner
-  - Phase 1 创建 npudummyconnector，后续切换到 camp2pconnector
+  - 使用 camp2pconnector
   - 接收 dp_metadata_list
   - per-layer / per-stage recv Attention output
   - 建立 Ascend forward context
@@ -343,8 +342,7 @@ for layer_idx in layers:
     connector.send_ffn_output(rank_ffn_output, connector_data, ...)
 ```
 
-Phase 1 应只支持 `npudummyconnector` 和单流 dummy/passthrough 闭环；接入
-`camp2pconnector` 后仍保持单流通信：
+Phase 1 应只支持 `camp2pconnector` 单流通信：
 
 - 不支持 FFN comm stream/event；
 - 不支持 `quant_mode != 0`，`dynamic_scales` 不透传；
@@ -514,8 +512,7 @@ NPU runner:
 - vLLM-Ascend `v0.19.1rc1`；
 - `--additional-config '{"afd": ...}'`；
 - `vllm serve` + `--worker-cls`；
-- `npudummyconnector`，用于 NPU dummy run 和 FFN daemon loop 调试；
-- 后续接入 `camp2pconnector`；
+- `camp2pconnector`；
 - connector-driven FFN daemon loop；
 - 空 KV cache；
 - 单流 eager 通信闭环；
@@ -542,9 +539,9 @@ NPU runner:
    和 shutdown。
 4. 实现 `AFDNPUFFNModelRunner(NPUModelRunner)`，先支持 eager 单流
    `execute_ffn_step()`。
-5. 实现 `npudummyconnector` 的 FFN 侧方法，至少覆盖 `recv_dp_metadata_list()`、
+5. 实现 `camp2pconnector` 的 FFN 侧方法，至少覆盖 `recv_dp_metadata_list()`、
    `recv_attn_output()`、`send_ffn_output()` 和关闭逻辑。
-6. 用 `npudummyconnector` 跑通 NPU FFN daemon loop，验证
+6. 用 `camp2pconnector` 跑通 NPU FFN daemon loop，验证
    `recv -> compute_ffn_output/passthrough -> send` 的最小闭环。
 7. 接入 `camp2pconnector` 的 `create_recv_metadata()`、`recv_attn_output()`、
    `update_metadata()`、`send_ffn_output()`。

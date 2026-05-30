@@ -75,10 +75,6 @@ class AFDDecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
         # availability on the scheduler side, without writing dummy values into
         # the worker KV cache.
         return
-        assert self.connector_worker is not None
-        metadata = self._get_connector_metadata()
-        assert isinstance(metadata, AFDDecodeBenchConnectorMetadata)
-        self.connector_worker.start_fill_kv(metadata)
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         pass

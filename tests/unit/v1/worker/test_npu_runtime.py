@@ -8,9 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from afd_plugin.compat.ascend import fail_if_unsupported_npu_afd_features
-from afd_plugin.config import AFDConfig
 from afd_plugin.connectors import (
-    AFDConnectorFactory,
     AFDConnectorMetadata,
     AFDRecvOutput,
 )
@@ -119,7 +117,7 @@ def _vllm_config(*, role="attention", extra_config=None, **parallel_overrides):
             "afd": {
                 "enabled": True,
                 "role": role,
-                "connector": "npudummyconnector",
+                "connector": "camp2pconnector",
                 "extra_config": extra_config or {},
             },
         },
@@ -370,6 +368,37 @@ def test_npu_ffn_worker_scheduler_execute_model_fails_fast():
         worker.execute_model(scheduler_output=object())
 
 
+def test_npu_ffn_worker_loop_error_is_propagated(caplog):
+    worker = object.__new__(AFDNPUFFNWorker)
+    worker._ffn_thread = None
+    worker._ffn_shutdown_event = None
+    worker._ffn_loop_error = None
+    worker.model_runner = SimpleNamespace(
+        connector=SimpleNamespace(is_initialized=True),
+    )
+
+    expected_error = RuntimeError("boom")
+
+    def fail_loop():
+        raise expected_error
+
+    worker._run_ffn_server_loop = fail_loop
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="afd_plugin.v1.worker.ascend.ffn_worker",
+    ):
+        worker.start_ffn_server_loop()
+        assert worker._ffn_thread is not None
+        worker._ffn_thread.join(timeout=5)
+
+    with pytest.raises(RuntimeError, match="AFD NPU FFN worker loop failed") as exc:
+        worker.raise_ffn_loop_error_if_any()
+
+    assert exc.value.__cause__ is expected_error
+    assert "AFD NPU FFN worker loop failed" in caplog.text
+
+
 def test_npu_feature_validation_rejects_unsupported_switches():
     for extra_config, message in [
         ({"compute_gate_on_attention": True}, "compute_gate_on_attention"),
@@ -392,52 +421,3 @@ def test_npu_feature_validation_rejects_ubatching_and_allows_acl_graph_config():
     config = _vllm_config()
     config.model_config.enforce_eager = False
     fail_if_unsupported_npu_afd_features(config)
-
-
-def test_npudummyconnector_round_trips_control_and_payload():
-    attn = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        _vllm_config(role="attention"),
-        AFDConfig(
-            enabled=True,
-            role="attention",
-            connector="npudummyconnector",
-            port=22345,
-        ),
-    )
-    ffn = AFDConnectorFactory.create_connector(
-        0,
-        0,
-        _vllm_config(role="ffn"),
-        AFDConfig(
-            enabled=True,
-            role="ffn",
-            connector="npudummyconnector",
-            port=22345,
-        ),
-    )
-    attn.init_afd_connector()
-    ffn.init_afd_connector()
-    dp_metadata = {0: _FakeDPMetadata([2])}
-
-    attn.send_dp_metadata_list(dp_metadata, is_warmup=True)
-    received, is_graph_capturing, is_warmup = ffn.recv_dp_metadata_list(
-        timeout_ms=10,
-    )
-
-    assert received == dp_metadata
-    assert not is_graph_capturing
-    assert is_warmup
-
-    metadata = AFDConnectorMetadata.create_attention_metadata(
-        layer_idx=0,
-        stage_idx=0,
-        seq_len=1,
-    )
-    attn.send_attn_output("hidden", metadata)
-    recv_output = ffn.recv_attn_output(timeout_ms=10)
-    assert recv_output == AFDRecvOutput(hidden_states="hidden", metadata=metadata)
-
-    ffn.send_ffn_output("ffn", metadata)
-    assert attn.recv_ffn_output(timeout_ms=10) == "ffn"

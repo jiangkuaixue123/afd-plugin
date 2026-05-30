@@ -32,7 +32,7 @@ GPU 迁移阶段、初始目录结构和当前设计决策记录在
 `docs/gpu/MIGRATION_PLAN.md`。
 
 ## NPU 迁移计划
-GPU 迁移阶段、当前设计决策记录再
+GPU 迁移阶段、当前设计决策记录在
 `docs/npu/`下面
 
 ## 开发规则

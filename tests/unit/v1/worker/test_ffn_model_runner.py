@@ -253,3 +253,6 @@ def test_ffn_worker_loop_logs_unexpected_thread_errors(caplog):
 
     assert worker._ffn_loop_error is expected_error
     assert "AFD FFN worker loop failed" in caplog.text
+    with pytest.raises(RuntimeError, match="AFD FFN worker loop failed") as exc:
+        worker.raise_ffn_loop_error_if_any()
+    assert exc.value.__cause__ is expected_error

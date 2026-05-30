@@ -84,7 +84,7 @@ def test_stack_validation_accepts_npu_worker_override():
         afd={
             "enabled": True,
             "role": "attention",
-            "connector": "npudummyconnector",
+            "connector": "camp2pconnector",
         },
         worker_cls=NPU_ATTENTION_WORKER_FQCN,
     )
@@ -96,4 +96,4 @@ def test_stack_validation_accepts_npu_worker_override():
         expected_worker_qualname_override=NPU_ATTENTION_WORKER_FQCN,
     )
 
-    assert config.connector == "npudummyconnector"
+    assert config.connector == "camp2pconnector"

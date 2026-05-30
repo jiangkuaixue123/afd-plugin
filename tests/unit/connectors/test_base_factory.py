@@ -50,7 +50,7 @@ def test_connector_base_builds_default_recv_metadata_from_dp_metadata():
         0,
         0,
         object(),
-        AFDConfig(enabled=True, connector="npudummyconnector"),
+        AFDConfig(enabled=True, connector="camp2pconnector"),
     )
 
     metadata = connector.create_recv_metadata(
