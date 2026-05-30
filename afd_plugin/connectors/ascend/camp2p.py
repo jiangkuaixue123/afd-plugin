@@ -9,6 +9,7 @@ only when the connector is initialized or used.
 
 from __future__ import annotations
 
+import logging
 import pickle
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,6 +22,13 @@ from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
 from afd_plugin.distributed import init_afd_process_group, topology_from_config
 
 _CAMP2P_CUSTOM_OPS_REGISTERED = False
+
+try:
+    from vllm.logger import init_logger
+except ImportError:
+    logger = logging.getLogger(__name__)
+else:
+    logger = init_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -207,7 +215,29 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         is_warmup: bool = False,
     ) -> None:
         if self.p2p_pg is None:
+            logger.warning(
+                "AFD CAMP2P send_dp_metadata skipped; role=%s world_rank=%d "
+                "p2p_rank=%d p2p_pg=None key=%s is_graph_capturing=%s "
+                "is_warmup=%s",
+                self.afd_config.role,
+                self.world_rank,
+                self.p2p_rank,
+                _dp_metadata_debug_key(dp_metadata_list),
+                bool(is_graph_capturing),
+                bool(is_warmup),
+            )
             return
+        logger.warning(
+            "AFD CAMP2P send_dp_metadata; role=%s world_rank=%d p2p_rank=%d "
+            "dst_list=%s key=%s is_graph_capturing=%s is_warmup=%s",
+            self.afd_config.role,
+            self.world_rank,
+            self.p2p_rank,
+            self.dst_list,
+            _dp_metadata_debug_key(dp_metadata_list),
+            bool(is_graph_capturing),
+            bool(is_warmup),
+        )
         payload = (dp_metadata_list, bool(is_graph_capturing), bool(is_warmup))
         for dst in self.dst_list:
             _send_object(payload, dst=dst, group=self.p2p_pg)
@@ -226,6 +256,17 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         else:
             dp_metadata_list, is_graph_capturing = payload
             is_warmup = False
+        logger.warning(
+            "AFD CAMP2P recv_dp_metadata; role=%s world_rank=%d p2p_rank=%d "
+            "src=%d key=%s is_graph_capturing=%s is_warmup=%s",
+            self.afd_config.role,
+            self.world_rank,
+            self.p2p_rank,
+            src,
+            _dp_metadata_debug_key(dp_metadata_list),
+            bool(is_graph_capturing),
+            bool(is_warmup),
+        )
         return dp_metadata_list, bool(is_graph_capturing), bool(is_warmup)
 
     def configure_metadata(
@@ -634,7 +675,6 @@ def _register_camp2p_custom_ops() -> None:
         return
 
     import torch
-    from typing import Optional
     from vllm.utils.torch_utils import direct_register_custom_op
 
     def send_attn_output_impl(
@@ -766,8 +806,8 @@ def _register_camp2p_custom_ops() -> None:
 
     send_annotations = {
         "hidden_states": torch.Tensor,
-        "topk_weights": Optional[torch.Tensor],
-        "topk_ids": Optional[torch.Tensor],
+        "topk_weights": torch.Tensor | None,
+        "topk_ids": torch.Tensor | None,
         "batch_size": int,
         "hidden_size": int,
         "topk": int,
@@ -850,6 +890,25 @@ def _hccl_comm_name(group: Any, rank: int) -> str:
     torch = _torch()
     backend = group._get_backend(torch.device("npu"))
     return str(backend.get_hccl_comm_name(int(rank)))
+
+
+def _dp_metadata_debug_key(
+    dp_metadata_list: dict[int, Any],
+) -> tuple[tuple[int, tuple]]:
+    key_parts: list[tuple[int, tuple]] = []
+    for stage_idx, metadata in sorted(dp_metadata_list.items()):
+        values = metadata.num_tokens_across_dp_cpu
+        tolist = getattr(values, "tolist", None)
+        if callable(tolist):
+            values = tolist()
+        elif hasattr(values, "item"):
+            values = [values.item()]
+        try:
+            values_tuple = tuple(int(value) for value in values)
+        except TypeError:
+            values_tuple = (int(values),)
+        key_parts.append((int(stage_idx), values_tuple))
+    return tuple(key_parts)
 
 
 def _torch() -> Any:

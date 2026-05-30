@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from afd_plugin.compat.ascend import (
@@ -25,6 +26,13 @@ _NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
     "vllm_ascend.worker.model_runner_v1",
     "NPUModelRunner",
 )
+
+try:
+    from vllm.logger import init_logger
+except ImportError:
+    logger = logging.getLogger(__name__)
+else:
+    logger = init_logger(__name__)
 
 
 class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
@@ -84,6 +92,11 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         previous = self._afd_is_graph_capturing
         self._afd_is_graph_capturing = bool(
             kwargs.get("is_graph_capturing", previous),
+        )
+        logger.warning(
+            "AFD NPU Attention dummy_run; is_graph_capturing=%s args=%s",
+            self._afd_is_graph_capturing,
+            args[:1],
         )
         try:
             return super()._dummy_run(*args, **kwargs)
@@ -156,6 +169,15 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         should_send = self.afd_connector.is_attn_top_min_size_rank(
             self.afd_connector.world_rank,
         )
+        logger.warning(
+            "AFD NPU Attention send_dp_metadata decision; world_rank=%d "
+            "key=%s should_send=%s is_graph_capturing=%s is_warmup=%s",
+            self.afd_connector.world_rank,
+            _dp_metadata_debug_key(dp_metadata_list),
+            should_send,
+            is_graph_capturing,
+            is_warmup,
+        )
         if should_send:
             self.afd_connector.send_dp_metadata_list(
                 dp_metadata_list,
@@ -203,6 +225,25 @@ def _make_uniform_dp_metadata(dp_size: int, num_tokens: int) -> AFDDPMetadata:
             device="cpu",
         )
     return AFDDPMetadata(num_tokens_across_dp_cpu=num_tokens_across_dp_cpu)
+
+
+def _dp_metadata_debug_key(
+    dp_metadata_list: dict[int, Any],
+) -> tuple[tuple[int, tuple]]:
+    key_parts: list[tuple[int, tuple]] = []
+    for stage_idx, metadata in sorted(dp_metadata_list.items()):
+        values = metadata.num_tokens_across_dp_cpu
+        tolist = getattr(values, "tolist", None)
+        if callable(tolist):
+            values = tolist()
+        elif hasattr(values, "item"):
+            values = [values.item()]
+        try:
+            values_tuple = tuple(int(value) for value in values)
+        except TypeError:
+            values_tuple = (int(values),)
+        key_parts.append((int(stage_idx), values_tuple))
+    return tuple(key_parts)
 
 
 def _attention_metadata_values(

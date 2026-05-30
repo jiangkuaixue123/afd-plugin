@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -221,7 +222,7 @@ class _FakeGraph:
         self.replay_count += 1
 
 
-def test_npu_ffn_runner_replays_acl_graph_when_key_exists():
+def test_npu_ffn_runner_replays_acl_graph_when_key_exists(caplog):
     runner = object.__new__(AFDNPUFFNModelRunner)
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
@@ -233,10 +234,43 @@ def test_npu_ffn_runner_replays_acl_graph_when_key_exists():
     graph = _FakeGraph()
     runner._acl_graphs = {runner._make_graph_key(dp_metadata): {"graph": graph}}
 
-    runner.execute_model(dp_metadata_list=dp_metadata)
+    with caplog.at_level(
+        logging.INFO,
+        logger="afd_plugin.v1.worker.ascend.ffn_model_runner",
+    ):
+        runner.execute_model(dp_metadata_list=dp_metadata)
 
     assert graph.replay_count == 1
     assert runner.connector.ffn_outputs == []
+    assert "AFD NPU FFN ACL graph key hit" in caplog.text
+
+
+def test_npu_ffn_runner_logs_acl_graph_miss_and_falls_back_to_eager(caplog):
+    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner.vllm_config = _vllm_config(role="ffn")
+    runner.connector = _FakeFFNConnector()
+    runner.model = _FakeModel()
+    runner.num_layers = 1
+    runner.max_num_tokens = 1
+    runner.use_aclgraph = True
+    runner._acl_graphs = {}
+    metadata = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=0,
+        seq_len=1,
+    )
+    runner.connector.attn_outputs.append(("hidden", metadata))
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="afd_plugin.v1.worker.ascend.ffn_model_runner",
+    ):
+        runner.execute_model(dp_metadata_list={0: _FakeDPMetadata([1])})
+
+    assert "AFD NPU FFN ACL graph key miss" in caplog.text
+    assert runner.connector.ffn_outputs == [
+        ("npu-ffn(hidden, layer=0)", metadata, {"ubatch_idx": 0}),
+    ]
 
 
 def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
