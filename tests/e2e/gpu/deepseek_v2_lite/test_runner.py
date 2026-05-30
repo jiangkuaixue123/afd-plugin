@@ -76,6 +76,19 @@ def test_runner_uses_native_dp_for_ffn_topology():
     assert _arg_value(command, "--served-model-name") == "deepseek-v2-lite-afd-ffn"
 
 
+def test_runner_uses_plugin_decode_bench_connector():
+    args = _args()
+    args.use_decode_bench_connector = True
+
+    command = build_vllm_command(args, role="attention")
+    kv_transfer_config = json.loads(_arg_value(command, "--kv-transfer-config"))
+
+    assert kv_transfer_config["kv_connector"] == "AFDDecodeBenchConnector"
+    assert kv_transfer_config["kv_connector_module_path"] == (
+        "afd_plugin.connectors.decode_bench"
+    )
+
+
 def test_runner_sends_one_concurrent_request_per_attention_dp_rank(monkeypatch):
     args = _args()
     calls = []

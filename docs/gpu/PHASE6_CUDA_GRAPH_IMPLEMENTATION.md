@@ -130,13 +130,13 @@ GPU-gated pytest 已新增以下 opt-in cases：
 - `test_deepseek_v2_full_decode_cudagraph_2a2f_end_to_end`
 - `test_deepseek_v2_full_decode_cudagraph_2a2f_dbo_replays_ubatch_graph`
 
-CUDA graph cases 使用 `DecodeBenchConnector`，对齐 `max-num-seqs`、
+CUDA graph cases 使用 `AFDDecodeBenchConnector`，对齐 `max-num-seqs`、
 `max-num-batched-tokens` 和 CUDA graph capture size。DBO graph case 额外覆盖
 live 请求期间的两 stage ubatch 路径。
 
 最近一次 L20X 手工验证已经证明：
 
-- `2A2F + FULL_DECODE_ONLY + DecodeBenchConnector + DBO`
+- `2A2F + FULL_DECODE_ONLY + AFDDecodeBenchConnector + DBO`
 - capture size `64`
 - 并发 `128`
 - `128/128` completion 请求返回 `200`
