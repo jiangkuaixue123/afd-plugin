@@ -1,0 +1,2 @@
+recursive-include csrc *
+recursive-include afd_plugin/_cann_ops_custom *

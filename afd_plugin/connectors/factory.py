@@ -28,7 +28,7 @@ class AFDConnectorFactory:
 
         def loader() -> type[AFDConnectorBase]:
             module = importlib.import_module(module_path)
-            connector_cls = getattr(module, class_name)
+            connector_cls = vars(module)[class_name]
             if not issubclass(connector_cls, AFDConnectorBase):
                 raise TypeError(
                     f"{module_path}.{class_name} is not an AFDConnectorBase",
@@ -62,6 +62,11 @@ AFDConnectorFactory.register_connector(
     "p2pconnector",
     "afd_plugin.connectors.p2p",
     "P2PAFDConnector",
+)
+AFDConnectorFactory.register_connector(
+    "camp2pconnector",
+    "afd_plugin.connectors.ascend.camp2p",
+    "CAMP2PAFDConnector",
 )
 
 

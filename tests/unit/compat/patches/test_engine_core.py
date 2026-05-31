@@ -140,5 +140,6 @@ def test_engine_core_patch_runs_and_stops_ffn_loop(monkeypatch):
 
     assert engine.model_executor.calls == [
         "start_ffn_server_loop",
+        "raise_ffn_loop_error_if_any",
         "stop_ffn_server_loop",
     ]

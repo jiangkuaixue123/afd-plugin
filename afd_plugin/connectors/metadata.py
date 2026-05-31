@@ -51,7 +51,7 @@ class AFDDPMetadata:
             import torch
 
             num_tokens = _cpu_int_tensor_or_list(self.num_tokens_across_dp_cpu)
-            if not hasattr(num_tokens, "repeat_interleave"):
+            if isinstance(num_tokens, list):
                 num_tokens = torch.tensor(num_tokens, dtype=torch.int32, device="cpu")
             num_tokens_across_sp_cpu = (num_tokens - 1 + sp_size) // sp_size
             num_tokens_across_sp_cpu = num_tokens_across_sp_cpu.repeat_interleave(
@@ -111,8 +111,12 @@ def _cpu_int_tensor_or_list(value: Any) -> Any:
 
 
 def _cpu_scalar_tensor_or_int(value: Any) -> Any:
-    item = getattr(value, "item", None)
-    value = int(item()) if callable(item) else max(_to_int_list(value))
+    if isinstance(value, (int, float)):
+        value = int(value)
+    elif isinstance(value, (list, tuple)):
+        value = max(int(item) for item in value)
+    else:
+        value = int(value.item())
     try:
         import torch
 
@@ -122,19 +126,18 @@ def _cpu_scalar_tensor_or_int(value: Any) -> Any:
 
 
 def _max_token_count(value: Any) -> Any:
-    if hasattr(value, "max"):
-        return value.max()
-    return max(_to_int_list(value))
+    if isinstance(value, list):
+        return max(_to_int_list(value))
+    return value.max()
 
 
 def _to_int_list(value: Any) -> list[int]:
-    tolist = getattr(value, "tolist", None)
-    if callable(tolist):
-        value = tolist()
-    elif hasattr(value, "item"):
-        value = [value.item()]
-    elif isinstance(value, (int, float)):
+    if isinstance(value, (int, float)):
         value = [value]
+    elif isinstance(value, (list, tuple)):
+        pass
+    else:
+        value = value.tolist()
     return [int(item) for item in value]
 
 
@@ -142,7 +145,7 @@ def _compute_sp_num_tokens(
     num_tokens_across_dp_cpu: Any,
     sequence_parallel_size: int,
 ) -> list[int]:
-    if hasattr(num_tokens_across_dp_cpu, "repeat_interleave"):
+    if not isinstance(num_tokens_across_dp_cpu, (int, float, list, tuple)):
         sp_tokens = (
             num_tokens_across_dp_cpu + sequence_parallel_size - 1
         ) // sequence_parallel_size
@@ -169,6 +172,7 @@ class AFDConnectorMetadata:
     stage_idx: int
     seq_lens: list[int]
     recv_handle_list: list[Any] | None = None
+    connector_data: Any = None
 
     def __post_init__(self) -> None:
         if not self.seq_lens:
@@ -213,6 +217,25 @@ class AFDConnectorMetadata:
 
 
 @dataclass(slots=True)
+class AFDRecvOutput:
+    """Unified Attention -> FFN payload returned by connector recv paths."""
+
+    hidden_states: Any
+    metadata: AFDConnectorMetadata
+    group_list: Any = None
+    topk_weights: Any = None
+    topk_ids: Any = None
+    router_logits: Any = None
+    row_idx: Any = None
+    x_active_mask: Any = None
+    dynamic_scales: Any = None
+    cam_p2p_ep_name: str | None = None
+    atten_batch_size: Any = None
+    expand_idx: Any = None
+    ep_recv_counts: Any = None
+
+
+@dataclass(slots=True)
 class AFDMetadata:
     """Forward-context metadata visible to plugin-owned model wrappers."""
 
@@ -239,5 +262,6 @@ __all__ = [
     "AFDConnectorMetadata",
     "AFDDPMetadata",
     "AFDMetadata",
+    "AFDRecvOutput",
     "AFDSingleDPMetadata",
 ]

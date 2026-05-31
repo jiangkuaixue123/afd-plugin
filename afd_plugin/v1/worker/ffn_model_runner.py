@@ -8,7 +8,11 @@ from contextlib import contextmanager
 from typing import Any
 
 from afd_plugin.config import AFDConfig, parse_afd_config
-from afd_plugin.connectors import AFDConnectorFactory
+from afd_plugin.connectors import (
+    AFDConnectorFactory,
+    AFDConnectorMetadata,
+    AFDRecvOutput,
+)
 from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.attention_model_runner import (
     _with_dp_derived_afd_rank,
@@ -165,8 +169,14 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
         with _ffn_forward_context(self.vllm_config) as forward_context:
             for layer_idx in range(num_layers):
                 for stage_idx in stage_ids:
-                    hidden_states, metadata = self._recv_attn_output(stage_idx)
+                    recv_output = self._recv_attn_output(stage_idx)
+                    hidden_states, metadata, _payload = _normalize_recv_output(
+                        recv_output,
+                        stage_idx=stage_idx,
+                        layer_idx=layer_idx,
+                    )
                     metadata.layer_idx = layer_idx
+                    metadata.stage_idx = stage_idx
                     if forward_context is not None:
                         forward_context.dp_metadata = dp_metadata_list.get(
                             metadata.stage_idx,
@@ -189,7 +199,7 @@ class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type
             return compute(hidden_states, layer_idx)
         return hidden_states
 
-    def _recv_attn_output(self, stage_idx: int) -> tuple[Any, Any]:
+    def _recv_attn_output(self, stage_idx: int) -> Any:
         try:
             return self.connector.recv_attn_output(ubatch_idx=stage_idx)
         except TypeError:
@@ -391,6 +401,37 @@ def _set_moe_layer_index(forward_context: object, layer_idx: int) -> None:
         if target in f".{layer_name}.":
             forward_context.moe_layer_index = idx
             return
+
+
+def _normalize_recv_output(
+    recv_output: Any,
+    *,
+    stage_idx: int,
+    layer_idx: int,
+) -> tuple[Any, AFDConnectorMetadata, Any]:
+    if isinstance(recv_output, tuple):
+        hidden_states, metadata = recv_output
+        return hidden_states, metadata, recv_output
+
+    if isinstance(recv_output, AFDRecvOutput):
+        return recv_output.hidden_states, recv_output.metadata, recv_output
+
+    hidden_states = recv_output.hidden_states
+    metadata = getattr(recv_output, "metadata", None)
+    if metadata is None:
+        metadata = AFDConnectorMetadata.create_ffn_metadata(
+            layer_idx=layer_idx,
+            stage_idx=stage_idx,
+            seq_lens=[_tensor_tokens(hidden_states)],
+        )
+    return hidden_states, metadata, recv_output
+
+
+def _tensor_tokens(hidden_states: Any) -> int:
+    shape = getattr(hidden_states, "shape", None)
+    if shape is None:
+        return 1
+    return max(1, int(shape[0]))
 
 
 __all__ = ["GPUFFNModelRunner"]

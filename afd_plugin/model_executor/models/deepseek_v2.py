@@ -256,7 +256,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
         llama_4_scaling: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         afd_connector = afd_metadata.afd_connector
-        stage_idx = int(getattr(afd_metadata, "afd_stage_idx", 0))
+        stage_idx = int(afd_metadata.afd_stage_idx)
 
         for layer_offset, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
@@ -294,7 +294,9 @@ class AFDDeepseekV2Model(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         layer_idx: int,
+        **kwargs: Any,
     ) -> torch.Tensor:
+        del kwargs
         output = self.layers[layer_idx].compute_ffn_output(hidden_states)
         return output
 
@@ -323,8 +325,9 @@ class AFDDeepseekV2ForCausalLM(native.DeepseekV2ForCausalLM):
         self,
         hidden_states: torch.Tensor,
         layer_idx: int,
+        **kwargs: Any,
     ) -> torch.Tensor:
-        return self.model.compute_ffn_output(hidden_states, layer_idx)
+        return self.model.compute_ffn_output(hidden_states, layer_idx, **kwargs)
 
 
 class AFDDeepseekForCausalLM(AFDDeepseekV2ForCausalLM):

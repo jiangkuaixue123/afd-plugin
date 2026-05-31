@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
+"""Ascend/vLLM-Ascend compatibility helpers for AFD runtime classes."""
+
+from afd_plugin.compat.ascend.ops import (
+    AFD_ASCEND_OPS_NAMESPACE,
+    AFD_ASCEND_VENDOR_NAME,
+    AFD_CUST_OPAPI_ENV,
+    ensure_afd_ascend_ops_loaded,
+    get_afd_cann_vendor_path,
+    get_afd_cust_opapi_path,
+    has_afd_ascend_ops,
+)
+from afd_plugin.compat.ascend.runtime import (
+    apply_afd_ascend_patches_if_needed,
+    ascend_forward_context,
+    ensure_ascend_runtime_available,
+    ensure_vllm_config_has_afd_proxy,
+    fail_if_unsupported_npu_afd_features,
+    init_ascend_workspace_for_afd,
+    mirror_afd_metadata_on_forward_context,
+)
+
+__all__ = [
+    "apply_afd_ascend_patches_if_needed",
+    "ascend_forward_context",
+    "AFD_ASCEND_OPS_NAMESPACE",
+    "AFD_ASCEND_VENDOR_NAME",
+    "AFD_CUST_OPAPI_ENV",
+    "ensure_ascend_runtime_available",
+    "ensure_afd_ascend_ops_loaded",
+    "ensure_vllm_config_has_afd_proxy",
+    "fail_if_unsupported_npu_afd_features",
+    "get_afd_cann_vendor_path",
+    "get_afd_cust_opapi_path",
+    "has_afd_ascend_ops",
+    "init_ascend_workspace_for_afd",
+    "mirror_afd_metadata_on_forward_context",
+]

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "wheel", "setuptools-scm[toml]>=8"]
+requires = ["setuptools>=61", "wheel", "setuptools-scm[toml]>=8", "pybind11>=2.12"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -51,9 +51,11 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["afd_plugin*"]
+exclude = ["afd_plugin._cann_ops_custom*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-afd_plugin = ["py.typed"]
+afd_plugin = ["py.typed", "_cann_ops_custom/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -23,11 +23,11 @@ def get_afd_metadata_from_forward_context(forward_context: object | None = None)
 
         forward_context = get_forward_context()
 
-    additional_kwargs = getattr(forward_context, "additional_kwargs", None) or {}
+    additional_kwargs = forward_context.additional_kwargs or {}
     metadata = additional_kwargs.get("afd_metadata")
     if metadata is not None:
         return metadata
-    return getattr(forward_context, "afd_metadata", None)
+    return forward_context.afd_metadata
 
 
 @contextmanager
@@ -50,11 +50,8 @@ def use_afd_metadata_provider(provider: Any) -> Iterator[None]:
         yield
         return
 
-    original_create = getattr(forward_context_module, "create_forward_context", None)
-    install = getattr(provider, "_install_afd_metadata_on_forward_context", None)
-    if original_create is None or not callable(install):
-        yield
-        return
+    original_create = forward_context_module.create_forward_context
+    install = provider._install_afd_metadata_on_forward_context
 
     @wraps(original_create)
     def create_forward_context_with_afd(*args: Any, **kwargs: Any) -> Any:

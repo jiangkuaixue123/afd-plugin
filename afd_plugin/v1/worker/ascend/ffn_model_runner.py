@@ -1,0 +1,548 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
+"""NPU FFN-side model runner for the first AFD runtime version."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from afd_plugin.compat.ascend import (
+    ascend_forward_context,
+    ensure_vllm_config_has_afd_proxy,
+    fail_if_unsupported_npu_afd_features,
+    mirror_afd_metadata_on_forward_context,
+)
+from afd_plugin.config import AFDConfig, parse_afd_config
+from afd_plugin.connectors import (
+    AFDConnectorFactory,
+    AFDConnectorMetadata,
+    AFDMetadata,
+    AFDRecvOutput,
+)
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.attention_model_runner import (
+    _resolve_world_ranks,
+    _with_dp_derived_afd_rank,
+)
+from afd_plugin.v1.worker.cuda_graph import (
+    AFDGraphRunMode,
+    graph_run_mode,
+    make_ffn_graph_key,
+)
+from afd_plugin.v1.worker.ffn_model_runner import _set_moe_layer_index
+
+try:
+    from vllm.logger import init_logger
+except ImportError:
+    logger = logging.getLogger(__name__)
+else:
+    logger = init_logger(__name__)
+
+_NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
+    "vllm_ascend.worker.model_runner_v1",
+    "NPUModelRunner",
+)
+
+
+class AFDNPUFFNModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
+    """Connector-driven NPU FFN runner.
+
+    This first version supports eager single-stream execution and keeps ACL graph
+    and ubatching out of the data path.
+    """
+
+    afd_expected_role = "ffn"
+    vllm_base_import_error = _NPUModelRunner_IMPORT_ERROR
+
+    def __init__(self, vllm_config: object, device: object) -> None:
+        if _NPUModelRunner_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "AFDNPUFFNModelRunner requires an importable vLLM-Ascend runtime",
+            ) from _NPUModelRunner_IMPORT_ERROR
+
+        afd_config = self.parse_config(vllm_config)
+        ensure_vllm_config_has_afd_proxy(vllm_config, afd_config)
+        super().__init__(vllm_config, device)
+
+        self.afd_config = afd_config
+        if not self.afd_config.enabled:
+            raise ValueError("AFD NPU FFN runtime requires enabled=true")
+        fail_if_unsupported_npu_afd_features(vllm_config)
+        self.afd_config = _with_dp_derived_afd_rank(vllm_config, self.afd_config)
+        rank, local_rank = _resolve_world_ranks()
+        self.connector = AFDConnectorFactory.create_connector(
+            rank,
+            local_rank,
+            vllm_config,
+            self.afd_config,
+        )
+        self.num_layers = _resolve_num_hidden_layers(self.model_config)
+        self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
+        self._acl_graphs: dict[tuple, dict[str, Any]] = {}
+        self.graph_pool = _resolve_graph_pool() if self.use_aclgraph else None
+
+    @staticmethod
+    def parse_config(vllm_config: object) -> AFDConfig:
+        return parse_afd_config(vllm_config, expected_role="ffn")
+
+    def initialize_afd_connector(self) -> None:
+        self.connector.init_afd_connector()
+
+    def get_kv_cache_spec(self) -> dict[str, Any]:
+        return {}
+
+    def initialize_kv_cache(self, kv_cache_config: Any) -> None:
+        del kv_cache_config
+        return None
+
+    def profile_run(self) -> None:
+        return None
+
+    def execute_ffn_step(
+        self,
+        *,
+        dp_metadata_list: dict[int, Any],
+        is_graph_capturing: bool = False,
+        is_warmup: bool = False,
+    ) -> None:
+        if dp_metadata_list is None:
+            raise RuntimeError("AFD NPU FFN requires dp_metadata_list")
+        if _runner_uses_aclgraph(self) and (is_graph_capturing or is_warmup):
+            logger.warning(
+                "AFD NPU FFN execute_ffn_step enters capture_model; "
+                "key=%s is_graph_capturing=%s is_warmup=%s",
+                self._make_graph_key(dp_metadata_list),
+                is_graph_capturing,
+                is_warmup,
+            )
+            self.capture_model(
+                dp_metadata_list=dp_metadata_list,
+                is_warmup=is_warmup,
+                is_attn_graph_capturing=is_graph_capturing,
+            )
+            return None
+        self.execute_model(dp_metadata_list=dp_metadata_list)
+        return None
+
+    def execute_model(
+        self,
+        scheduler_output: Any = None,
+        intermediate_tensors: Any = None,
+        *,
+        dp_metadata_list: dict[int, Any] | None = None,
+        is_graph_capturing: bool = False,
+        is_warmup: bool = False,
+    ) -> None:
+        del scheduler_output, intermediate_tensors
+        if dp_metadata_list is None:
+            raise RuntimeError("AFD NPU FFN is connector-driven")
+        graph_key = self._make_graph_key(dp_metadata_list)
+        acl_graphs = _runner_acl_graphs(self)
+        graph_info = acl_graphs.get(graph_key)
+        graph_enabled = _runner_uses_aclgraph(self)
+        run_mode = graph_run_mode(
+            is_warmup=is_warmup and graph_enabled,
+            is_graph_capturing=is_graph_capturing and graph_enabled,
+            graph_enabled=graph_enabled,
+            graph_exists=graph_info is not None,
+        )
+        _log_graph_key_lookup(
+            graph_key=graph_key,
+            graph_enabled=graph_enabled,
+            graph_exists=graph_info is not None,
+            run_mode=run_mode,
+            cached_graph_count=len(acl_graphs),
+        )
+        if run_mode is AFDGraphRunMode.REPLAY:
+            logger.warning(
+                "AFD NPU FFN replaying ACL graph; key=%s cached_graphs=%d",
+                graph_key,
+                len(acl_graphs),
+            )
+            graph_info["graph"].replay()
+            return None
+        if run_mode in (AFDGraphRunMode.WARMUP, AFDGraphRunMode.CAPTURE):
+            return self.execute_ffn_step(
+                dp_metadata_list=dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
+                is_warmup=is_warmup,
+            )
+
+        self._ffn_forward(dp_metadata_list=dp_metadata_list)
+        return None
+
+    @staticmethod
+    def _make_graph_key(dp_metadata_list: dict[int, Any]) -> tuple:
+        return make_ffn_graph_key(dp_metadata_list)
+
+    def _ffn_forward(
+        self,
+        *,
+        dp_metadata_list: dict[int, Any],
+        aclgraph_runtime_mode: Any = None,
+        is_graph_capturing: bool = False,
+        update_connector_state: bool = True,
+    ) -> Any:
+        if update_connector_state:
+            self.connector.update_state_from_dp_metadata(
+                dp_metadata_list,
+                is_graph_capturing=is_graph_capturing,
+            )
+        num_stages = max(len(dp_metadata_list), 1)
+        afd_metadata = AFDMetadata(
+            afd_tokens_start_loc=[],
+            afd_reqs_start_loc=[],
+            afd_stage_idx=0,
+            afd_connector=self.connector,
+            afd_tokens_lens=[],
+            num_of_stages=num_stages,
+        )
+        stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
+        num_tokens_across_dp = _first_dp_token_counts(dp_metadata_list)
+        num_tokens = _first_token_count(num_tokens_across_dp)
+        rank_ffn_output = None
+
+        with ascend_forward_context(
+            vllm_config=self.vllm_config,
+            afd_metadata=afd_metadata,
+            model_instance=self.model,
+            num_tokens=num_tokens,
+            num_tokens_across_dp=num_tokens_across_dp,
+            aclgraph_runtime_mode=aclgraph_runtime_mode,
+        ) as forward_context:
+            for layer_idx in range(max(int(self.num_layers or 0), 1)):
+                for stage_idx in stage_ids:
+                    recv_output = self._recv_attn_output(stage_idx, layer_idx)
+                    hidden_states, metadata, payload = _normalize_recv_output(
+                        recv_output,
+                        stage_idx=stage_idx,
+                        layer_idx=layer_idx,
+                    )
+                    self.connector.update_metadata(metadata, payload)
+                    metadata.layer_idx = layer_idx
+                    metadata.stage_idx = stage_idx
+                    if forward_context is not None:
+                        forward_context.dp_metadata = dp_metadata_list.get(stage_idx)
+                        mirror_afd_metadata_on_forward_context(
+                            forward_context,
+                            metadata,
+                        )
+                        _set_moe_layer_index(forward_context, layer_idx)
+
+                    if metadata.recv_handle_list is not None:
+                        for work in metadata.recv_handle_list:
+                            work.wait()
+                        metadata.recv_handle_list = None
+
+                    rank_ffn_output = self._run_ffn_computation(
+                        hidden_states=hidden_states,
+                        layer_idx=layer_idx,
+                        group_list=payload.group_list,
+                        dynamic_scales=payload.dynamic_scales,
+                        topk_weights=payload.topk_weights,
+                        topk_ids=payload.topk_ids,
+                        router_logits=payload.router_logits,
+                        row_idx=payload.row_idx,
+                        x_active_mask=payload.x_active_mask,
+                        cam_p2p_ep_name=payload.cam_p2p_ep_name or "",
+                    )
+                    self.connector.send_ffn_output(
+                        rank_ffn_output,
+                        metadata,
+                        ubatch_idx=stage_idx,
+                    )
+        return rank_ffn_output
+
+    def capture_model(
+        self,
+        dp_metadata_list: dict[int, Any] | None = None,
+        is_warmup: bool = False,
+        is_attn_graph_capturing: bool = True,
+    ) -> int:
+        if not self.use_aclgraph:
+            return 0
+        if dp_metadata_list is None:
+            raise RuntimeError("AFD NPU FFN capture requires dp_metadata_list")
+
+        logger.warning(
+            "AFD NPU FFN capture_model start; key=%s is_warmup=%s "
+            "is_attn_graph_capturing=%s",
+            self._make_graph_key(dp_metadata_list),
+            is_warmup,
+            is_attn_graph_capturing,
+        )
+        start_free_memory = self._npu_free_memory()
+        self._set_cudagraph_capturing_enabled(True)
+        try:
+            with self._graph_capture_context():
+                if is_warmup:
+                    self._ffn_forward(
+                        dp_metadata_list=dp_metadata_list,
+                        is_graph_capturing=False,
+                    )
+                else:
+                    self._capture_graphs(
+                        aclgraph_runtime_mode=_full_aclgraph_runtime_mode(),
+                        dp_metadata_list=dp_metadata_list,
+                        is_attn_graph_capturing=is_attn_graph_capturing,
+                    )
+        finally:
+            self._set_cudagraph_capturing_enabled(False)
+
+        end_free_memory = self._npu_free_memory()
+        graph_size = max(0, int(start_free_memory - end_free_memory))
+        logger.warning(
+            "AFD NPU FFN capture_model end; key=%s graph_size=%d",
+            self._make_graph_key(dp_metadata_list),
+            graph_size,
+        )
+        return graph_size
+
+    def _capture_graphs(
+        self,
+        *,
+        aclgraph_runtime_mode: Any,
+        dp_metadata_list: dict[int, Any],
+        is_attn_graph_capturing: bool = True,
+    ) -> None:
+        graph_key = self._make_graph_key(dp_metadata_list)
+        if graph_key in self._acl_graphs:
+            logger.debug(
+                "AFD NPU FFN ACL graph capture skipped for existing key=%s",
+                graph_key,
+            )
+            return
+
+        logger.warning("AFD NPU FFN capturing ACL graph for key=%s", graph_key)
+        graph = self._new_npu_graph()
+        logger.warning("AFD NPU FFN created NPUGraph for key=%s", graph_key)
+        self.connector.update_state_from_dp_metadata(
+            dp_metadata_list,
+            is_graph_capturing=is_attn_graph_capturing,
+        )
+        logger.warning("AFD NPU FFN updated connector state for key=%s", graph_key)
+        with self._npu_graph_context(graph):
+            logger.warning(
+                "AFD NPU FFN entered NPU graph context for key=%s",
+                graph_key,
+            )
+            output = self._ffn_forward(
+                dp_metadata_list=dp_metadata_list,
+                aclgraph_runtime_mode=aclgraph_runtime_mode,
+                is_graph_capturing=is_attn_graph_capturing,
+                update_connector_state=False,
+            )
+            logger.warning("AFD NPU FFN left _ffn_forward for key=%s", graph_key)
+        self._acl_graphs[graph_key] = {
+            "graph": graph,
+            "output": output,
+        }
+        logger.warning("AFD NPU FFN captured ACL graph for key=%s", graph_key)
+
+    def _new_npu_graph(self) -> Any:
+        import torch
+
+        return torch.npu.NPUGraph()
+
+    def _npu_graph_context(self, graph: Any) -> Any:
+        import torch
+
+        return torch.npu.graph(graph, pool=self.graph_pool)
+
+    def _graph_capture_context(self) -> Any:
+        from vllm_ascend.worker.model_runner_v1 import graph_capture
+
+        return graph_capture(device=self.device)
+
+    @staticmethod
+    def _set_cudagraph_capturing_enabled(enabled: bool) -> None:
+        from vllm.compilation.monitor import set_cudagraph_capturing_enabled
+
+        set_cudagraph_capturing_enabled(enabled)
+
+    @staticmethod
+    def _npu_free_memory() -> int:
+        import torch
+
+        return int(torch.npu.mem_get_info()[0])
+
+    def _recv_attn_output(self, stage_idx: int, layer_idx: int) -> Any:
+        logger.warning(
+            "AFD NPU FFN recv_attn_output start; stage_idx=%d layer_idx=%d",
+            stage_idx,
+            layer_idx,
+        )
+        metadata = self.connector.create_recv_metadata(
+            dp_metadata_list=self.connector.dp_metadata_list,
+            ubatch_idx=stage_idx,
+            layer_idx=layer_idx,
+            max_num_tokens=self.max_num_tokens,
+        )
+        output = self.connector.recv_attn_output(
+            metadata=metadata,
+            ubatch_idx=stage_idx,
+        )
+        logger.warning(
+            "AFD NPU FFN recv_attn_output end; stage_idx=%d layer_idx=%d",
+            stage_idx,
+            layer_idx,
+        )
+        return output
+
+    def _run_ffn_computation(
+        self,
+        *,
+        hidden_states: Any,
+        layer_idx: int,
+        group_list: Any = None,
+        dynamic_scales: Any = None,
+        topk_weights: Any = None,
+        topk_ids: Any = None,
+        router_logits: Any = None,
+        row_idx: Any = None,
+        x_active_mask: Any = None,
+        cam_p2p_ep_name: str = "",
+    ) -> Any:
+        compute = self.model.compute_ffn_output
+        return compute(
+            hidden_states=hidden_states,
+            layer_idx=layer_idx,
+            group_list=group_list,
+            dynamic_scales=dynamic_scales,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            router_logits=router_logits,
+            row_idx=row_idx,
+            x_active_mask=x_active_mask,
+            cam_p2p_ep_name=cam_p2p_ep_name,
+        )
+
+    def sample_tokens(self, grammar_output: Any = None) -> Any:
+        del grammar_output
+        raise RuntimeError("AFD NPU FFN runners do not sample tokens")
+
+    def shutdown(self) -> None:
+        self.connector.close()
+        super().shutdown()
+
+
+def _normalize_recv_output(
+    recv_output: Any,
+    *,
+    stage_idx: int,
+    layer_idx: int,
+) -> tuple[Any, AFDConnectorMetadata, AFDRecvOutput]:
+    if isinstance(recv_output, tuple):
+        hidden_states, metadata = recv_output
+        payload = AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
+        return hidden_states, metadata, payload
+    hidden_states = recv_output.hidden_states
+    metadata = recv_output.metadata
+    if metadata is None:
+        metadata = AFDConnectorMetadata.create_ffn_metadata(
+            layer_idx=layer_idx,
+            stage_idx=stage_idx,
+            seq_lens=[_tensor_tokens(hidden_states)],
+        )
+        recv_output.metadata = metadata
+    return hidden_states, metadata, recv_output
+
+
+def _resolve_num_hidden_layers(model_config: object) -> int:
+    return int(model_config.hf_config.num_hidden_layers)
+
+
+def _first_dp_token_counts(dp_metadata_list: dict[int, Any]) -> Any:
+    if not dp_metadata_list:
+        return None
+    first_key = sorted(int(key) for key in dp_metadata_list)[0]
+    return dp_metadata_list[first_key].num_tokens_across_dp_cpu
+
+
+def _first_token_count(num_tokens_across_dp: Any) -> int:
+    if num_tokens_across_dp is None:
+        return 1
+    first = num_tokens_across_dp[0]
+    if not isinstance(first, (int, float)):
+        first = first.item()
+    return max(1, int(first))
+
+
+def _tensor_tokens(hidden_states: Any) -> int:
+    return max(1, int(hidden_states.shape[0]))
+
+
+def _use_npu_aclgraph(vllm_config: object, runner: object) -> bool:
+    inherited = bool(runner.use_aclgraph)
+    if bool(vllm_config.model_config.enforce_eager):
+        return False
+
+    mode_name = vllm_config.compilation_config.cudagraph_mode.name
+    return inherited or mode_name in {
+        "FULL",
+        "FULL_AND_PIECEWISE",
+        "FULL_DECODE_ONLY",
+        "PIECEWISE",
+    }
+
+
+def _resolve_graph_pool() -> Any:
+    from vllm.platforms import current_platform
+
+    return current_platform.get_global_graph_pool()
+
+
+def _full_aclgraph_runtime_mode() -> Any:
+    from vllm.config import CUDAGraphMode
+
+    return CUDAGraphMode.FULL
+
+
+def _runner_acl_graphs(runner: object) -> dict[tuple, dict[str, Any]]:
+    return runner._acl_graphs
+
+
+def _runner_uses_aclgraph(runner: object) -> bool:
+    return bool(runner.use_aclgraph)
+
+
+def _log_graph_key_lookup(
+    *,
+    graph_key: tuple,
+    graph_enabled: bool,
+    graph_exists: bool,
+    run_mode: AFDGraphRunMode,
+    cached_graph_count: int,
+) -> None:
+    if not graph_enabled:
+        logger.debug("AFD NPU FFN ACL graph disabled; key=%s", graph_key)
+        return
+
+    if run_mode is AFDGraphRunMode.REPLAY:
+        logger.warning(
+            "AFD NPU FFN ACL graph key hit; key=%s cached_graphs=%d",
+            graph_key,
+            cached_graph_count,
+        )
+        return
+
+    if run_mode is AFDGraphRunMode.EAGER:
+        logger.warning(
+            "AFD NPU FFN ACL graph key miss; key=%s cached_graphs=%d, "
+            "falling back to eager",
+            graph_key,
+            cached_graph_count,
+        )
+        return
+
+    logger.debug(
+        "AFD NPU FFN ACL graph key lookup during %s; key=%s hit=%s cached_graphs=%d",
+        run_mode.value,
+        graph_key,
+        graph_exists,
+        cached_graph_count,
+    )
+
+
+__all__ = ["AFDNPUFFNModelRunner"]

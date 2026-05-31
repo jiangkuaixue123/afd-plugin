@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from afd_plugin.connectors import AFDConnectorMetadata
+from afd_plugin.connectors import AFDConnectorMetadata, AFDRecvOutput
 from afd_plugin.v1.worker.ffn_model_runner import (
     GPUFFNModelRunner,
     _set_moe_layer_index,
@@ -27,7 +27,8 @@ class _FakeConnector:
         if ubatch_idx is None:
             return self.attn_outputs.popleft()
         for item in tuple(self.attn_outputs):
-            if getattr(item[1], "ubatch_idx", item[1].stage_idx) == ubatch_idx:
+            metadata = item.metadata if isinstance(item, AFDRecvOutput) else item[1]
+            if getattr(metadata, "ubatch_idx", metadata.stage_idx) == ubatch_idx:
                 self.attn_outputs.remove(item)
                 return item
         raise IndexError(ubatch_idx)
@@ -103,6 +104,20 @@ def test_ffn_runner_passthrough_without_model_compute_hook():
     runner.execute_model(dp_metadata_list={0: "dp"})
 
     assert runner.connector.ffn_outputs == [("hidden", metadata)]
+
+
+def test_ffn_runner_accepts_unified_recv_output_payload():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    metadata = _metadata()
+    runner.connector.attn_outputs.append(
+        AFDRecvOutput(hidden_states="hidden", metadata=metadata),
+    )
+
+    runner.execute_model(dp_metadata_list={0: "dp"})
+
+    assert runner.connector.ffn_outputs == [
+        ("ffn(hidden, layer=0)", metadata),
+    ]
 
 
 def test_ffn_runner_processes_each_ubatch_for_each_layer():
@@ -238,3 +253,6 @@ def test_ffn_worker_loop_logs_unexpected_thread_errors(caplog):
 
     assert worker._ffn_loop_error is expected_error
     assert "AFD FFN worker loop failed" in caplog.text
+    with pytest.raises(RuntimeError, match="AFD FFN worker loop failed") as exc:
+        worker.raise_ffn_loop_error_if_any()
+    assert exc.value.__cause__ is expected_error

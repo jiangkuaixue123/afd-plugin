@@ -22,7 +22,7 @@ def __getattr__(name: str):
     }:
         from afd_plugin.v1 import worker
 
-        return getattr(worker, name)
+        return vars(worker)[name]
     if name == "assert_compatible_afd_stack":
         from afd_plugin.validation import assert_compatible_afd_stack
 
@@ -111,6 +111,27 @@ def register_afd() -> None:
     except Exception:
         _logger.debug(
             "AFD plugin: DBO yield custom op could not be registered",
+            exc_info=True,
+        )
+
+    try:
+        from vllm.distributed.kv_transfer.kv_connector.factory import (
+            KVConnectorFactory,
+        )
+
+        try:
+            KVConnectorFactory.register_connector(
+                "AFDDecodeBenchConnector",
+                "afd_plugin.connectors.decode_bench",
+                "AFDDecodeBenchConnector",
+            )
+        except ValueError:
+            _logger.debug(
+                "AFD plugin: AFDDecodeBenchConnector was already registered",
+            )
+    except Exception:
+        _logger.debug(
+            "AFD plugin: decode benchmark KV connector could not be registered",
             exc_info=True,
         )
 

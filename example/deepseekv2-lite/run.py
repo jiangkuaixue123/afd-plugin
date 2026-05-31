@@ -181,7 +181,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-decode-bench-connector",
         action="store_true",
-        help="Pass a DecodeBenchConnector kv-transfer-config to Attention.",
+        help="Pass an AFDDecodeBenchConnector kv-transfer-config to Attention.",
     )
     parser.add_argument(
         "--common-vllm-arg",
@@ -323,7 +323,8 @@ def build_vllm_command(
 def decode_bench_connector_config() -> str:
     return json.dumps(
         {
-            "kv_connector": "DecodeBenchConnector",
+            "kv_connector": "AFDDecodeBenchConnector",
+            "kv_connector_module_path": "afd_plugin.connectors.decode_bench",
             "kv_role": "kv_both",
             "kv_connector_extra_config": {
                 "fill_mean": 0.015,

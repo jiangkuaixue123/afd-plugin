@@ -13,7 +13,11 @@ from typing import Any, NamedTuple
 
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
-from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDDPMetadata
+from afd_plugin.connectors.metadata import (
+    AFDConnectorMetadata,
+    AFDDPMetadata,
+    AFDRecvOutput,
+)
 from afd_plugin.distributed import (
     DefaultProcessGroupSwitcher,
     build_rank_mapping,
@@ -287,7 +291,7 @@ class P2PAFDConnector(AFDConnectorBase):
         self,
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
-    ) -> tuple[Any, AFDConnectorMetadata]:
+    ) -> AFDRecvOutput:
         del timeout_ms
         import torch
 
@@ -323,7 +327,7 @@ class P2PAFDConnector(AFDConnectorBase):
             stage_idx=ubatch_idx,
             seq_lens=[int(tensor.shape[0]) for tensor in hidden_states_list],
         )
-        return hidden_states, metadata
+        return AFDRecvOutput(hidden_states=hidden_states, metadata=metadata)
 
     def send_ffn_output(
         self,

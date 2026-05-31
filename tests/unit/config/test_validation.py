@@ -7,6 +7,7 @@ import pytest
 from afd_plugin.validation import (
     ATTENTION_WORKER_FQCN,
     FFN_WORKER_FQCN,
+    NPU_ATTENTION_WORKER_FQCN,
     assert_compatible_afd_stack,
 )
 
@@ -76,3 +77,23 @@ def test_stack_validation_rejects_auto_worker():
 
     with pytest.raises(ValueError, match="worker_cls is still 'auto'"):
         assert_compatible_afd_stack(vllm_config, caller="test")
+
+
+def test_stack_validation_accepts_npu_worker_override():
+    vllm_config = _vllm_like_config(
+        afd={
+            "enabled": True,
+            "role": "attention",
+            "connector": "camp2pconnector",
+        },
+        worker_cls=NPU_ATTENTION_WORKER_FQCN,
+    )
+
+    config = assert_compatible_afd_stack(
+        vllm_config,
+        caller="test",
+        expected_role="attention",
+        expected_worker_qualname_override=NPU_ATTENTION_WORKER_FQCN,
+    )
+
+    assert config.connector == "camp2pconnector"

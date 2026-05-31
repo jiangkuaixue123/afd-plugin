@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
+"""NPU FFN-side worker for the first AFD runtime version."""
+
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Any
+
+from afd_plugin.compat.ascend import (
+    apply_afd_ascend_patches_if_needed,
+    ensure_ascend_runtime_available,
+    fail_if_unsupported_npu_afd_features,
+    init_ascend_workspace_for_afd,
+)
+from afd_plugin.v1.worker._optional import optional_class
+from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
+from afd_plugin.validation import NPU_FFN_WORKER_FQCN, assert_compatible_afd_stack
+
+_NPUWorker, _NPUWorker_IMPORT_ERROR = optional_class(
+    "vllm_ascend.worker.worker",
+    "NPUWorker",
+)
+logger = logging.getLogger(__name__)
+
+
+class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
+    """FFN worker that owns a connector-driven NPU daemon loop."""
+
+    afd_expected_role = "ffn"
+    vllm_base_import_error = _NPUWorker_IMPORT_ERROR
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if _NPUWorker_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "AFDNPUFFNWorker requires an importable vLLM-Ascend runtime",
+            ) from _NPUWorker_IMPORT_ERROR
+        ensure_ascend_runtime_available()
+        apply_afd_ascend_patches_if_needed()
+        super().__init__(*args, **kwargs)
+        self._ffn_thread: threading.Thread | None = None
+        self._ffn_shutdown_event: threading.Event | None = None
+        self._ffn_loop_error: BaseException | None = None
+
+    def init_device(self) -> None:
+        assert_compatible_afd_stack(
+            self.vllm_config,
+            caller="AFDNPUFFNWorker.init_device",
+            expected_role="ffn",
+            expected_worker_qualname_override=NPU_FFN_WORKER_FQCN,
+        )
+        fail_if_unsupported_npu_afd_features(self.vllm_config)
+        if self.use_v2_model_runner:
+            raise RuntimeError("AFD NPU FFN supports only vllm-ascend MRv1")
+
+        self.device = self._init_device()
+        init_ascend_workspace_for_afd(self.device, num_ubatches=1)
+        self.model_runner = AFDNPUFFNModelRunner(self.vllm_config, self.device)
+
+    def get_kv_cache_spec(self) -> dict[str, Any]:
+        return {}
+
+    def initialize_from_config(self, kv_cache_config: Any) -> None:
+        self.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
+        self.model_runner.initialize_kv_cache(kv_cache_config)
+        self.model_runner.initialize_afd_connector()
+        self.start_ffn_server_loop()
+
+    def compile_or_warm_up_model(self) -> float:
+        return 0.0
+
+    def execute_model(self, scheduler_output: Any) -> None:
+        del scheduler_output
+        raise RuntimeError(
+            "AFD NPU FFN workers are connector-driven; scheduler-driven "
+            "execute_model() is not supported.",
+        )
+
+    def start_ffn_server_loop(self) -> None:
+        if self._ffn_thread is not None and self._ffn_thread.is_alive():
+            self.raise_ffn_loop_error_if_any()
+            return
+
+        self.raise_ffn_loop_error_if_any()
+        connector = self.model_runner.connector
+        if not connector.is_initialized:
+            self.model_runner.initialize_afd_connector()
+
+        self._ffn_shutdown_event = threading.Event()
+        self._ffn_loop_error = None
+
+        def ffn_worker_loop() -> None:
+            try:
+                self._run_ffn_server_loop()
+            except Exception as exc:
+                self._ffn_loop_error = exc
+                logger.exception("AFD NPU FFN worker loop failed")
+
+        self._ffn_thread = threading.Thread(
+            target=ffn_worker_loop,
+            name="afd-npu-ffn-worker-loop",
+            daemon=True,
+        )
+        self._ffn_thread.start()
+
+    def _run_ffn_server_loop(self) -> None:
+        event = self._ffn_shutdown_event
+        if event is None:
+            return
+
+        _set_npu_device_if_possible(self.device)
+        while not event.is_set():
+            try:
+                (
+                    dp_metadata_list,
+                    is_attn_graph_capturing,
+                    is_warmup,
+                ) = self.model_runner.connector.recv_dp_metadata_list(timeout_ms=100)
+            except TimeoutError:
+                continue
+
+            self.model_runner.execute_ffn_step(
+                dp_metadata_list=dp_metadata_list,
+                is_graph_capturing=is_attn_graph_capturing,
+                is_warmup=is_warmup,
+            )
+            _synchronize_npu_if_possible(self.device)
+
+    def raise_ffn_loop_error_if_any(self) -> None:
+        error = self._ffn_loop_error
+        if error is not None:
+            self._ffn_loop_error = None
+            raise RuntimeError("AFD NPU FFN worker loop failed") from error
+
+    def stop_ffn_server_loop(self) -> None:
+        event = self._ffn_shutdown_event
+        if event is not None:
+            event.set()
+        try:
+            self.model_runner.shutdown()
+        finally:
+            thread = self._ffn_thread
+            if thread is not None:
+                thread.join(timeout=5)
+            self._ffn_thread = None
+            self._ffn_shutdown_event = None
+        self.raise_ffn_loop_error_if_any()
+
+    def shutdown(self) -> None:
+        self.stop_ffn_server_loop()
+        super().shutdown()
+
+
+def _set_npu_device_if_possible(device: object) -> None:
+    if device.type != "npu":
+        return
+    import torch
+
+    torch.npu.set_device(device)
+
+
+def _synchronize_npu_if_possible(device: object) -> None:
+    if device.type != "npu":
+        return
+    import torch
+
+    torch.npu.synchronize()
+
+
+__all__ = ["AFDNPUFFNWorker"]
