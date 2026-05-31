@@ -537,8 +537,7 @@ def _log_graph_key_lookup(
         return
 
     logger.debug(
-        "AFD NPU FFN ACL graph key lookup during %s; key=%s hit=%s "
-        "cached_graphs=%d",
+        "AFD NPU FFN ACL graph key lookup during %s; key=%s hit=%s cached_graphs=%d",
         run_mode.value,
         graph_key,
         graph_exists,
