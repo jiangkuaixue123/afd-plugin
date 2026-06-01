@@ -13,6 +13,7 @@ from typing import Any
 from afd_plugin.config import AFDConfig, parse_afd_config
 
 _PATCHES_APPLIED = False
+_ASCEND_PLATFORM_PATCH_ATTR = "_afd_plugin_ascend_platform_patch_state"
 
 
 def ensure_ascend_runtime_available() -> None:
@@ -25,16 +26,12 @@ def ensure_ascend_runtime_available() -> None:
 
 
 def apply_afd_ascend_patches_if_needed() -> None:
-    """Apply plugin-owned Ascend patches.
-
-    The first NPU runtime version does not need a monkey patch.  The function is
-    intentionally present and idempotent so future patches have one guarded
-    entry point.
-    """
+    """Apply plugin-owned, AFD-scoped Ascend patches."""
 
     global _PATCHES_APPLIED
     if _PATCHES_APPLIED:
         return
+    _apply_afd_ascend_dbo_config_patch()
     _PATCHES_APPLIED = True
 
 
@@ -42,6 +39,13 @@ def init_ascend_workspace_for_afd(device: object, *, num_ubatches: int = 1) -> N
     from vllm.v1.worker.workspace import init_workspace_manager
 
     init_workspace_manager(device, int(num_ubatches))
+
+
+def npu_afd_num_ubatches(vllm_config: object) -> int:
+    parallel_config = vllm_config.parallel_config
+    if parallel_config.use_ubatching:
+        return int(parallel_config.num_ubatches)
+    return 1
 
 
 def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
@@ -76,8 +80,12 @@ def fail_if_unsupported_npu_afd_features(vllm_config: object) -> None:
                     "AFD NPU runtime does not support multistream_info enabled",
                 )
 
-    if bool(vllm_config.parallel_config.use_ubatching):
-        raise RuntimeError("AFD NPU runtime does not support ubatching/DBO yet")
+    if bool(vllm_config.parallel_config.use_ubatching) and (
+        int(vllm_config.parallel_config.num_ubatches) != 2
+    ):
+        raise RuntimeError(
+            "AFD NPU runtime supports exactly two ubatches when DBO is enabled",
+        )
 
     if not bool(vllm_config.model_config.enforce_eager):
         _npu_aclgraph_mode_name(vllm_config)
@@ -169,6 +177,68 @@ def ensure_vllm_config_has_afd_proxy(
     return proxy
 
 
+def _apply_afd_ascend_dbo_config_patch() -> None:
+    """Preserve AFD DBO settings after vLLM-Ascend's compatibility reset.
+
+    The reverted vLLM-Ascend baseline resets ``--enable-dbo`` and
+    ``--ubatch-size`` for every Ascend run.  AFD owns the Ascend DBO path now,
+    so this patch restores those fields only for AFD-enabled configs.
+    """
+
+    try:
+        from vllm_ascend.platform import NPUPlatform
+    except Exception:
+        return
+
+    if hasattr(NPUPlatform, _ASCEND_PLATFORM_PATCH_ATTR):
+        return
+
+    original_fix = NPUPlatform._fix_incompatible_config
+
+    def patched_fix_incompatible_config(vllm_config: object) -> Any:
+        saved = _snapshot_afd_dbo_config(vllm_config)
+        result = original_fix(vllm_config)
+        if saved is not None:
+            _restore_afd_dbo_config(vllm_config, saved)
+        return result
+
+    NPUPlatform._fix_incompatible_config = staticmethod(patched_fix_incompatible_config)
+    setattr(NPUPlatform, _ASCEND_PLATFORM_PATCH_ATTR, original_fix)
+
+
+def _snapshot_afd_dbo_config(vllm_config: object) -> dict[str, Any] | None:
+    if not _is_afd_config_enabled(vllm_config):
+        return None
+    parallel_config = vllm_config.parallel_config
+    return {
+        "enable_dbo": parallel_config.enable_dbo,
+        "use_ubatching": parallel_config.use_ubatching,
+        "num_ubatches": parallel_config.num_ubatches,
+        "ubatch_size": parallel_config.ubatch_size,
+    }
+
+
+def _restore_afd_dbo_config(vllm_config: object, saved: dict[str, Any]) -> None:
+    parallel_config = vllm_config.parallel_config
+    if not (
+        saved["enable_dbo"]
+        or saved["use_ubatching"]
+        or int(saved["ubatch_size"] or 0) != 0
+    ):
+        return
+    parallel_config.enable_dbo = saved["enable_dbo"]
+    parallel_config.use_ubatching = saved["use_ubatching"]
+    parallel_config.num_ubatches = saved["num_ubatches"]
+    parallel_config.ubatch_size = saved["ubatch_size"]
+
+
+def _is_afd_config_enabled(vllm_config: object) -> bool:
+    try:
+        return parse_afd_config(vllm_config, validate=False).enabled
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class _AscendAFDConfigProxy:
     _config: AFDConfig
@@ -248,4 +318,5 @@ __all__ = [
     "fail_if_unsupported_npu_afd_features",
     "init_ascend_workspace_for_afd",
     "mirror_afd_metadata_on_forward_context",
+    "npu_afd_num_ubatches",
 ]

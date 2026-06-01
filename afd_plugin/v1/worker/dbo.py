@@ -5,8 +5,6 @@
 from typing import Any
 
 import torch
-from vllm.utils.torch_utils import direct_register_custom_op
-from vllm.v1.worker import ubatching
 
 _AFD_DBO_YIELD_OP_REGISTERED = False
 
@@ -19,20 +17,25 @@ def maybe_apply_dbo_yield(
 ) -> Any:
     """Yield to the peer ubatch thread when vLLM DBO is active."""
 
-    dbo_module = ubatching if ubatching_module is None else ubatching_module
-    if not bool(dbo_module.dbo_enabled()):
-        return tensor
-
     if ubatching_module is not None:
-        dbo_module.dbo_yield()
+        if ubatching_module.dbo_enabled():
+            ubatching_module.dbo_yield()
         return tensor
 
-    if not _AFD_DBO_YIELD_OP_REGISTERED:
-        if _torch_is_compiling():
-            return tensor
-        register_dbo_yield_custom_op()
-    if not _AFD_DBO_YIELD_OP_REGISTERED:
+    try:
+        from afd_plugin.v1.worker.ascend import ubatching as ascend_ubatching
+    except ImportError:
+        ascend_ubatching = None
+
+    if ascend_ubatching is not None and ascend_ubatching.dbo_enabled():
+        ascend_ubatching.dbo_yield()
         return tensor
+
+    try:
+        register_dbo_yield_custom_op()
+    except ImportError:
+        return tensor
+
     return torch.ops.vllm.manual_dbo_yield(tensor)
 
 
@@ -42,9 +45,13 @@ def register_dbo_yield_custom_op() -> None:
     if _AFD_DBO_YIELD_OP_REGISTERED:
         return
 
+    from vllm.utils.torch_utils import direct_register_custom_op
+
     def afd_manual_dbo_yield_op(x: torch.Tensor) -> torch.Tensor:
-        if ubatching.dbo_enabled():
-            ubatching.dbo_yield()
+        from vllm.v1.worker.ubatching import dbo_enabled, dbo_yield
+
+        if dbo_enabled():
+            dbo_yield()
         return x
 
     def afd_manual_dbo_yield_fake(x: torch.Tensor) -> torch.Tensor:
@@ -61,10 +68,6 @@ def register_dbo_yield_custom_op() -> None:
         if "already" not in str(exc).lower():
             raise
     _AFD_DBO_YIELD_OP_REGISTERED = True
-
-
-def _torch_is_compiling() -> bool:
-    return bool(torch.compiler.is_compiling())
 
 
 __all__ = ["maybe_apply_dbo_yield", "register_dbo_yield_custom_op"]

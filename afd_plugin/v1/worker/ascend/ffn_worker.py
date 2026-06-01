@@ -16,6 +16,7 @@ from afd_plugin.compat.ascend import (
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
+    npu_afd_num_ubatches,
 )
 from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
 from afd_plugin.validation import NPU_FFN_WORKER_FQCN, assert_compatible_afd_stack
@@ -48,7 +49,10 @@ class AFDNPUFFNWorker(NPUWorker):
             raise RuntimeError("AFD NPU FFN supports only vllm-ascend MRv1")
 
         self.device = self._init_device()
-        init_ascend_workspace_for_afd(self.device, num_ubatches=1)
+        init_ascend_workspace_for_afd(
+            self.device,
+            num_ubatches=npu_afd_num_ubatches(self.vllm_config),
+        )
         self.model_runner = AFDNPUFFNModelRunner(self.vllm_config, self.device)
 
     def get_kv_cache_spec(self) -> dict[str, Any]:

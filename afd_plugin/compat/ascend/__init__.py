@@ -19,6 +19,7 @@ from afd_plugin.compat.ascend.runtime import (
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
     mirror_afd_metadata_on_forward_context,
+    npu_afd_num_ubatches,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "has_afd_ascend_ops",
     "init_ascend_workspace_for_afd",
     "mirror_afd_metadata_on_forward_context",
+    "npu_afd_num_ubatches",
 ]

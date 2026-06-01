@@ -115,6 +115,16 @@ def register_afd() -> None:
         )
 
     try:
+        from afd_plugin.compat.ascend import apply_afd_ascend_patches_if_needed
+
+        apply_afd_ascend_patches_if_needed()
+    except Exception:
+        _logger.debug(
+            "AFD plugin: Ascend compatibility patches could not be applied",
+            exc_info=True,
+        )
+
+    try:
         from vllm.distributed.kv_transfer.kv_connector.factory import (
             KVConnectorFactory,
         )
