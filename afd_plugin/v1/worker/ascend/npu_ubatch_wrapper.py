@@ -6,59 +6,61 @@ This is the plugin copy of the basic Ascend DBO wrapper from vLLM-Ascend
 commit ``cdd212830271249a1cafcb850c210133f21771c5``.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from afd_plugin.v1.worker._optional import optional_class
+import torch
+import torch_npu  # noqa: F401
+from vllm.config import CUDAGraphMode, VllmConfig
+from vllm.distributed import (
+    get_pp_group,
+    get_tensor_model_parallel_world_size,
+    tensor_model_parallel_all_gather,
+)
+from vllm.forward_context import (
+    DPMetadata,
+    get_forward_context,
+    override_forward_context,
+)
+from vllm.sequence import IntermediateTensors
+from vllm.v1.worker.gpu_ubatch_wrapper import UbatchMetadata, UBatchWrapper
+from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
+from vllm_ascend.utils import enable_sp
 
-_UBatchWrapper, _UBatchWrapper_IMPORT_ERROR = optional_class(
-    "vllm.v1.worker.gpu_ubatch_wrapper",
-    "UBatchWrapper",
+from afd_plugin.v1.worker.ascend.forward_context import (
+    create_ascend_forward_context,
+)
+from afd_plugin.v1.worker.ascend.ubatching import (
+    AscendUBatchContext,
+    make_ubatch_contexts,
 )
 
 
 @dataclass
-class AscendUbatchMetadata:
-    context: Any
-    input_ids: Any | None
-    positions: Any
-    inputs_embeds: Any | None
-    intermediate_tensors: Any | None
-    num_tokens: int
+class AscendUbatchMetadata(UbatchMetadata):
+    context: AscendUBatchContext
+    input_ids: torch.Tensor | None
 
 
 @dataclass
 class AscendNPUGraphMetaData:
-    aclgraph: Any
+    aclgraph: torch.npu.NPUGraph
     ubatch_metadata: list[AscendUbatchMetadata]
     outputs: Any | None = None
 
 
-class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
+class AscendUBatchWrapper(UBatchWrapper):
     """Ascend microbatch wrapper used only by AFD NPU runtimes."""
-
-    vllm_base_import_error = _UBatchWrapper_IMPORT_ERROR
 
     def __init__(
         self,
-        runnable: Callable[..., Any],
-        vllm_config: Any,
-        runtime_mode: Any,
-        device: Any,
-    ) -> None:
-        if _UBatchWrapper_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AscendUBatchWrapper requires an importable vLLM runtime",
-            ) from _UBatchWrapper_IMPORT_ERROR
-
-        import torch
-        from vllm.config import CUDAGraphMode
-        from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
-
+        runnable: Callable,
+        vllm_config: VllmConfig,
+        runtime_mode: CUDAGraphMode,
+        device: torch.device,
+    ):
         self.runnable = runnable
         self.vllm_config = vllm_config
         self.compilation_config = vllm_config.compilation_config
@@ -75,7 +77,7 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         self.device = device
 
     @property
-    def graph_pool(self) -> Any:
+    def graph_pool(self):
         if self.cudagraph_wrapper is not None:
             return self.cudagraph_wrapper.graph_pool
         return None
@@ -85,21 +87,17 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         if self.cudagraph_wrapper is not None:
             self.cudagraph_wrapper.concrete_aclgraph_entries.clear()
 
-    def __getattr__(self, key: str) -> Any:
+    def __getattr__(self, key: str):
         if hasattr(self.runnable, key):
             return getattr(self.runnable, key)
         raise AttributeError(
-            f"Attribute {key} not found in AscendUBatchWrapper runnable.",
+            f"Attribute {key} not found in AscendUBatchWrapper runnable."
         )
 
-    def unwrap(self) -> Callable[..., Any]:
+    def unwrap(self) -> Callable:
         return self.runnable
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        import torch
-        from vllm.config import CUDAGraphMode
-        from vllm.forward_context import DPMetadata, get_forward_context
-
+    def __call__(self, *args, **kwargs):
         forward_context = get_forward_context()
         batch_descriptor = forward_context.batch_descriptor
         ubatch_slices = forward_context.ubatch_slices
@@ -137,7 +135,7 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                         self.vllm_config.parallel_config,
                         ubatch_slice.num_tokens,
                         ubatch_num_tokens_across_dp,
-                    ),
+                    )
                 )
             else:
                 ubatch_dp_metadata.append(None)
@@ -184,24 +182,17 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
 
     def _make_ubatch_metadata(
         self,
-        ubatch_slices: Any,
-        attn_metadata: Any,
-        input_ids: Any,
-        positions: Any,
-        inputs_embeds: Any,
-        intermediate_tensors: Any,
-        compute_stream: Any,
-        dp_metadata: list[Any],
-        batch_descriptor: Any,
-        cudagraph_runtime_mode: Any,
+        ubatch_slices,
+        attn_metadata,
+        input_ids,
+        positions,
+        inputs_embeds,
+        intermediate_tensors,
+        compute_stream,
+        dp_metadata,
+        batch_descriptor,
+        cudagraph_runtime_mode,
     ) -> list[AscendUbatchMetadata]:
-        from vllm.forward_context import get_forward_context
-
-        from afd_plugin.v1.worker.ascend.forward_context import (
-            create_ascend_forward_context,
-        )
-        from afd_plugin.v1.worker.ascend.ubatching import make_ubatch_contexts
-
         cur_forward_context = get_forward_context()
         forward_contexts = []
         for i, _ubatch_slice in enumerate(ubatch_slices):
@@ -218,7 +209,7 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                     cudagraph_runtime_mode=cudagraph_runtime_mode,
                     ubatch_num=i,
                     skip_compiled=cur_forward_context.skip_compiled,
-                ),
+                )
             )
 
         ubatch_ctxs = make_ubatch_contexts(
@@ -250,18 +241,18 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                     inputs_embeds=sliced_inputs_embeds,
                     intermediate_tensors=sliced_intermediate_tensors,
                     num_tokens=ubatch_slice.num_tokens,
-                ),
+                )
             )
         return metadata_list
 
     def _slice_model_inputs(
         self,
         tokens_slice: slice,
-        input_ids: Any,
-        positions: Any,
-        inputs_embeds: Any,
-        intermediate_tensors: Any,
-    ) -> tuple[Any, Any, Any, Any]:
+        input_ids,
+        positions,
+        inputs_embeds,
+        intermediate_tensors,
+    ):
         sliced_input_ids = input_ids[tokens_slice] if input_ids is not None else None
         sliced_positions = (
             positions[:, tokens_slice]
@@ -272,9 +263,7 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             inputs_embeds[tokens_slice] if inputs_embeds is not None else None
         )
 
-        if intermediate_tensors is not None and _enable_sp(self.vllm_config):
-            from vllm.distributed import get_tensor_model_parallel_world_size
-
+        if intermediate_tensors is not None and enable_sp():
             tp_size = get_tensor_model_parallel_world_size()
             start = (tokens_slice.start + tp_size - 1) // tp_size
             if start != 0:
@@ -297,13 +286,11 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             sliced_intermediate_tensors,
         )
 
-    def _merge_intermediate_tensors(self, intermediate_tensor_list: list[Any]) -> Any:
-        from vllm.sequence import IntermediateTensors
-
+    def _merge_intermediate_tensors(self, intermediate_tensor_list):
         assert len(intermediate_tensor_list) == 2
         result = {}
         for key in intermediate_tensor_list[0].tensors:
-            result[key] = _torch_cat(
+            result[key] = torch.cat(
                 [
                     intermediate_tensor_list[0].tensors[key],
                     intermediate_tensor_list[1].tensors[key],
@@ -316,9 +303,7 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
         self,
         sorted_results: list[Any],
         ubatch_metadata: list[AscendUbatchMetadata],
-    ) -> Any:
-        from vllm.distributed import get_pp_group, tensor_model_parallel_all_gather
-
+    ):
         if not get_pp_group().is_last_rank:
             return self._merge_intermediate_tensors(sorted_results)
 
@@ -329,11 +314,10 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
                 pad_size = ubatch_metadata[i].context.forward_context.pad_size
                 if pad_size > 0:
                     sorted_results[i] = sorted_results[i][:-pad_size, :]
-        return _torch_cat(sorted_results, dim=0)
+        return torch.cat(sorted_results, dim=0)
 
-    def _run_ubatch_thread(
-        self, results: list[Any], model: Any, ubatch_metadata: Any
-    ) -> None:
+    @torch.inference_mode()
+    def _run_ubatch_thread(self, results, model, ubatch_metadata):
         with ubatch_metadata.context:
             model_output = model(
                 input_ids=ubatch_metadata.input_ids,
@@ -346,10 +330,8 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
     def _run_ubatches(
         self,
         ubatch_metadata: list[AscendUbatchMetadata],
-        model: Any,
-    ) -> Any:
-        from vllm.forward_context import get_forward_context, override_forward_context
-
+        model,
+    ) -> torch.Tensor | IntermediateTensors:
         results: list[tuple[int, Any]] = []
         with override_forward_context(None):
             ubatch_threads = []
@@ -372,11 +354,8 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
     def _capture_ubatches(
         self,
         ubatch_metadata: list[AscendUbatchMetadata],
-        model: Any,
-    ) -> Any:
-        import torch
-        from vllm.forward_context import get_forward_context, override_forward_context
-
+        model,
+    ) -> torch.Tensor:
         results: list[tuple[int, Any]] = []
         compute_stream = ubatch_metadata[0].context.compute_stream
         num_tokens = sum(metadata.num_tokens for metadata in ubatch_metadata)
@@ -412,21 +391,6 @@ class AscendUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
             self.cudagraphs[num_tokens] = cudagraph_metadata
         get_forward_context().dbo_enabled = True
         return cudagraph_metadata.outputs
-
-
-def _torch_cat(values: list[Any], dim: int) -> Any:
-    import torch
-
-    return torch.cat(values, dim=dim)
-
-
-def _enable_sp(vllm_config: Any) -> bool:
-    try:
-        from vllm_ascend.utils import enable_sp
-
-        return bool(enable_sp(vllm_config))
-    except Exception:
-        return False
 
 
 __all__ = [

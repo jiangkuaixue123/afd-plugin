@@ -2,10 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """Forward-context helpers for plugin-owned Ascend ubatching."""
 
-from __future__ import annotations
-
 import math
-from typing import Any
+
+import torch
+from vllm.config import CUDAGraphMode, VllmConfig
+from vllm.distributed import get_dp_group, get_tensor_model_parallel_world_size
+from vllm.forward_context import BatchDescriptor, DPMetadata, ForwardContext
+from vllm.v1.worker.ubatch_utils import UBatchSlices
+from vllm_ascend.ops.fused_moe.moe_comm_method import get_moe_comm_method
 
 from afd_plugin.compat.ascend import mirror_afd_metadata_on_forward_context
 from afd_plugin.v1.worker.ubatch_wrapper import (
@@ -15,21 +19,16 @@ from afd_plugin.v1.worker.ubatch_wrapper import (
 
 
 def create_ascend_forward_context(
-    cur_forward_context: Any,
-    attn_metadata: Any,
-    vllm_config: Any,
-    ubatch_slices: Any,
+    cur_forward_context: ForwardContext,
+    attn_metadata,
+    vllm_config: VllmConfig,
+    ubatch_slices: UBatchSlices,
     ubatch_num: int = 0,
-    dp_metadata: Any | None = None,
-    cudagraph_runtime_mode: Any | None = None,
-    batch_descriptor: Any | None = None,
+    dp_metadata: DPMetadata | None = None,
+    cudagraph_runtime_mode: CUDAGraphMode | None = None,
+    batch_descriptor: BatchDescriptor | None = None,
     skip_compiled: bool = False,
-) -> Any:
-    from vllm.config import CUDAGraphMode
-    from vllm.distributed import get_dp_group, get_tensor_model_parallel_world_size
-    from vllm.forward_context import ForwardContext
-    from vllm_ascend.ops.fused_moe.moe_comm_method import get_moe_comm_method
-
+) -> ForwardContext:
     if cudagraph_runtime_mode is None:
         cudagraph_runtime_mode = CUDAGraphMode.NONE
 
@@ -61,7 +60,7 @@ def create_ascend_forward_context(
 
     new_forward_context.moe_comm_type = cur_forward_context.moe_comm_type
     new_forward_context.moe_comm_method = get_moe_comm_method(
-        new_forward_context.moe_comm_type,
+        new_forward_context.moe_comm_type
     )
     new_forward_context.in_profile_run = cur_forward_context.in_profile_run
     new_forward_context.capturing = cur_forward_context.capturing
@@ -115,25 +114,16 @@ def create_ascend_forward_context(
         max_tokens_across_dp = num_tokens
     new_forward_context.max_tokens_across_dp = max_tokens_across_dp
 
-    if num_tokens is not None:
-        new_forward_context.padded_num_tokens = (
-            math.ceil(
-                max_tokens_across_dp / tp_world_size,
-            )
-            * tp_world_size
-        )
-        try:
-            cur_mc2_mask = cur_forward_context.mc2_mask
-        except AttributeError:
-            cur_mc2_mask = None
-        if cur_mc2_mask is not None:
-            import torch
-
-            mc2_mask = torch.zeros_like(cur_mc2_mask)
-            mc2_mask = mc2_mask[: new_forward_context.padded_num_tokens]
-            mc2_mask[:num_tokens] = True
-            mc2_mask[num_tokens:] = False
-            new_forward_context.mc2_mask = mc2_mask
+    new_forward_context.padded_num_tokens = (
+        math.ceil(max_tokens_across_dp / tp_world_size) * tp_world_size
+    )
+    cur_mc2_mask = getattr(cur_forward_context, "mc2_mask", None)
+    if cur_mc2_mask is not None:
+        mc2_mask = torch.zeros_like(cur_mc2_mask)
+        mc2_mask = mc2_mask[: new_forward_context.padded_num_tokens]
+        mc2_mask[:num_tokens] = True
+        mc2_mask[num_tokens:] = False
+        new_forward_context.mc2_mask = mc2_mask
 
     new_forward_context.dbo_enabled = True
     child_metadata = new_forward_context.additional_kwargs.get("afd_metadata")

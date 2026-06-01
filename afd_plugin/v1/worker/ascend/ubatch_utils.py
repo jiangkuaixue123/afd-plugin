@@ -7,38 +7,16 @@ These helpers mirror the Ascend DBO logic from vLLM-Ascend commit
 that commit is reverted from vLLM-Ascend.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
-
-if TYPE_CHECKING:
-    import numpy as np
-
-try:
-    from vllm.v1.worker.ubatch_utils import (  # type: ignore
-        UBatchSlice as _NativeUBatchSlice,
-    )
-except Exception:
-
-    @dataclass
-    class _NativeUBatchSlice:  # type: ignore[no-redef]
-        request_slice: slice
-        token_slice: slice
-
-        def is_empty(self) -> bool:
-            return (
-                self.request_slice.start == self.request_slice.stop
-                or self.token_slice.start == self.token_slice.stop
-            )
-
-        @property
-        def num_tokens(self) -> int:
-            return self.token_slice.stop - self.token_slice.start
-
-
-UBatchSlice = _NativeUBatchSlice
-UBatchSlices: TypeAlias = list[UBatchSlice]
+import numpy as np
+import torch
+from vllm.config import VllmConfig
+from vllm.v1.worker.ubatch_utils import (
+    UBatchSlice,
+    UBatchSlices,
+    check_ubatch_thresholds,
+)
+from vllm_ascend.ascend_forward_context import MoECommType
+from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 
 
 def is_last_ubatch_empty(
@@ -49,15 +27,23 @@ def is_last_ubatch_empty(
     return (padded_num_tokens // num_ubatches) * (num_ubatches - 1) >= orig_num_tokens
 
 
+def _cp_enabled(vllm_config: VllmConfig) -> bool:
+    parallel_config = vllm_config.parallel_config
+    return (
+        getattr(parallel_config, "prefill_context_parallel_size", 1) > 1
+        or getattr(parallel_config, "decode_context_parallel_size", 1) > 1
+    )
+
+
 def check_enable_ubatch(
     num_tokens_unpadded: int,
     num_tokens_padded: int,
     uniform_decode: bool,
-    vllm_config: Any,
-    moe_comm_type: Any | None,
+    vllm_config: VllmConfig,
+    moe_comm_type: MoECommType | None,
 ) -> bool:
     parallel_config = vllm_config.parallel_config
-    num_ubatches = parallel_config.num_ubatches
+    num_ubatches = getattr(parallel_config, "num_ubatches", 2)
     if num_ubatches != 2:
         return False
     if num_tokens_padded < num_ubatches:
@@ -65,15 +51,17 @@ def check_enable_ubatch(
 
     if _cp_enabled(vllm_config):
         return False
-    if not parallel_config.enable_dbo:
-        return False
-    if not _check_ubatch_thresholds(
+
+    should_attempt_ubatching = check_ubatch_thresholds(
         parallel_config,
         num_tokens_unpadded,
         uniform_decode=uniform_decode,
-    ):
+    )
+    if not getattr(parallel_config, "enable_dbo", False):
         return False
-    if _is_mc2_comm_type(moe_comm_type):
+    if not should_attempt_ubatching:
+        return False
+    if moe_comm_type in {MoECommType.MC2, MoECommType.FUSED_MC2}:
         return False
 
     return not is_last_ubatch_empty(
@@ -83,12 +71,23 @@ def check_enable_ubatch(
     )
 
 
+def pad_out_ubatch_slices(
+    ubatch_slices: UBatchSlices,
+    num_total_tokens: int,
+    num_reqs_padded: int,
+) -> UBatchSlices:
+    last_slice = ubatch_slices[-1]
+    padded_last_request_slice = slice(last_slice.request_slice.start, num_reqs_padded)
+    padded_last_token_slice = slice(last_slice.token_slice.start, num_total_tokens)
+    return ubatch_slices[:-1] + [
+        UBatchSlice(padded_last_request_slice, padded_last_token_slice)
+    ]
+
+
 def create_ubatch_slices(
     num_scheduled_tokens: np.ndarray,
     token_split_points: list[int],
 ) -> UBatchSlices:
-    import numpy as np
-
     cu_num_tokens = np.zeros(len(num_scheduled_tokens) + 1, dtype=np.int32)
     np.cumsum(num_scheduled_tokens, dtype=np.int32, out=cu_num_tokens[1:])
 
@@ -108,12 +107,12 @@ def maybe_create_ubatch_slices(
     num_scheduled_tokens_per_request: np.ndarray,
     num_tokens_padded: int,
     num_reqs_padded: int,
-    vllm_config: Any,
+    vllm_config: VllmConfig,
 ) -> tuple[UBatchSlices | None, UBatchSlices | None]:
     if not should_ubatch:
         return None, None
 
-    num_ubatches = vllm_config.parallel_config.num_ubatches
+    num_ubatches = getattr(vllm_config.parallel_config, "num_ubatches", 2)
     assert num_ubatches == 2, "Ascend ubatching currently supports exactly 2 ubatches."
 
     split_point = int(num_tokens_padded) // num_ubatches
@@ -122,7 +121,7 @@ def maybe_create_ubatch_slices(
         num_scheduled_tokens_per_request,
         token_split_points,
     )
-    ubatch_slices_padded = _pad_out_ubatch_slices(
+    ubatch_slices_padded = pad_out_ubatch_slices(
         ubatch_slices,
         num_tokens_padded,
         num_reqs_padded,
@@ -133,58 +132,22 @@ def maybe_create_ubatch_slices(
     return ubatch_slices, ubatch_slices_padded
 
 
-def pad_out_ubatch_slices(
-    ubatch_slices: UBatchSlices,
-    num_total_tokens: int,
-    num_reqs_padded: int,
-) -> UBatchSlices:
-    return _pad_out_ubatch_slices(
-        ubatch_slices,
-        num_total_tokens,
-        num_reqs_padded,
-    )
-
-
-def slice_query_start_locs(query_start_loc: Any, request_slice: slice) -> Any:
+def slice_query_start_locs(
+    query_start_loc: torch.Tensor,
+    request_slice: slice,
+) -> torch.Tensor:
     return (
         query_start_loc[request_slice.start : request_slice.stop + 1]
         - query_start_loc[request_slice.start]
     )
 
 
-def split_attn_metadata(
-    ubatch_slices: UBatchSlices,
-    common_attn_metadata: Any,
-    max_num_tokens: int = 0,
-) -> list[Any]:
-    return [
-        _make_metadata_with_slice(ubatch_slice, common_attn_metadata, max_num_tokens)
-        for ubatch_slice in ubatch_slices
-    ]
-
-
-def _pad_out_ubatch_slices(
-    ubatch_slices: UBatchSlices,
-    num_total_tokens: int,
-    num_reqs_padded: int,
-) -> UBatchSlices:
-    last_slice = ubatch_slices[-1]
-    padded_last_request_slice = slice(last_slice.request_slice.start, num_reqs_padded)
-    padded_last_token_slice = slice(last_slice.token_slice.start, num_total_tokens)
-    return ubatch_slices[:-1] + [
-        UBatchSlice(padded_last_request_slice, padded_last_token_slice),
-    ]
-
-
 def _make_metadata_with_slice(
     ubatch_slice: UBatchSlice,
-    attn_metadata: Any,
+    attn_metadata: AscendCommonAttentionMetadata,
     max_num_tokens: int = 0,
-) -> Any:
+) -> AscendCommonAttentionMetadata:
     assert not ubatch_slice.is_empty(), f"Ubatch slice {ubatch_slice} is empty"
-
-    import torch
-    from vllm_ascend.attention.utils import AscendCommonAttentionMetadata
 
     request_slice = ubatch_slice.request_slice
     token_slice = ubatch_slice.token_slice
@@ -242,7 +205,7 @@ def _make_metadata_with_slice(
     num_requests = request_slice.stop - request_slice.start
     num_actual_tokens = token_slice.stop - token_slice.start
     max_query_len = int(
-        torch.max(torch.abs(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1])).item(),
+        torch.max(torch.abs(query_start_loc_cpu[1:] - query_start_loc_cpu[:-1])).item()
     )
     if max_query_len == 0:
         max_query_len = attn_metadata.max_query_len
@@ -255,7 +218,7 @@ def _make_metadata_with_slice(
                     attn_metadata.decode_token_per_req,
                     max_num_tokens + 1,
                     attn_metadata.decode_token_per_req,
-                ),
+                )
             )
     else:
         actual_seq_lengths_q = []
@@ -298,36 +261,15 @@ def _make_metadata_with_slice(
     return metadata
 
 
-def _cp_enabled(vllm_config: Any) -> bool:
-    parallel_config = vllm_config.parallel_config
-    return (
-        parallel_config.prefill_context_parallel_size > 1
-        or parallel_config.decode_context_parallel_size > 1
-    )
-
-
-def _check_ubatch_thresholds(
-    parallel_config: Any,
-    num_tokens: int,
-    uniform_decode: bool,
-) -> bool:
-    try:
-        from vllm.v1.worker.ubatch_utils import check_ubatch_thresholds
-
-        return bool(
-            check_ubatch_thresholds(parallel_config, num_tokens, uniform_decode)
-        )
-    except Exception:
-        if not parallel_config.use_ubatching:
-            return False
-        if uniform_decode:
-            return num_tokens >= parallel_config.dbo_decode_token_threshold
-        return num_tokens >= parallel_config.dbo_prefill_token_threshold
-
-
-def _is_mc2_comm_type(moe_comm_type: Any | None) -> bool:
-    name = getattr(moe_comm_type, "name", None)
-    return name in {"MC2", "FUSED_MC2"}
+def split_attn_metadata(
+    ubatch_slices: UBatchSlices,
+    common_attn_metadata: AscendCommonAttentionMetadata,
+    max_num_tokens: int = 0,
+) -> list[AscendCommonAttentionMetadata]:
+    return [
+        _make_metadata_with_slice(ubatch_slice, common_attn_metadata, max_num_tokens)
+        for ubatch_slice in ubatch_slices
+    ]
 
 
 __all__ = [
