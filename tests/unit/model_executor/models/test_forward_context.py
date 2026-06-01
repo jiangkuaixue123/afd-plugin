@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from afd_plugin.model_executor.models import get_afd_metadata_from_forward_context
-from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 
 def test_get_afd_metadata_from_additional_kwargs():
@@ -16,6 +17,11 @@ def test_get_afd_metadata_from_additional_kwargs():
 
 
 def test_maybe_apply_dbo_yield_only_when_dbo_enabled():
+    pytest.importorskip("torch")
+    pytest.importorskip("vllm")
+
+    from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
+
     calls = []
     tensor = object()
     module = SimpleNamespace(

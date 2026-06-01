@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("vllm")
+
 from afd_plugin.connectors import AFDConnectorMetadata, AFDRecvOutput
 from afd_plugin.v1.worker.ffn_model_runner import (
     GPUFFNModelRunner,

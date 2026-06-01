@@ -46,7 +46,7 @@ def use_afd_metadata_provider(provider: Any) -> Iterator[None]:
 
     try:
         import vllm.forward_context as forward_context_module
-    except Exception:
+    except ImportError:
         yield
         return
 

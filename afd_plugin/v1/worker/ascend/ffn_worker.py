@@ -8,34 +8,27 @@ import logging
 import threading
 from typing import Any
 
+import torch
+from vllm_ascend.worker.worker import NPUWorker
+
 from afd_plugin.compat.ascend import (
     apply_afd_ascend_patches_if_needed,
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
 )
-from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
 from afd_plugin.validation import NPU_FFN_WORKER_FQCN, assert_compatible_afd_stack
 
-_NPUWorker, _NPUWorker_IMPORT_ERROR = optional_class(
-    "vllm_ascend.worker.worker",
-    "NPUWorker",
-)
 logger = logging.getLogger(__name__)
 
 
-class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
+class AFDNPUFFNWorker(NPUWorker):
     """FFN worker that owns a connector-driven NPU daemon loop."""
 
     afd_expected_role = "ffn"
-    vllm_base_import_error = _NPUWorker_IMPORT_ERROR
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if _NPUWorker_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDNPUFFNWorker requires an importable vLLM-Ascend runtime",
-            ) from _NPUWorker_IMPORT_ERROR
         ensure_ascend_runtime_available()
         apply_afd_ascend_patches_if_needed()
         super().__init__(*args, **kwargs)
@@ -155,16 +148,12 @@ class AFDNPUFFNWorker(_NPUWorker):  # type: ignore[misc, valid-type]
 def _set_npu_device_if_possible(device: object) -> None:
     if device.type != "npu":
         return
-    import torch
-
     torch.npu.set_device(device)
 
 
 def _synchronize_npu_if_possible(device: object) -> None:
     if device.type != "npu":
         return
-    import torch
-
     torch.npu.synchronize()
 
 

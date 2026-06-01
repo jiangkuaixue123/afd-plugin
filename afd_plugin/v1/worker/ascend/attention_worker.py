@@ -6,13 +6,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from vllm_ascend.worker.worker import NPUWorker
+
 from afd_plugin.compat.ascend import (
     apply_afd_ascend_patches_if_needed,
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
 )
-from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ascend.attention_model_runner import (
     AFDNPUAttentionModelRunner,
 )
@@ -21,23 +22,13 @@ from afd_plugin.validation import (
     assert_compatible_afd_stack,
 )
 
-_NPUWorker, _NPUWorker_IMPORT_ERROR = optional_class(
-    "vllm_ascend.worker.worker",
-    "NPUWorker",
-)
 
-
-class AFDNPUAttentionWorker(_NPUWorker):  # type: ignore[misc, valid-type]
+class AFDNPUAttentionWorker(NPUWorker):
     """Attention worker that creates an AFD-aware vLLM-Ascend runner."""
 
     afd_expected_role = "attention"
-    vllm_base_import_error = _NPUWorker_IMPORT_ERROR
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if _NPUWorker_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDNPUAttentionWorker requires an importable vLLM-Ascend runtime",
-            ) from _NPUWorker_IMPORT_ERROR
         ensure_ascend_runtime_available()
         apply_afd_ascend_patches_if_needed()
         super().__init__(*args, **kwargs)
