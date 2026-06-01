@@ -2,12 +2,27 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """NPU runtime classes loadable by explicit vLLM class paths."""
 
-from afd_plugin.v1.worker.ascend.attention_model_runner import (
-    AFDNPUAttentionModelRunner,
-)
-from afd_plugin.v1.worker.ascend.attention_worker import AFDNPUAttentionWorker
-from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
-from afd_plugin.v1.worker.ascend.ffn_worker import AFDNPUFFNWorker
+from importlib import import_module
+
+_RUNTIME_EXPORTS = {
+    "AFDNPUAttentionModelRunner": (
+        "afd_plugin.v1.worker.ascend.attention_model_runner"
+    ),
+    "AFDNPUAttentionWorker": "afd_plugin.v1.worker.ascend.attention_worker",
+    "AFDNPUFFNModelRunner": "afd_plugin.v1.worker.ascend.ffn_model_runner",
+    "AFDNPUFFNWorker": "afd_plugin.v1.worker.ascend.ffn_worker",
+}
+
+
+def __getattr__(name: str):
+    module_name = _RUNTIME_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(module_name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AFDNPUAttentionModelRunner",

@@ -40,7 +40,7 @@ def resolve_class_from_qualname(qualname: str, *, role: str = "class") -> type[A
         )
     module_name, obj_name = normalized.rsplit(".", 1)
     module = importlib.import_module(module_name)
-    obj = vars(module)[obj_name]
+    obj = getattr(module, obj_name)
     if not isinstance(obj, type):
         raise TypeError(
             f"{role} resolved to {type(obj).__name__}, expected a class",
@@ -94,21 +94,12 @@ def assert_compatible_afd_stack(
             f"{expected_worker}{_ctx()}",
         )
 
-    worker_cls = resolve_class_from_qualname(
-        worker_cls_raw,
-        role="parallel_config.worker_cls",
-    )
     expected_qualname = expected_worker_qualname_override or expected_worker_qualname(
         config.role
     )
-    expected_worker_cls = resolve_class_from_qualname(
-        expected_qualname,
-        role="expected AFD worker class",
-    )
-    if worker_cls is not expected_worker_cls:
-        worker_fqcn = normalize_qualname(
-            f"{worker_cls.__module__}.{worker_cls.__name__}",
-        )
+    worker_fqcn = normalize_qualname(worker_cls_raw.strip())
+    expected_fqcn = normalize_qualname(expected_qualname)
+    if worker_fqcn != expected_fqcn:
         raise ValueError(
             "invalid worker class for AFD runtime stack: "
             f"got={worker_fqcn!r} expected={expected_qualname!r}; "

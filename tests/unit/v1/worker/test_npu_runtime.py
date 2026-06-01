@@ -7,6 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("vllm")
+pytest.importorskip("vllm_ascend")
+
 from afd_plugin.compat.ascend import fail_if_unsupported_npu_afd_features
 from afd_plugin.connectors import (
     AFDConnectorMetadata,

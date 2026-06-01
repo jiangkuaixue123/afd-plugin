@@ -5,6 +5,9 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("vllm")
+
 from afd_plugin.config import AFDConfig
 from afd_plugin.model_executor.models.forward_context import (
     get_afd_metadata_from_forward_context,

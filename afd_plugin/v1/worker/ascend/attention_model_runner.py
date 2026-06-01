@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
+
+import torch
+from vllm.forward_context import get_forward_context
+from vllm.logger import init_logger
+from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
 
 from afd_plugin.compat.ascend import (
     ensure_vllm_config_has_afd_proxy,
@@ -14,7 +18,6 @@ from afd_plugin.compat.ascend import (
 )
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
-from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.attention_model_runner import (
     _forward_context_num_tokens,
     _full_cudagraph_padded_tokens,
@@ -22,31 +25,15 @@ from afd_plugin.v1.worker.attention_model_runner import (
     _with_dp_derived_afd_rank,
 )
 
-_NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
-    "vllm_ascend.worker.model_runner_v1",
-    "NPUModelRunner",
-)
-
-try:
-    from vllm.logger import init_logger
-except ImportError:
-    logger = logging.getLogger(__name__)
-else:
-    logger = init_logger(__name__)
+logger = init_logger(__name__)
 
 
-class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
+class AFDNPUAttentionModelRunner(NPUModelRunner):
     """NPU model runner that injects AFD metadata into Ascend forward context."""
 
     afd_expected_role = "attention"
-    vllm_base_import_error = _NPUModelRunner_IMPORT_ERROR
 
     def __init__(self, vllm_config: object, device: object) -> None:
-        if _NPUModelRunner_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDNPUAttentionModelRunner requires an importable vLLM-Ascend runtime",
-            ) from _NPUModelRunner_IMPORT_ERROR
-
         afd_config = self.parse_config(vllm_config)
         ensure_vllm_config_has_afd_proxy(vllm_config, afd_config)
         super().__init__(vllm_config, device)
@@ -74,8 +61,6 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         return parse_afd_config(vllm_config, expected_role="attention")
 
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
-        from vllm.forward_context import get_forward_context
-
         forward_context = get_forward_context()
         self._install_afd_metadata_on_forward_context(forward_context)
         return super()._model_forward(*args, **kwargs)
@@ -93,7 +78,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         self._afd_is_graph_capturing = bool(
             kwargs.get("is_graph_capturing", previous),
         )
-        logger.warning(
+        logger.debug(
             "AFD NPU Attention dummy_run; is_graph_capturing=%s args=%s",
             self._afd_is_graph_capturing,
             args[:1],
@@ -169,7 +154,7 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
         should_send = self.afd_connector.is_attn_top_min_size_rank(
             self.afd_connector.world_rank,
         )
-        logger.warning(
+        logger.debug(
             "AFD NPU Attention send_dp_metadata decision; world_rank=%d "
             "key=%s should_send=%s is_graph_capturing=%s is_warmup=%s",
             self.afd_connector.world_rank,
@@ -213,17 +198,12 @@ class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-t
 
 
 def _make_uniform_dp_metadata(dp_size: int, num_tokens: int) -> AFDDPMetadata:
-    try:
-        import torch
-    except ModuleNotFoundError:
-        num_tokens_across_dp_cpu = [int(num_tokens)] * int(dp_size)
-    else:
-        num_tokens_across_dp_cpu = torch.full(
-            (int(dp_size),),
-            int(num_tokens),
-            dtype=torch.int32,
-            device="cpu",
-        )
+    num_tokens_across_dp_cpu = torch.full(
+        (int(dp_size),),
+        int(num_tokens),
+        dtype=torch.int32,
+        device="cpu",
+    )
     return AFDDPMetadata(num_tokens_across_dp_cpu=num_tokens_across_dp_cpu)
 
 
