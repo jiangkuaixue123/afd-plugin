@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """AFD-owned vLLM ubatch wrapper.
 
-This runtime module depends on vLLM's native ubatching stack.
+This module stays import-safe without vLLM. Runtime imports are intentionally
+inside methods that only run after vLLM has loaded the native ubatching stack.
 """
 
 from __future__ import annotations
@@ -10,21 +11,25 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import Any
 
-import torch
-from vllm.config import CUDAGraphMode
-from vllm.forward_context import DPMetadata, create_forward_context, get_forward_context
-from vllm.model_executor.offloader.base import get_offloader
-from vllm.v1.worker.gpu_ubatch_wrapper import UbatchMetadata, UBatchWrapper
-from vllm.v1.worker.ubatching import make_ubatch_contexts
-
-from afd_plugin.config import parse_afd_config
 from afd_plugin.connectors import AFDDPMetadata, AFDMetadata
+from afd_plugin.v1.worker._optional import optional_class
+
+_UBatchWrapper, _UBatchWrapper_IMPORT_ERROR = optional_class(
+    "vllm.v1.worker.gpu_ubatch_wrapper",
+    "UBatchWrapper",
+)
 
 
-class AFDUBatchWrapper(UBatchWrapper):
+class AFDUBatchWrapper(_UBatchWrapper):  # type: ignore[misc, valid-type]
     """Thin AFD-aware subclass of vLLM's native ``UBatchWrapper``."""
 
+    vllm_base_import_error = _UBatchWrapper_IMPORT_ERROR
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if _UBatchWrapper_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "AFDUBatchWrapper requires an importable vLLM runtime",
+            ) from _UBatchWrapper_IMPORT_ERROR
         super().__init__(*args, **kwargs)
         self._afd_context_provider: Any | None = None
 
@@ -35,9 +40,12 @@ class AFDUBatchWrapper(UBatchWrapper):
     def _create_sm_control_context(vllm_config: object) -> object:
         if _is_afd_enabled(vllm_config):
             return nullcontext()
-        return UBatchWrapper._create_sm_control_context(vllm_config)
+        return _UBatchWrapper._create_sm_control_context(vllm_config)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        from vllm.config import CUDAGraphMode
+        from vllm.forward_context import get_forward_context
+
         forward_context = get_forward_context()
         ubatch_slices = forward_context.ubatch_slices
         if ubatch_slices is None:
@@ -79,6 +87,8 @@ class AFDUBatchWrapper(UBatchWrapper):
             num_tokens in self.cudagraphs
             and cudagraph_runtime_mode is CUDAGraphMode.FULL
         ):
+            from vllm.model_executor.offloader.base import get_offloader
+
             get_offloader().sync_prev_onload()
             cudagraph_metadata = self.cudagraphs[num_tokens]
             cudagraph_metadata.cudagraph.replay()
@@ -137,13 +147,17 @@ class AFDUBatchWrapper(UBatchWrapper):
         batch_descriptor: Any,
         cudagraph_runtime_mode: Any,
     ) -> list[Any]:
+        from vllm.forward_context import create_forward_context, get_forward_context
+        from vllm.v1.worker.gpu_ubatch_wrapper import UbatchMetadata
+        from vllm.v1.worker.ubatching import make_ubatch_contexts
+
         parent_forward_context = get_forward_context()
         parent_additional_kwargs = dict(parent_forward_context.additional_kwargs)
         afd_metadata = parent_additional_kwargs.get("afd_metadata")
         if afd_metadata is None:
             if getattr(self, "_afd_use_native_ubatch_metadata", False):
                 try:
-                    return UBatchWrapper._make_ubatch_metadata(
+                    return _UBatchWrapper._make_ubatch_metadata(
                         self,
                         ubatch_slices,
                         attn_metadata,
@@ -277,6 +291,9 @@ def build_ubatch_dp_metadata_list(
             for ubatch_slice in ubatch_slices
         ]
 
+    import torch
+    from vllm.forward_context import DPMetadata
+
     ubatch_dp_metadata = []
     for ubatch_slice in ubatch_slices:
         num_tokens_across_dp_cpu = torch.tensor(
@@ -306,15 +323,27 @@ def _resolve_ubatch_unpadded_tokens(
 
 
 def _cpu_int_tensor(values: list[int]) -> Any:
-    return torch.tensor(values, dtype=torch.int32, device="cpu")
+    try:
+        import torch
+
+        return torch.tensor(values, dtype=torch.int32, device="cpu")
+    except Exception:
+        return values
 
 
 def _current_cuda_stream() -> Any:
+    import torch
+
     return torch.cuda.current_stream()
 
 
 def _is_afd_enabled(vllm_config: object) -> bool:
-    return parse_afd_config(vllm_config).enabled
+    try:
+        from afd_plugin.config import parse_afd_config
+
+        return parse_afd_config(vllm_config).enabled
+    except Exception:
+        return False
 
 
 __all__ = [

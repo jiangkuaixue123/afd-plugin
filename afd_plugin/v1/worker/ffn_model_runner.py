@@ -7,22 +7,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
-import torch
-from vllm.compilation.monitor import set_cudagraph_capturing_enabled
-from vllm.config import CUDAGraphMode
-from vllm.config import update_config as update_vllm_config
-from vllm.distributed.parallel_state import get_world_group, graph_capture
-from vllm.forward_context import get_forward_context, set_forward_context
-from vllm.model_executor.model_loader import get_model_loader
-from vllm.utils.mem_utils import DeviceMemoryProfiler
-from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
-
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
     AFDConnectorMetadata,
     AFDRecvOutput,
 )
+from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.attention_model_runner import (
     _with_dp_derived_afd_rank,
     fail_if_unsupported_ubatching,
@@ -34,13 +25,24 @@ from afd_plugin.v1.worker.cuda_graph import (
     validate_cuda_graph_mode,
 )
 
+_LoRAModelRunnerMixin, _LoRAModelRunnerMixin_IMPORT_ERROR = optional_class(
+    "vllm.v1.worker.lora_model_runner_mixin",
+    "LoRAModelRunnerMixin",
+)
 
-class GPUFFNModelRunner(LoRAModelRunnerMixin):
+
+class GPUFFNModelRunner(_LoRAModelRunnerMixin):  # type: ignore[misc, valid-type]
     """Minimal FFN model runner for connector-driven Phase 3 execution."""
 
     afd_expected_role = "ffn"
+    vllm_base_import_error = _LoRAModelRunnerMixin_IMPORT_ERROR
 
     def __init__(self, vllm_config: object, device: object) -> None:
+        if _LoRAModelRunnerMixin_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "GPUFFNModelRunner requires an importable vLLM runtime",
+            ) from _LoRAModelRunnerMixin_IMPORT_ERROR
+
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
         self.load_config = vllm_config.load_config
@@ -83,10 +85,12 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
         self.connector.init_afd_connector()
 
     def load_model(self, *, load_dummy_weights: bool = False, **kwargs: Any) -> None:
-        """Load the vLLM model."""
+        """Load the vLLM model lazily, without importing vLLM at module import."""
 
         del load_dummy_weights
         del kwargs
+        from vllm.model_executor.model_loader import get_model_loader
+        from vllm.utils.mem_utils import DeviceMemoryProfiler
 
         model_loader = get_model_loader(self.load_config)
         with DeviceMemoryProfiler() as profiler:
@@ -215,7 +219,12 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
     def update_config(self, overrides: dict[str, Any]) -> None:
         for config_name, config_overrides in overrides.items():
             config = getattr(self, config_name)
-            updated_config = update_vllm_config(config, config_overrides)
+            try:
+                from vllm.config import update_config
+
+                updated_config = update_config(config, config_overrides)
+            except Exception:
+                updated_config = config_overrides
             setattr(self, config_name, updated_config)
 
     def reload_weights(self) -> None:
@@ -234,6 +243,8 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
             mode_name = "FULL"
 
         if mode_name == "FULL":
+            import torch
+
             if self._graph_memory_pool is None:
                 self._graph_memory_pool = torch.cuda.graph_pool_handle()
             graph_key = self._make_graph_key(dp_metadata_list)
@@ -271,6 +282,11 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
             return 0
         if dp_metadata_list is None:
             raise RuntimeError("GPUFFNModelRunner.capture_model requires metadata")
+
+        import torch
+        from vllm.compilation.monitor import set_cudagraph_capturing_enabled
+        from vllm.config import CUDAGraphMode
+        from vllm.distributed.parallel_state import graph_capture
 
         start_free_gpu_memory = torch.cuda.mem_get_info()[0]
         if self._graph_memory_pool is None:
@@ -354,12 +370,23 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
 
 
 def _resolve_world_ranks() -> tuple[int, int]:
-    group = get_world_group()
-    return int(group.rank), int(group.local_rank)
+    try:
+        from vllm.distributed.parallel_state import get_world_group
+
+        group = get_world_group()
+        return int(group.rank), int(group.local_rank)
+    except Exception:
+        return 0, 0
 
 
 @contextmanager
 def _ffn_forward_context(vllm_config: object):
+    try:
+        from vllm.forward_context import get_forward_context, set_forward_context
+    except Exception:
+        yield None
+        return
+
     with set_forward_context(attn_metadata=None, vllm_config=vllm_config):
         yield get_forward_context()
 
