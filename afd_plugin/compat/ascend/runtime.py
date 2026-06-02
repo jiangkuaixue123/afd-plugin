@@ -227,8 +227,6 @@ def _restore_afd_dbo_config(vllm_config: object, saved: dict[str, Any]) -> None:
     ):
         return
     parallel_config.enable_dbo = saved["enable_dbo"]
-    parallel_config.use_ubatching = saved["use_ubatching"]
-    parallel_config.num_ubatches = saved["num_ubatches"]
     parallel_config.ubatch_size = saved["ubatch_size"]
 
 
