@@ -16,6 +16,7 @@ from afd_plugin.compat.ascend import (
 from afd_plugin.compat.ascend import runtime as ascend_runtime
 from afd_plugin.connectors import (
     AFDConnectorMetadata,
+    AFDMetadata,
     AFDRecvOutput,
 )
 
@@ -358,6 +359,87 @@ def test_npu_attention_metadata_positional_args_and_padded_slices():
     assert normalized[-1].token_slice == slice(4, 8)
 
 
+def test_npu_create_ascend_forward_context_marks_current_ubatch(monkeypatch):
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend import forward_context as forward_context_module
+
+    monkeypatch.setattr(
+        forward_context_module,
+        "get_tensor_model_parallel_world_size",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        forward_context_module,
+        "get_dp_group",
+        lambda: SimpleNamespace(world_size=1),
+    )
+    monkeypatch.setattr(
+        forward_context_module,
+        "get_moe_comm_method",
+        lambda moe_comm_type: f"method:{moe_comm_type}",
+    )
+    afd_metadata = AFDMetadata(
+        afd_tokens_start_loc=[0, 4],
+        afd_reqs_start_loc=[0, 1],
+        afd_stage_idx=0,
+        afd_connector=object(),
+        afd_tokens_lens=[4, 3],
+        num_of_stages=2,
+        afd_tokens_unpadded_lens=[4, 3],
+    )
+    cur_forward_context = SimpleNamespace(
+        additional_kwargs={"afd_metadata": afd_metadata},
+        all_moe_layers={},
+        moe_comm_type="mc2",
+        in_profile_run=False,
+        capturing=False,
+        mmrs_fusion=False,
+        flash_comm_v1_enabled=False,
+        flashcomm_v2_enabled=False,
+        is_first_layer=True,
+        layer_idx=0,
+        prefetch_mlp_gate_up_proj=False,
+        prefetch_mlp_down_proj=False,
+        model_instance=None,
+        is_draft_model=False,
+        is_draft_model_prefill=False,
+        draft_attn_metadatas=None,
+        max_tokens_across_pcp=None,
+        mc2_mask=None,
+    )
+    ubatch_slices = [
+        SimpleNamespace(
+            request_slice=slice(0, 1),
+            token_slice=slice(0, 4),
+            num_tokens=4,
+        ),
+        SimpleNamespace(
+            request_slice=slice(1, 2),
+            token_slice=slice(4, 7),
+            num_tokens=3,
+        ),
+    ]
+    vllm_config = SimpleNamespace(
+        compilation_config=SimpleNamespace(static_forward_context={}),
+    )
+
+    new_forward_context = forward_context_module.create_ascend_forward_context(
+        cur_forward_context,
+        attn_metadata=None,
+        vllm_config=vllm_config,
+        ubatch_slices=ubatch_slices,
+        ubatch_num=1,
+    )
+
+    child_metadata = new_forward_context.additional_kwargs["afd_metadata"]
+    assert new_forward_context.ubatch_idx == 1
+    assert new_forward_context.num_ubatches == 2
+    assert new_forward_context.num_tokens == 3
+    assert child_metadata.ubatch_idx == 1
+    assert child_metadata.afd_stage_idx == 1
+    assert new_forward_context.afd_metadata is child_metadata
+
+
 def test_npu_ffn_runner_executes_eager_ffn_step():
     runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
@@ -455,8 +537,13 @@ def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
     runner.max_num_tokens = 1
     runner.use_aclgraph = True
     runner._acl_graphs = {}
-    runner._graph_capture_context = lambda: nullcontext()
-    runner._set_cudagraph_capturing_enabled = lambda enabled: None
+    capture_flags = []
+
+    def fail_graph_capture_context():
+        raise AssertionError("warmup must not enter graph_capture context")
+
+    runner._graph_capture_context = fail_graph_capture_context
+    runner._set_cudagraph_capturing_enabled = capture_flags.append
     runner._npu_free_memory = lambda: 0
     metadata = AFDConnectorMetadata.create_attention_metadata(
         layer_idx=0,
@@ -471,6 +558,7 @@ def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
     )
 
     assert runner._acl_graphs == {}
+    assert capture_flags == [True, False]
     assert runner.connector.ffn_outputs == [
         ("npu-ffn(hidden, layer=0)", metadata, {"ubatch_idx": 0}),
     ]

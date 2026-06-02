@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from afd_plugin.config import AFDConfig
-from afd_plugin.connectors import AFDConnectorFactory, AFDRecvOutput
+from afd_plugin.connectors import (
+    AFDConnectorFactory,
+    AFDConnectorMetadata,
+    AFDRecvOutput,
+)
+from afd_plugin.connectors.ascend import camp2p as camp2p_module
 from afd_plugin.connectors.ascend.camp2p import (
     CAMP2PAFDConnector,
     CAMP2PAFDConnectorMetadata,
@@ -18,9 +24,13 @@ class _FakeDPMetadata:
         self.num_tokens_across_dp_cpu = values
 
 
-def _vllm_config():
+def _vllm_config(*, num_ubatches: int = 1):
     return SimpleNamespace(
-        parallel_config=SimpleNamespace(data_parallel_size=1, data_parallel_rank=0),
+        parallel_config=SimpleNamespace(
+            data_parallel_size=1,
+            data_parallel_rank=0,
+            num_ubatches=num_ubatches,
+        ),
         scheduler_config=SimpleNamespace(max_num_seqs=8),
         model_config=SimpleNamespace(
             hf_config=SimpleNamespace(
@@ -141,6 +151,94 @@ def test_camp2p_update_metadata_keeps_original_handle_shape():
         "counts",
         "atten",
     ]
+
+
+def test_camp2p_init_creates_one_hccl_group_per_ubatch(monkeypatch):
+    calls = []
+
+    monkeypatch.setitem(sys.modules, "torch_npu", ModuleType("torch_npu"))
+    monkeypatch.setattr(camp2p_module, "ensure_afd_ascend_ops_loaded", lambda: None)
+    monkeypatch.setattr(camp2p_module, "_register_camp2p_custom_ops", lambda: None)
+
+    def fake_init_afd_process_group(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(group_name=kwargs["group_name"])
+
+    monkeypatch.setattr(
+        camp2p_module,
+        "init_afd_process_group",
+        fake_init_afd_process_group,
+    )
+    monkeypatch.setattr(
+        camp2p_module,
+        "_hccl_comm_name",
+        lambda group, rank: f"hccl:{group.group_name}:{rank}",
+    )
+    connector = CAMP2PAFDConnector(
+        0,
+        0,
+        _vllm_config(num_ubatches=2),
+        _afd_config(role="attention", rank=0),
+    )
+
+    connector.init_afd_connector()
+
+    assert [call["group_name"] for call in calls[:2]] == ["afd", "afd1"]
+    assert connector.hccl_comm_name_list == ["hccl:afd:2", "hccl:afd1:2"]
+    assert connector.hccl_comm_name == "hccl:afd:2"
+    assert connector.hccl_comm_name2 == "hccl:afd1:2"
+    assert connector._group_ep(0) == "hccl:afd:2"
+    assert connector._group_ep(1) == "hccl:afd1:2"
+
+
+def test_camp2p_send_attn_custom_op_receives_all_hccl_names(monkeypatch):
+    torch = pytest.importorskip("torch")
+    captured = {}
+    connector = CAMP2PAFDConnector(
+        0,
+        0,
+        _vllm_config(num_ubatches=2),
+        _afd_config(role="attention", rank=0),
+    )
+    connector._initialized = True
+    connector.hccl_comm_name = "hccl0"
+    connector.hccl_comm_name2 = "hccl1"
+    connector.hccl_comm_name3 = ""
+    hidden_states = torch.empty((3, 16))
+    metadata = AFDConnectorMetadata.create_attention_metadata(
+        layer_idx=0,
+        stage_idx=1,
+        seq_len=3,
+    )
+
+    def fake_set_forward_context_connector_data(data, *, ubatch_idx=None):
+        captured["connector_data"] = data
+        captured["ubatch_idx"] = ubatch_idx
+
+    def fake_send_attn_output(*args):
+        captured["args"] = args
+        return args[0]
+
+    monkeypatch.setattr(
+        camp2p_module,
+        "_set_forward_context_connector_data",
+        fake_set_forward_context_connector_data,
+    )
+    monkeypatch.setattr(
+        torch.ops.vllm,
+        "afd_camp2p_send_attn_output",
+        fake_send_attn_output,
+        raising=False,
+    )
+
+    output, handle = connector.send_attn_output(hidden_states, metadata)
+
+    assert output is hidden_states
+    assert handle is None
+    assert captured["ubatch_idx"] == 1
+    assert captured["args"][3:6] == ("hccl0", "hccl1", "")
+    assert captured["args"][6] == 3
+    assert captured["connector_data"].batch_size == 3
 
 
 def test_camp2p_init_fails_cleanly_without_ascend_runtime():
