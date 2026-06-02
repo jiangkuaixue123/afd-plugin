@@ -8,6 +8,15 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
+import torch
+import vllm.v1.worker.gpu_model_runner as gpu_model_runner
+from vllm.config import CUDAGraphMode
+from vllm.distributed.parallel_state import get_world_group
+from vllm.forward_context import DPMetadata, get_forward_context
+from vllm.v1.worker.gpu_model_runner import GPUModelRunner
+from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
+from vllm.v1.worker.ubatch_utils import check_ubatch_thresholds
+
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
@@ -15,31 +24,19 @@ from afd_plugin.connectors import (
     AFDMetadata,
 )
 from afd_plugin.model_executor.models.forward_context import use_afd_metadata_provider
-from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.cuda_graph import validate_cuda_graph_mode
 from afd_plugin.v1.worker.ubatch_wrapper import (
     AFDUBatchWrapper,
     build_ubatch_dp_metadata_list,
 )
 
-_GPUModelRunner, _GPUModelRunner_IMPORT_ERROR = optional_class(
-    "vllm.v1.worker.gpu_model_runner",
-    "GPUModelRunner",
-)
 
-
-class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type]
+class AFDAttentionModelRunner(GPUModelRunner):
     """Attention model runner that injects AFD metadata into forward context."""
 
     afd_expected_role = "attention"
-    vllm_base_import_error = _GPUModelRunner_IMPORT_ERROR
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if _GPUModelRunner_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDAttentionModelRunner requires an importable vLLM runtime",
-            ) from _GPUModelRunner_IMPORT_ERROR
-
         super().__init__(*args, **kwargs)
         self.afd_config = self.parse_config(self.vllm_config)
         if not self.afd_config.enabled:
@@ -143,15 +140,13 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
             self.model.configure_afd_context_provider(self)
             return
 
-        runtime_mode = _resolve_cudagraph_mode_none()
-        native_wrapper_cls = _resolve_native_ubatch_wrapper()
         model = self.model
-        if native_wrapper_cls is not None and isinstance(model, native_wrapper_cls):
+        if isinstance(model, UBatchWrapper):
             model = model.unwrap()
         self.model = AFDUBatchWrapper(
             model,
             self.vllm_config,
-            runtime_mode,
+            CUDAGraphMode.NONE,
             self.device,
         )
         self.model.configure_afd_context_provider(self)
@@ -169,8 +164,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         if len(self._afd_pending_metadata.afd_tokens_lens) != 1:
             raise RuntimeError("AFD DP=1 fallback only supports one stage")
 
-        import torch
-
         num_tokens = int(self._afd_pending_metadata.afd_tokens_lens[0])
         num_tokens_across_dp_cpu = torch.tensor(
             [num_tokens],
@@ -184,30 +177,19 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
 
     def _build_capture_dp_metadata(self, num_tokens: int) -> Any:
         dp_size = int(self.vllm_config.parallel_config.data_parallel_size)
-        try:
-            import torch
-
-            num_tokens_across_dp_cpu = torch.full(
-                (dp_size,),
+        num_tokens_across_dp_cpu = torch.full(
+            (dp_size,),
+            int(num_tokens),
+            dtype=torch.int32,
+            device="cpu",
+        )
+        if dp_size > 1:
+            return DPMetadata.make(
+                self.vllm_config.parallel_config,
                 int(num_tokens),
-                dtype=torch.int32,
-                device="cpu",
+                num_tokens_across_dp_cpu,
             )
-            if dp_size > 1:
-                try:
-                    from vllm.forward_context import DPMetadata
-
-                    return DPMetadata.make(
-                        self.vllm_config.parallel_config,
-                        int(num_tokens),
-                        num_tokens_across_dp_cpu,
-                    )
-                except Exception:
-                    pass
-            max_tokens_across_dp_cpu = torch.max(num_tokens_across_dp_cpu)
-        except ModuleNotFoundError:
-            num_tokens_across_dp_cpu = [int(num_tokens)] * dp_size
-            max_tokens_across_dp_cpu = max(num_tokens_across_dp_cpu)
+        max_tokens_across_dp_cpu = torch.max(num_tokens_across_dp_cpu)
         return AFDDPMetadata(
             num_tokens_across_dp_cpu=num_tokens_across_dp_cpu,
             max_tokens_across_dp_cpu=max_tokens_across_dp_cpu,
@@ -317,8 +299,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         )
 
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
-        from vllm.forward_context import get_forward_context
-
         forward_context = get_forward_context()
         self._install_afd_metadata_on_forward_context(forward_context)
         return super()._model_forward(*args, **kwargs)
@@ -358,11 +338,6 @@ class AFDAttentionModelRunner(_GPUModelRunner):  # type: ignore[misc, valid-type
         around the warmup calls so FFN ranks can distinguish warmup metadata
         from graph-capture metadata.
         """
-
-        try:
-            from vllm.config import CUDAGraphMode
-        except Exception:
-            return super()._warmup_and_capture(*args, **kwargs)
 
         names = [
             "desc",
@@ -471,13 +446,8 @@ def fail_if_cuda_graph_enabled(vllm_config: object) -> None:
 
 
 def _resolve_world_ranks() -> tuple[int, int]:
-    try:
-        from vllm.distributed.parallel_state import get_world_group
-
-        group = get_world_group()
-        return int(group.rank), int(group.local_rank)
-    except Exception:
-        return 0, 0
+    group = get_world_group()
+    return int(group.rank), int(group.local_rank)
 
 
 def _is_ubatch_child_afd_context(
@@ -519,43 +489,12 @@ def _is_ubatching_enabled(vllm_config: object) -> bool:
     return bool(vllm_config.parallel_config.use_ubatching)
 
 
-def _resolve_native_ubatch_wrapper() -> type[Any] | None:
-    try:
-        from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
-
-        return UBatchWrapper
-    except Exception:
-        return None
-
-
-def _resolve_cudagraph_mode_none() -> Any:
-    try:
-        from vllm.config import CUDAGraphMode
-
-        return CUDAGraphMode.NONE
-    except Exception:
-        return None
-
-
 def _check_ubatch_thresholds(
     parallel_config: object,
     num_tokens: int,
     uniform_decode: bool,
 ) -> bool:
-    try:
-        from vllm.v1.worker.ubatch_utils import check_ubatch_thresholds
-
-        return bool(
-            check_ubatch_thresholds(parallel_config, num_tokens, uniform_decode),
-        )
-    except Exception:
-        if not bool(parallel_config.use_ubatching):
-            return False
-        if uniform_decode:
-            threshold = int(parallel_config.dbo_decode_token_threshold)
-        else:
-            threshold = int(parallel_config.dbo_prefill_token_threshold)
-        return num_tokens >= threshold
+    return bool(check_ubatch_thresholds(parallel_config, num_tokens, uniform_decode))
 
 
 def _batch_execution_values(
@@ -613,21 +552,13 @@ def _use_afd_ubatch_wrapper_during_load(enabled: bool):
     if not enabled:
         yield
         return
-    try:
-        import vllm.v1.worker.gpu_model_runner as gpu_model_runner
-    except Exception:
-        yield
-        return
 
-    original = getattr(gpu_model_runner, "UBatchWrapper", None)
+    original = gpu_model_runner.UBatchWrapper
     gpu_model_runner.UBatchWrapper = AFDUBatchWrapper
     try:
         yield
     finally:
-        if original is None:
-            delattr(gpu_model_runner, "UBatchWrapper")
-        else:
-            gpu_model_runner.UBatchWrapper = original
+        gpu_model_runner.UBatchWrapper = original
 
 
 __all__ = [

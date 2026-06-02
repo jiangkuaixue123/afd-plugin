@@ -8,19 +8,17 @@ import logging
 import threading
 from typing import Any
 
-from afd_plugin.v1.worker._optional import optional_class
+import torch
+from vllm.v1.worker.gpu_worker import Worker
+
 from afd_plugin.v1.worker.attention_model_runner import fail_if_unsupported_ubatching
 from afd_plugin.v1.worker.ffn_model_runner import GPUFFNModelRunner
 from afd_plugin.validation import assert_compatible_afd_stack
 
-_GPUWorker, _GPUWorker_IMPORT_ERROR = optional_class(
-    "vllm.v1.worker.gpu_worker",
-    "Worker",
-)
 logger = logging.getLogger(__name__)
 
 
-class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
+class AFDFFNWorker(Worker):
     """FFN worker that owns the AFD daemon loop.
 
     The FFN side enters through native ``vllm serve --worker-cls``. The native
@@ -29,13 +27,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
     """
 
     afd_expected_role = "ffn"
-    vllm_base_import_error = _GPUWorker_IMPORT_ERROR
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if _GPUWorker_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDFFNWorker requires an importable vLLM runtime",
-            ) from _GPUWorker_IMPORT_ERROR
         super().__init__(*args, **kwargs)
         self._ffn_thread: threading.Thread | None = None
         self._ffn_shutdown_event: threading.Event | None = None
@@ -62,12 +55,7 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         self.model_runner = GPUFFNModelRunner(self.vllm_config, self.device)
         del native_model_runner
 
-        try:
-            import torch
-
-            torch.accelerator.empty_cache()
-        except Exception:
-            pass
+        torch.accelerator.empty_cache()
 
     def get_kv_cache_spec(self) -> dict[str, Any]:
         """FFN workers do not allocate KV cache in the Phase 3 MVP."""
@@ -128,13 +116,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         if event is None:
             return
 
-        try:
-            import torch
-
-            if self.device.type == "cuda":
-                torch.cuda.set_device(self.device)
-        except Exception:
-            pass
+        if self.device.type == "cuda":
+            torch.cuda.set_device(self.device)
 
         while not event.is_set():
             try:
@@ -161,13 +144,8 @@ class AFDFFNWorker(_GPUWorker):  # type: ignore[misc, valid-type]
                     is_warmup=is_warmup,
                 )
 
-            try:
-                import torch
-
-                if self.device.type == "cuda":
-                    torch.cuda.synchronize()
-            except Exception:
-                pass
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
 
     def raise_ffn_loop_error_if_any(self) -> None:
         error = self._ffn_loop_error

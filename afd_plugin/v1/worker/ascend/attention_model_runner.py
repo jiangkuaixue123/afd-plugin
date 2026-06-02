@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
-import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
+
+from vllm.logger import init_logger
+from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
 
 from afd_plugin.compat.ascend import (
     ensure_vllm_config_has_afd_proxy,
@@ -18,7 +20,6 @@ from afd_plugin.compat.ascend import (
 )
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
-from afd_plugin.v1.worker._optional import optional_class
 from afd_plugin.v1.worker.ascend.ubatch_utils import (
     check_enable_ubatch,
     pad_out_ubatch_slices,
@@ -31,31 +32,15 @@ from afd_plugin.v1.worker.attention_model_runner import (
 )
 from afd_plugin.v1.worker.ubatch_wrapper import build_ubatch_dp_metadata_list
 
-_NPUModelRunner, _NPUModelRunner_IMPORT_ERROR = optional_class(
-    "vllm_ascend.worker.model_runner_v1",
-    "NPUModelRunner",
-)
-
-try:
-    from vllm.logger import init_logger
-except ImportError:
-    logger = logging.getLogger(__name__)
-else:
-    logger = init_logger(__name__)
+logger = init_logger(__name__)
 
 
-class AFDNPUAttentionModelRunner(_NPUModelRunner):  # type: ignore[misc, valid-type]
+class AFDNPUAttentionModelRunner(NPUModelRunner):
     """NPU model runner that injects AFD metadata into Ascend forward context."""
 
     afd_expected_role = "attention"
-    vllm_base_import_error = _NPUModelRunner_IMPORT_ERROR
 
     def __init__(self, vllm_config: object, device: object) -> None:
-        if _NPUModelRunner_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDNPUAttentionModelRunner requires an importable vLLM-Ascend runtime",
-            ) from _NPUModelRunner_IMPORT_ERROR
-
         afd_config = self.parse_config(vllm_config)
         ensure_vllm_config_has_afd_proxy(vllm_config, afd_config)
         super().__init__(vllm_config, device)

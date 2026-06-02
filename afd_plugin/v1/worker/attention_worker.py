@@ -6,30 +6,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from afd_plugin.v1.worker._optional import optional_class
+import torch
+from vllm.v1.worker.gpu_worker import Worker
+
 from afd_plugin.v1.worker.attention_model_runner import (
     AFDAttentionModelRunner,
     fail_if_unsupported_ubatching,
 )
 from afd_plugin.validation import assert_compatible_afd_stack
 
-_GPUWorker, _GPUWorker_IMPORT_ERROR = optional_class(
-    "vllm.v1.worker.gpu_worker",
-    "Worker",
-)
 
-
-class AFDAttentionWorker(_GPUWorker):  # type: ignore[misc, valid-type]
+class AFDAttentionWorker(Worker):
     """Attention worker that injects :class:`AFDAttentionModelRunner`."""
 
     afd_expected_role = "attention"
-    vllm_base_import_error = _GPUWorker_IMPORT_ERROR
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if _GPUWorker_IMPORT_ERROR is not None:
-            raise RuntimeError(
-                "AFDAttentionWorker requires an importable vLLM runtime",
-            ) from _GPUWorker_IMPORT_ERROR
         super().__init__(*args, **kwargs)
 
     def init_device(self) -> None:
@@ -53,12 +45,7 @@ class AFDAttentionWorker(_GPUWorker):  # type: ignore[misc, valid-type]
         self.model_runner = AFDAttentionModelRunner(self.vllm_config, self.device)
         del native_model_runner
 
-        try:
-            import torch
-
-            torch.accelerator.empty_cache()
-        except Exception:
-            pass
+        torch.accelerator.empty_cache()
 
 
 __all__ = ["AFDAttentionWorker"]
