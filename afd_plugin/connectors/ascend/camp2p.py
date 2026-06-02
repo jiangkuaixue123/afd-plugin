@@ -169,15 +169,9 @@ class CAMP2PAFDConnector(AFDConnectorBase):
         self.afd_pg = self.afd_pg_list[0]
         self.hccl_comm_name = self.hccl_comm_name_list[0]
         self.hccl_comm_name2 = (
-            self.hccl_comm_name_list[1]
-            if num_ubatches > 1
-            else self.hccl_comm_name
+            self.hccl_comm_name_list[1] if num_ubatches > 1 else self.hccl_comm_name
         )
-        self.hccl_comm_name3 = (
-            self.hccl_comm_name_list[2]
-            if num_ubatches > 2
-            else ""
-        )
+        self.hccl_comm_name3 = self.hccl_comm_name_list[2] if num_ubatches > 2 else ""
 
         if self.afd_config.role == "ffn":
             self.ffn_pg = init_afd_process_group(
@@ -332,7 +326,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
             raise ValueError(
                 f"hidden_states shape {hidden_states.shape!r} does not match "
                 f"CAMP2P metadata token count {metadata.total_tokens}",
-        )
+            )
         connector_data = self._metadata_data_or_default(metadata, hidden_states)
         topk_ids = kwargs.get("topk_ids")
         topk_weights = kwargs.get("topk_weights")
