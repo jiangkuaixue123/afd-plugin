@@ -66,6 +66,8 @@ def create_ascend_forward_context(
     new_forward_context.capturing = cur_forward_context.capturing
     new_forward_context.mmrs_fusion = cur_forward_context.mmrs_fusion
     new_forward_context.num_tokens = num_tokens
+    new_forward_context.ubatch_idx = int(ubatch_num)
+    new_forward_context.num_ubatches = len(ubatch_slices)
     new_forward_context.flash_comm_v1_enabled = (
         cur_forward_context.flash_comm_v1_enabled
     )

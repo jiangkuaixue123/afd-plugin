@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,3 +51,53 @@ def test_maybe_apply_dbo_yield_does_not_probe_ascend(monkeypatch):
     )
 
     assert maybe_apply_dbo_yield(tensor, role="attention") is tensor
+
+
+def test_dbo_yield_prefers_plugin_ascend_context(monkeypatch):
+    calls = []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "afd_plugin.v1.worker.ascend.ubatching",
+        SimpleNamespace(
+            dbo_enabled=lambda: True,
+            dbo_yield=lambda: calls.append("ascend"),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.v1.worker.ubatching",
+        SimpleNamespace(
+            dbo_enabled=lambda: True,
+            dbo_yield=lambda: calls.append("vllm"),
+        ),
+    )
+
+    dbo._yield_if_dbo_enabled()
+
+    assert calls == ["ascend"]
+
+
+def test_dbo_yield_falls_back_to_vllm_context(monkeypatch):
+    calls = []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "afd_plugin.v1.worker.ascend.ubatching",
+        SimpleNamespace(
+            dbo_enabled=lambda: False,
+            dbo_yield=lambda: calls.append("ascend"),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.v1.worker.ubatching",
+        SimpleNamespace(
+            dbo_enabled=lambda: True,
+            dbo_yield=lambda: calls.append("vllm"),
+        ),
+    )
+
+    dbo._yield_if_dbo_enabled()
+
+    assert calls == ["vllm"]
