@@ -19,6 +19,10 @@ from afd_plugin.compat.ascend import (
     fail_if_unsupported_npu_afd_features,
     mirror_afd_metadata_on_forward_context,
 )
+from afd_plugin.compat.ascend.profiler import (
+    create_afd_npu_profiler,
+    step_afd_npu_profiler,
+)
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
@@ -70,6 +74,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
         self._acl_graphs: dict[tuple, dict[str, Any]] = {}
         self.graph_pool = _resolve_graph_pool() if self.use_aclgraph else None
+        self.prof = create_afd_npu_profiler("ffn")
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -124,6 +129,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         is_warmup: bool = False,
     ) -> None:
         del scheduler_output, intermediate_tensors
+        step_afd_npu_profiler(self.prof)
         if dp_metadata_list is None:
             raise RuntimeError("AFD NPU FFN is connector-driven")
         graph_key = self._make_graph_key(dp_metadata_list)
