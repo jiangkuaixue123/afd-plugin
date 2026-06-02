@@ -22,6 +22,12 @@ def test_deepseek_afd_model_registration_paths_are_lazy_strings():
     assert registrations["DeepseekV2ForCausalLM"] == (
         "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV2ForCausalLM"
     )
+    assert registrations["DeepseekV3ForCausalLM"] == (
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
+    )
+    assert registrations["DeepseekV32ForCausalLM"] == (
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
+    )
 
 
 def test_entry_point_is_registered():
