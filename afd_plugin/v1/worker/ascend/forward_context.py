@@ -119,8 +119,11 @@ def create_ascend_forward_context(
     )
     cur_mc2_mask = getattr(cur_forward_context, "mc2_mask", None)
     if cur_mc2_mask is not None:
-        mc2_mask = torch.zeros_like(cur_mc2_mask)
-        mc2_mask = mc2_mask[: new_forward_context.padded_num_tokens]
+        mc2_mask = torch.zeros(
+            (new_forward_context.padded_num_tokens,),
+            dtype=cur_mc2_mask.dtype,
+            device=cur_mc2_mask.device,
+        )
         mc2_mask[:num_tokens] = True
         mc2_mask[num_tokens:] = False
         new_forward_context.mc2_mask = mc2_mask

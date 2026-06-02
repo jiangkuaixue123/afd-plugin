@@ -54,4 +54,4 @@ def test_maybe_apply_dbo_yield_uses_custom_op_while_compiling(monkeypatch):
         maybe_apply_dbo_yield(tensor, role="attention", ubatching_module=disabled)
         is tensor
     )
-    assert calls == ["yield"]
+    assert calls == ["register"]
