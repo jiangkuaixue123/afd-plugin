@@ -18,6 +18,11 @@ from afd_plugin.compat.ascend import (
     fail_if_unsupported_npu_afd_features,
     mirror_afd_metadata_on_forward_context,
 )
+from afd_plugin.compat.ascend.profiler import (
+    create_afd_npu_profiler,
+    step_afd_npu_profiler,
+    stop_afd_npu_profiler,
+)
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
 from afd_plugin.v1.worker.ascend.ubatch_utils import (
@@ -64,10 +69,15 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self._afd_suppress_metadata_send = False
         self._afd_transaction_counter = 0
         self.ubatch_slices = None
+        self.prof = create_afd_npu_profiler("attention")
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
         return parse_afd_config(vllm_config, expected_role="attention")
+
+    def execute_model(self, *args: Any, **kwargs: Any) -> Any:
+        step_afd_npu_profiler(self.prof)
+        return super().execute_model(*args, **kwargs)
 
     def _model_forward(self, *args: Any, **kwargs: Any) -> Any:
         from vllm.forward_context import get_forward_context
@@ -447,8 +457,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
         profile_cpp: bool = False,
+        count_prof_step: bool = False,
     ) -> Any:
         import torch
+
+        if count_prof_step:
+            step_afd_npu_profiler(self.prof)
 
         with torch.inference_mode():
             return self._dummy_run_inference_mode(
@@ -1490,6 +1504,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         )
 
     def shutdown(self) -> None:
+        stop_afd_npu_profiler(self.prof)
         self.afd_connector.close()
         super().shutdown()
 
