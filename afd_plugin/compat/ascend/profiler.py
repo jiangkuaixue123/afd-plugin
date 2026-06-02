@@ -80,7 +80,7 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> Any | None:
         role,
         config.trace_dir,
     )
-    return torch_npu.profiler.profile(
+    profiler = torch_npu.profiler.profile(
         activities=[
             torch_npu.profiler.ProfilerActivity.CPU,
             torch_npu.profiler.ProfilerActivity.NPU,
@@ -98,11 +98,18 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> Any | None:
             config.trace_dir,
         ),
     )
+    profiler.start()
+    return profiler
 
 
 def step_afd_npu_profiler(profiler: Any | None) -> None:
     if profiler is not None:
         profiler.step()
+
+
+def stop_afd_npu_profiler(profiler: Any | None) -> None:
+    if profiler is not None:
+        profiler.stop()
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
@@ -136,4 +143,5 @@ __all__ = [
     "afd_npu_profiler_config",
     "create_afd_npu_profiler",
     "step_afd_npu_profiler",
+    "stop_afd_npu_profiler",
 ]

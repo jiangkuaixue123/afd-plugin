@@ -9,6 +9,7 @@ from afd_plugin.compat.ascend.profiler import (
     afd_npu_profiler_config,
     create_afd_npu_profiler,
     step_afd_npu_profiler,
+    stop_afd_npu_profiler,
 )
 
 _ENV_NAMES = (
@@ -92,6 +93,7 @@ def test_create_npu_profiler_uses_configured_schedule(monkeypatch):
     profiler = create_afd_npu_profiler("ffn")
 
     assert profiler is profiler_module.created_profiler
+    assert profiler.started is True
     assert profiler_module.schedule_kwargs == {
         "wait": 3,
         "warmup": 4,
@@ -112,9 +114,26 @@ def test_step_npu_profiler_ignores_disabled_profiler():
     assert profiler.steps == 1
 
 
+def test_stop_npu_profiler_ignores_disabled_profiler():
+    stop_afd_npu_profiler(None)
+
+    profiler = _StepProfiler()
+    stop_afd_npu_profiler(profiler)
+
+    assert profiler.stopped is True
+
+
 class _StepProfiler:
     def __init__(self):
         self.steps = 0
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
 
     def step(self):
         self.steps += 1

@@ -21,6 +21,7 @@ from afd_plugin.compat.ascend import (
 from afd_plugin.compat.ascend.profiler import (
     create_afd_npu_profiler,
     step_afd_npu_profiler,
+    stop_afd_npu_profiler,
 )
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadata
@@ -1503,6 +1504,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         )
 
     def shutdown(self) -> None:
+        stop_afd_npu_profiler(self.prof)
         self.afd_connector.close()
         super().shutdown()
 
