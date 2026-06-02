@@ -11,8 +11,9 @@ out-of-tree 的 vLLM external plugin。
   当前已确认 tag 为 `v0.19.1`。
 - 不修改 vLLM `v0.19.1` 源码树。所有行为都必须由本插件包、运行时注册、
   显式 CLI class path、console script，或本仓库内范围清晰的兼容 shim 提供。
-- 保持原始 AFD 实现的行为，参考 vLLM 分支 `afd_gpu` 中的 commit
+- GPU:保持原始 AFD 实现的行为，参考 vLLM 分支 `afd_gpu` 中的 commit
   `0ce8b91b937ec5d47b6902867c4275e0c5fb895e`。
+- NPU:保持原始 AFD 实现的行为，参考 vLLM 分支 `afd_v0.13.0_jcz_dev` 和 vllm-ascend分支`jcz_afd_v13_dev2`
 - 以 `../dllm-plugin` / `../dllm-plugin/dllm_plugin` 作为 external plugin
   包结构、可选 vLLM 依赖、`vllm.general_plugins` entry point 注册、
   兼容辅助层、校验逻辑和测试组织方式的主要参考。

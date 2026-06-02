@@ -1,26 +1,23 @@
 from __future__ import annotations
 
+import importlib
 import logging
+import sys
 from collections import deque
 from contextlib import nullcontext
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
-pytest.importorskip("torch")
-pytest.importorskip("vllm")
-pytest.importorskip("vllm_ascend")
-
-from afd_plugin.compat.ascend import fail_if_unsupported_npu_afd_features
+from afd_plugin.compat.ascend import (
+    fail_if_unsupported_npu_afd_features,
+    npu_afd_num_ubatches,
+)
+from afd_plugin.compat.ascend import runtime as ascend_runtime
 from afd_plugin.connectors import (
     AFDConnectorMetadata,
     AFDRecvOutput,
 )
-from afd_plugin.v1.worker.ascend.attention_model_runner import (
-    AFDNPUAttentionModelRunner,
-)
-from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
-from afd_plugin.v1.worker.ascend.ffn_worker import AFDNPUFFNWorker
 
 
 class _RecordingConnector:
@@ -107,8 +104,14 @@ def _parallel_config(**overrides):
     values = {
         "data_parallel_size": 1,
         "data_parallel_rank": 0,
+        "enable_dbo": False,
         "use_ubatching": False,
         "num_ubatches": 1,
+        "ubatch_size": 0,
+        "prefill_context_parallel_size": 1,
+        "decode_context_parallel_size": 1,
+        "dbo_decode_token_threshold": 1,
+        "dbo_prefill_token_threshold": 1,
         "worker_cls": "unused",
     }
     values.update(overrides)
@@ -133,8 +136,37 @@ def _vllm_config(*, role="attention", extra_config=None, **parallel_overrides):
     )
 
 
+def _require_npu_runtime():
+    pytest.importorskip("vllm", reason="NPU runtime tests require vLLM")
+    pytest.importorskip("vllm_ascend", reason="NPU runtime tests require vLLM-Ascend")
+    pytest.importorskip("torch_npu", reason="NPU runtime tests require torch-npu")
+
+
+def _new_attention_runner():
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend.attention_model_runner import (
+        AFDNPUAttentionModelRunner,
+    )
+
+    return object.__new__(AFDNPUAttentionModelRunner)
+
+
+def _new_ffn_runner():
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend.ffn_model_runner import AFDNPUFFNModelRunner
+
+    return object.__new__(AFDNPUFFNModelRunner)
+
+
+def _new_ffn_worker():
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend.ffn_worker import AFDNPUFFNWorker
+
+    return object.__new__(AFDNPUFFNWorker)
+
+
 def test_npu_attention_runner_builds_and_mirrors_metadata():
-    runner = object.__new__(AFDNPUAttentionModelRunner)
+    runner = _new_attention_runner()
     runner.vllm_config = _vllm_config(role="attention")
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = False
@@ -158,7 +190,7 @@ def test_npu_attention_runner_builds_and_mirrors_metadata():
 
 
 def test_npu_attention_runner_builds_dp_fallback():
-    runner = object.__new__(AFDNPUAttentionModelRunner)
+    runner = _new_attention_runner()
     runner.vllm_config = _vllm_config(role="attention")
     runner.afd_connector = object()
     runner._afd_transaction_counter = 0
@@ -173,7 +205,7 @@ def test_npu_attention_runner_builds_dp_fallback():
 
 
 def test_npu_attention_runner_sends_graph_flags():
-    runner = object.__new__(AFDNPUAttentionModelRunner)
+    runner = _new_attention_runner()
     runner.vllm_config = _vllm_config(role="attention")
     runner.afd_connector = _RecordingConnector()
     runner._is_warmup = True
@@ -187,8 +219,147 @@ def test_npu_attention_runner_sends_graph_flags():
     assert runner.afd_connector.sent_dp_metadata_lists[0][1:] == (True, True)
 
 
+def test_npu_attention_runner_sends_per_ubatch_dp_metadata():
+    runner = _new_attention_runner()
+    runner.vllm_config = _vllm_config(
+        role="attention",
+        enable_dbo=True,
+        use_ubatching=True,
+        num_ubatches=2,
+        ubatch_size=4,
+    )
+    runner.afd_connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+
+    ubatch_slices = [
+        SimpleNamespace(
+            request_slice=slice(0, 2),
+            token_slice=slice(0, 4),
+            num_tokens=4,
+        ),
+        SimpleNamespace(
+            request_slice=slice(2, 3),
+            token_slice=slice(4, 7),
+            num_tokens=3,
+        ),
+    ]
+
+    runner._send_dp_metadata(None, ubatch_slices)
+
+    dp_metadata_list = runner.afd_connector.dp_metadata_updates[0][0]
+    assert sorted(dp_metadata_list) == [0, 1]
+    assert _tokens(dp_metadata_list[0]) == [4]
+    assert _tokens(dp_metadata_list[1]) == [3]
+    assert runner.afd_connector.sent_dp_metadata_lists[0][0] == dp_metadata_list
+
+
+def test_npu_attention_capture_microbatch_also_captures_single_stage():
+    _require_npu_runtime()
+    from vllm.config import CUDAGraphMode
+
+    runner = _new_attention_runner()
+    runner.compilation_config = SimpleNamespace(cudagraph_num_of_warmups=1)
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._afd_suppress_metadata_send = False
+    runner._afd_pending_metadata = "original"
+    dummy_calls = []
+    sent_metadata = []
+
+    def dummy_run(num_tokens, **kwargs):
+        dummy_calls.append(
+            (
+                num_tokens,
+                kwargs.copy(),
+                runner._is_warmup,
+                runner._afd_is_graph_capturing,
+                runner._afd_suppress_metadata_send,
+            ),
+        )
+        return kwargs["allow_microbatching"]
+
+    runner._dummy_run = dummy_run
+    runner._build_afd_metadata = lambda ubatch_slices, num_tokens: SimpleNamespace(
+        ubatch_slices=ubatch_slices,
+        num_tokens=num_tokens,
+    )
+    runner._build_capture_dp_metadata = lambda num_tokens: SimpleNamespace(
+        num_tokens_across_dp_cpu=[num_tokens],
+    )
+
+    def send_dp_metadata(dp_metadata, ubatch_slices):
+        sent_metadata.append(
+            (
+                dp_metadata,
+                ubatch_slices,
+                runner._afd_is_graph_capturing,
+                runner._is_warmup,
+            ),
+        )
+
+    runner._send_dp_metadata = send_dp_metadata
+    desc = SimpleNamespace(num_tokens=12, uniform=True, num_active_loras=0)
+
+    result = runner._warmup_and_capture(
+        desc,
+        CUDAGraphMode.FULL,
+        allow_microbatching=True,
+    )
+
+    assert result is True
+    assert [call[1]["allow_microbatching"] for call in dummy_calls] == [
+        False,
+        False,
+        True,
+        True,
+    ]
+    assert [call[1]["cudagraph_runtime_mode"] for call in dummy_calls] == [
+        CUDAGraphMode.NONE,
+        CUDAGraphMode.FULL,
+        CUDAGraphMode.NONE,
+        CUDAGraphMode.FULL,
+    ]
+    assert [call[1].get("is_graph_capturing", False) for call in dummy_calls] == [
+        False,
+        True,
+        False,
+        True,
+    ]
+    assert [call[2] for call in dummy_calls] == [True, False, True, False]
+    assert [call[3] for call in dummy_calls] == [False, True, False, True]
+    assert len(sent_metadata) == 1
+    dp_metadata, ubatch_slices, is_graph_capturing, is_warmup = sent_metadata[0]
+    assert _tokens(dp_metadata) == [12]
+    assert ubatch_slices is None
+    assert is_graph_capturing is True
+    assert is_warmup is False
+    assert runner._is_warmup is False
+    assert runner._afd_is_graph_capturing is False
+    assert runner._afd_suppress_metadata_send is False
+    assert runner._afd_pending_metadata == "original"
+
+
+def test_npu_attention_metadata_positional_args_and_padded_slices():
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend.ubatch_utils import (
+        UBatchSlice,
+        pad_out_ubatch_slices,
+    )
+
+    ubatch_slices = [
+        UBatchSlice(slice(0, 1), slice(0, 4)),
+        UBatchSlice(slice(1, 2), slice(4, 8)),
+    ]
+
+    normalized = pad_out_ubatch_slices(ubatch_slices, 8, 4)
+
+    assert normalized[-1].request_slice == slice(1, 4)
+    assert normalized[-1].token_slice == slice(4, 8)
+
+
 def test_npu_ffn_runner_executes_eager_ffn_step():
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
@@ -225,7 +396,7 @@ class _FakeGraph:
 
 
 def test_npu_ffn_runner_replays_acl_graph_when_key_exists(caplog):
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
@@ -248,7 +419,7 @@ def test_npu_ffn_runner_replays_acl_graph_when_key_exists(caplog):
 
 
 def test_npu_ffn_runner_logs_acl_graph_miss_and_falls_back_to_eager(caplog):
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
@@ -276,7 +447,7 @@ def test_npu_ffn_runner_logs_acl_graph_miss_and_falls_back_to_eager(caplog):
 
 
 def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
@@ -308,11 +479,11 @@ def test_npu_ffn_runner_warmup_uses_eager_forward_without_graph():
 def test_npu_ffn_runner_capture_stores_acl_graph_and_skips_duplicate_state_update(
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        "afd_plugin.v1.worker.ascend.ffn_model_runner._full_aclgraph_runtime_mode",
-        lambda: "FULL",
-    )
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    _require_npu_runtime()
+    from afd_plugin.v1.worker.ascend import ffn_model_runner
+
+    monkeypatch.setattr(ffn_model_runner, "_full_aclgraph_runtime_mode", lambda: "FULL")
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = _FakeModel()
@@ -346,7 +517,7 @@ def test_npu_ffn_runner_capture_stores_acl_graph_and_skips_duplicate_state_updat
 
 
 def test_npu_ffn_runner_requires_compute_hook():
-    runner = object.__new__(AFDNPUFFNModelRunner)
+    runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
     runner.connector = _FakeFFNConnector()
     runner.model = SimpleNamespace()
@@ -366,14 +537,14 @@ def test_npu_ffn_runner_requires_compute_hook():
 
 
 def test_npu_ffn_worker_scheduler_execute_model_fails_fast():
-    worker = object.__new__(AFDNPUFFNWorker)
+    worker = _new_ffn_worker()
 
     with pytest.raises(RuntimeError, match="connector-driven"):
         worker.execute_model(scheduler_output=object())
 
 
 def test_npu_ffn_worker_loop_error_is_propagated(caplog):
-    worker = object.__new__(AFDNPUFFNWorker)
+    worker = _new_ffn_worker()
     worker._ffn_thread = None
     worker._ffn_shutdown_event = None
     worker._ffn_loop_error = None
@@ -416,12 +587,177 @@ def test_npu_feature_validation_rejects_unsupported_switches():
             )
 
 
-def test_npu_feature_validation_rejects_ubatching_and_allows_acl_graph_config():
-    with pytest.raises(RuntimeError, match="ubatching"):
+def test_npu_feature_validation_allows_two_ubatches_only():
+    config = _vllm_config(
+        enable_dbo=True,
+        use_ubatching=True,
+        num_ubatches=2,
+        ubatch_size=4,
+    )
+    fail_if_unsupported_npu_afd_features(config)
+    assert npu_afd_num_ubatches(config) == 2
+
+    with pytest.raises(RuntimeError, match="exactly two ubatches"):
         fail_if_unsupported_npu_afd_features(
-            _vllm_config(use_ubatching=True, num_ubatches=2),
+            _vllm_config(
+                enable_dbo=True,
+                use_ubatching=True,
+                num_ubatches=4,
+                ubatch_size=4,
+            ),
         )
 
     config = _vllm_config()
     config.model_config.enforce_eager = False
     fail_if_unsupported_npu_afd_features(config)
+
+
+def test_npu_ubatch_allows_mc2_comm_when_thresholds_are_met(monkeypatch):
+    fake_numpy = ModuleType("numpy")
+    fake_numpy.ndarray = object
+    fake_torch = ModuleType("torch")
+    fake_torch.Tensor = object
+    fake_vllm = ModuleType("vllm")
+    fake_vllm_config = ModuleType("vllm.config")
+    fake_vllm_config.VllmConfig = object
+    fake_vllm_v1 = ModuleType("vllm.v1")
+    fake_vllm_worker = ModuleType("vllm.v1.worker")
+    fake_vllm_ubatch_utils = ModuleType("vllm.v1.worker.ubatch_utils")
+    fake_vllm_ubatch_utils.UBatchSlice = object
+    fake_vllm_ubatch_utils.UBatchSlices = list
+
+    def check_ubatch_thresholds(config, num_tokens, uniform_decode):
+        if not config.use_ubatching:
+            return False
+        if uniform_decode:
+            return num_tokens >= config.dbo_decode_token_threshold
+        return num_tokens >= config.dbo_prefill_token_threshold
+
+    fake_vllm_ubatch_utils.check_ubatch_thresholds = check_ubatch_thresholds
+
+    fake_vllm_ascend = ModuleType("vllm_ascend")
+    fake_forward_context = ModuleType("vllm_ascend.ascend_forward_context")
+
+    class MoECommType:
+        MC2 = object()
+        FUSED_MC2 = object()
+
+    fake_forward_context.MoECommType = MoECommType
+    fake_attention = ModuleType("vllm_ascend.attention")
+    fake_attention_utils = ModuleType("vllm_ascend.attention.utils")
+    fake_attention_utils.AscendCommonAttentionMetadata = object
+
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+    monkeypatch.setitem(sys.modules, "vllm.config", fake_vllm_config)
+    monkeypatch.setitem(sys.modules, "vllm.v1", fake_vllm_v1)
+    monkeypatch.setitem(sys.modules, "vllm.v1.worker", fake_vllm_worker)
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.v1.worker.ubatch_utils",
+        fake_vllm_ubatch_utils,
+    )
+    monkeypatch.setitem(sys.modules, "vllm_ascend", fake_vllm_ascend)
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm_ascend.ascend_forward_context",
+        fake_forward_context,
+    )
+    monkeypatch.setitem(sys.modules, "vllm_ascend.attention", fake_attention)
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm_ascend.attention.utils",
+        fake_attention_utils,
+    )
+
+    module_name = "afd_plugin.v1.worker.ascend.ubatch_utils"
+    original_module = sys.modules.pop(module_name, None)
+    try:
+        ubatch_utils = importlib.import_module(module_name)
+        config = _vllm_config(
+            enable_dbo=True,
+            use_ubatching=True,
+            num_ubatches=2,
+            ubatch_size=4,
+            dbo_decode_token_threshold=2,
+            dbo_prefill_token_threshold=12,
+        )
+
+        assert ubatch_utils.check_enable_ubatch(
+            num_tokens_unpadded=12,
+            num_tokens_padded=12,
+            uniform_decode=True,
+            vllm_config=config,
+            moe_comm_type=ubatch_utils.MoECommType.MC2,
+        )
+        assert ubatch_utils.check_enable_ubatch(
+            num_tokens_unpadded=12,
+            num_tokens_padded=12,
+            uniform_decode=True,
+            vllm_config=config,
+            moe_comm_type=ubatch_utils.MoECommType.FUSED_MC2,
+        )
+    finally:
+        sys.modules.pop(module_name, None)
+        if original_module is not None:
+            sys.modules[module_name] = original_module
+
+
+def test_npu_afd_config_patch_restores_dbo_for_afd(monkeypatch):
+    fake_package = ModuleType("vllm_ascend")
+    fake_package.__path__ = []
+    fake_platform = ModuleType("vllm_ascend.platform")
+
+    class FakeParallelConfig:
+        def __init__(self, *, enable_dbo, ubatch_size):
+            self.enable_dbo = enable_dbo
+            self.ubatch_size = ubatch_size
+
+        @property
+        def use_ubatching(self):
+            return self.enable_dbo or self.ubatch_size > 1
+
+        @property
+        def num_ubatches(self):
+            return 2 if self.enable_dbo else self.ubatch_size
+
+    class NPUPlatform:
+        @staticmethod
+        def _fix_incompatible_config(vllm_config):
+            parallel_config = vllm_config.parallel_config
+            parallel_config.enable_dbo = False
+            parallel_config.ubatch_size = 0
+            return "fixed"
+
+    fake_platform.NPUPlatform = NPUPlatform
+    monkeypatch.setitem(sys.modules, "vllm_ascend", fake_package)
+    monkeypatch.setitem(sys.modules, "vllm_ascend.platform", fake_platform)
+    monkeypatch.setattr(ascend_runtime, "_PATCHES_APPLIED", False)
+
+    ascend_runtime.apply_afd_ascend_patches_if_needed()
+
+    config = _vllm_config()
+    config.parallel_config = FakeParallelConfig(enable_dbo=True, ubatch_size=4)
+    assert NPUPlatform._fix_incompatible_config(config) == "fixed"
+    assert config.parallel_config.enable_dbo is True
+    assert config.parallel_config.use_ubatching is True
+    assert config.parallel_config.num_ubatches == 2
+    assert config.parallel_config.ubatch_size == 4
+
+    disabled_config = _vllm_config()
+    disabled_config.parallel_config = FakeParallelConfig(
+        enable_dbo=True,
+        ubatch_size=4,
+    )
+    disabled_config.additional_config["afd"]["enabled"] = False
+    assert NPUPlatform._fix_incompatible_config(disabled_config) == "fixed"
+    assert disabled_config.parallel_config.enable_dbo is False
+    assert disabled_config.parallel_config.use_ubatching is False
+
+
+def _tokens(dp_metadata):
+    values = dp_metadata.num_tokens_across_dp_cpu
+    if hasattr(values, "tolist"):
+        return values.tolist()
+    return list(values)

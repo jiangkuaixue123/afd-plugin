@@ -13,6 +13,7 @@ from afd_plugin.compat.ascend import (
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
     init_ascend_workspace_for_afd,
+    npu_afd_num_ubatches,
 )
 from afd_plugin.v1.worker.ascend.attention_model_runner import (
     AFDNPUAttentionModelRunner,
@@ -47,7 +48,10 @@ class AFDNPUAttentionWorker(NPUWorker):
             )
 
         self.device = self._init_device()
-        init_ascend_workspace_for_afd(self.device, num_ubatches=1)
+        init_ascend_workspace_for_afd(
+            self.device,
+            num_ubatches=npu_afd_num_ubatches(self.vllm_config),
+        )
         self.model_runner = AFDNPUAttentionModelRunner(
             self.vllm_config,
             self.device,

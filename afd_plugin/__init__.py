@@ -54,6 +54,9 @@ _DEEPSEEK_MODEL_REGISTRATIONS = {
     "DeepseekV3ForCausalLM": (
         "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
     ),
+    "DeepseekV32ForCausalLM": (
+        "afd_plugin.model_executor.models.deepseek_v2:AFDDeepseekV3ForCausalLM"
+    ),
     "GlmMoeDsaForCausalLM": (
         "afd_plugin.model_executor.models.deepseek_v2:AFDGlmMoeDsaForCausalLM"
     ),
@@ -111,6 +114,16 @@ def register_afd() -> None:
     except Exception:
         _logger.debug(
             "AFD plugin: DBO yield custom op could not be registered",
+            exc_info=True,
+        )
+
+    try:
+        from afd_plugin.compat.ascend import apply_afd_ascend_patches_if_needed
+
+        apply_afd_ascend_patches_if_needed()
+    except Exception:
+        _logger.debug(
+            "AFD plugin: Ascend compatibility patches could not be applied",
             exc_info=True,
         )
 

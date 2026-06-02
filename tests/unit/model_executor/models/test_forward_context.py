@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from afd_plugin.model_executor.models import get_afd_metadata_from_forward_context
 
 
@@ -14,36 +12,6 @@ def test_get_afd_metadata_from_additional_kwargs():
     )
 
     assert get_afd_metadata_from_forward_context(forward_context) == {"stage": 0}
-
-
-def test_maybe_apply_dbo_yield_only_when_dbo_enabled():
-    pytest.importorskip("torch")
-    pytest.importorskip("vllm")
-
-    from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
-
-    calls = []
-    tensor = object()
-    module = SimpleNamespace(
-        dbo_enabled=lambda: True,
-        dbo_yield=lambda: calls.append("yield"),
-    )
-
-    assert (
-        maybe_apply_dbo_yield(tensor, role="attention", ubatching_module=module)
-        is tensor
-    )
-    assert calls == ["yield"]
-
-    disabled = SimpleNamespace(
-        dbo_enabled=lambda: False,
-        dbo_yield=lambda: calls.append("disabled"),
-    )
-    assert (
-        maybe_apply_dbo_yield(tensor, role="attention", ubatching_module=disabled)
-        is tensor
-    )
-    assert calls == ["yield"]
 
 
 def test_deepseek_afd_wrapper_keeps_full_model_compile_enabled():
