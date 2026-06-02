@@ -12,6 +12,7 @@ from itertools import islice
 from typing import Any
 
 import torch
+from vllm.forward_context import get_forward_context
 from vllm.model_executor.models import deepseek_v2 as native
 
 from afd_plugin.config import parse_afd_config
@@ -256,11 +257,19 @@ class AFDDeepseekV2Model(torch.nn.Module):
         llama_4_scaling: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         afd_connector = afd_metadata.afd_connector
-        stage_idx = int(afd_metadata.afd_stage_idx)
+        forward_context = get_forward_context()
+        stage_idx = int(
+            getattr(forward_context, "ubatch_idx", afd_metadata.afd_stage_idx),
+        )
 
         for layer_offset, layer in enumerate(
             islice(self.layers, self.start_layer, self.end_layer),
         ):
+            stage_idx = int(
+                getattr(forward_context, "ubatch_idx", afd_metadata.afd_stage_idx),
+            )
+            afd_metadata.ubatch_idx = stage_idx
+            afd_metadata.afd_stage_idx = stage_idx
             if layer_offset > 0:
                 hidden_states = afd_connector.recv_ffn_output(
                     ref_tensor=hidden_states,

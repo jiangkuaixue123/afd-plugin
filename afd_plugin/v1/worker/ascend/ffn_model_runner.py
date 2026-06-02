@@ -271,13 +271,13 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         start_free_memory = self._npu_free_memory()
         self._set_cudagraph_capturing_enabled(True)
         try:
-            with self._graph_capture_context():
-                if is_warmup:
-                    self._ffn_forward(
-                        dp_metadata_list=dp_metadata_list,
-                        is_graph_capturing=False,
-                    )
-                else:
+            if is_warmup:
+                self._ffn_forward(
+                    dp_metadata_list=dp_metadata_list,
+                    is_graph_capturing=False,
+                )
+            else:
+                with self._graph_capture_context():
                     self._capture_graphs(
                         aclgraph_runtime_mode=_full_aclgraph_runtime_mode(),
                         dp_metadata_list=dp_metadata_list,
