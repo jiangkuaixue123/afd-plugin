@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import builtins
 
 import pytest
 
@@ -10,27 +10,11 @@ from afd_plugin.v1.worker import dbo
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 
-def test_maybe_apply_dbo_yield_only_when_dbo_enabled():
-    calls = []
-    tensor = object()
-    module = SimpleNamespace(
-        dbo_enabled=lambda: True,
-        dbo_yield=lambda: calls.append("yield"),
-    )
-
-    assert (
-        maybe_apply_dbo_yield(tensor, role="attention", ubatching_module=module)
-        is tensor
-    )
-    assert calls == ["yield"]
-
-
-def test_maybe_apply_dbo_yield_uses_custom_op_while_compiling(monkeypatch):
+def test_maybe_apply_dbo_yield_uses_custom_op(monkeypatch):
     calls = []
     tensor = object()
     yielded = object()
 
-    monkeypatch.setattr(dbo.torch.compiler, "is_compiling", lambda: True)
     monkeypatch.setattr(
         dbo,
         "register_dbo_yield_custom_op",
@@ -46,12 +30,22 @@ def test_maybe_apply_dbo_yield_uses_custom_op_while_compiling(monkeypatch):
     assert maybe_apply_dbo_yield(tensor, role="attention") is yielded
     assert calls == ["register"]
 
-    disabled = SimpleNamespace(
-        dbo_enabled=lambda: False,
-        dbo_yield=lambda: calls.append("disabled"),
+
+def test_maybe_apply_dbo_yield_does_not_probe_ascend(monkeypatch):
+    tensor = object()
+
+    real_import = builtins.__import__
+
+    def fail_on_ascend_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.startswith("afd_plugin.v1.worker.ascend"):
+            pytest.fail(f"unexpected Ascend import from DBO yield helper: {name}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_on_ascend_import)
+    monkeypatch.setattr(
+        dbo,
+        "register_dbo_yield_custom_op",
+        lambda: (_ for _ in ()).throw(ImportError),
     )
-    assert (
-        maybe_apply_dbo_yield(tensor, role="attention", ubatching_module=disabled)
-        is tensor
-    )
-    assert calls == ["register"]
+
+    assert maybe_apply_dbo_yield(tensor, role="attention") is tensor

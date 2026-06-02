@@ -13,23 +13,9 @@ def maybe_apply_dbo_yield(
     tensor: Any,
     *,
     role: str,
-    ubatching_module: Any | None = None,
 ) -> Any:
     """Yield to the peer ubatch thread when vLLM DBO is active."""
-
-    if ubatching_module is not None:
-        if ubatching_module.dbo_enabled():
-            ubatching_module.dbo_yield()
-        return tensor
-
-    try:
-        from afd_plugin.v1.worker.ascend import ubatching as ascend_ubatching
-    except ImportError:
-        ascend_ubatching = None
-
-    if ascend_ubatching is not None and ascend_ubatching.dbo_enabled():
-        ascend_ubatching.dbo_yield()
-        return tensor
+    del role
 
     try:
         register_dbo_yield_custom_op()
