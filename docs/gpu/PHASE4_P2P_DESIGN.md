@@ -12,8 +12,6 @@ adapters intact. The earlier in-process dummy connector has been removed.
 - Support the original branch's topology rule: `num_attention_servers` must be
   greater than or equal to `num_ffn_servers`, and must be an integer multiple of
   it.
-- Preserve `extra_config["afd_size"]` compatibility for original-style values
-  such as `4A2F`.
 - Provide a DeepSeekV2 E2E model wrapper that loads full weights on both roles
   and splits only the forward path. This covers first server-side eager `1A1F`
   and `2A2F` smoke testing, not the final memory-efficient model implementation.

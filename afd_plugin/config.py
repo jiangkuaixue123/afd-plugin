@@ -82,7 +82,6 @@ class AFDConfig:
             self.enabled,
             self.connector,
             self.role,
-            self.extra_config.get("afd_size"),
             self.num_afd_stages,
             self.num_attention_servers,
             self.num_ffn_servers,

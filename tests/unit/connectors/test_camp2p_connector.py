@@ -49,7 +49,8 @@ def _afd_config(*, role: str, rank: int = 0):
         connector="camp2pconnector",
         role=role,
         afd_server_rank=rank,
-        extra_config={"afd_size": "4A2F"},
+        num_attention_servers=4,
+        num_ffn_servers=2,
     )
 
 
