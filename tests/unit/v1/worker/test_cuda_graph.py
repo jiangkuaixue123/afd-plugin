@@ -118,3 +118,14 @@ def test_make_ffn_graph_key_matches_original_shape():
         (0, (3, 5)),
         (1, (7, 11)),
     )
+
+
+def test_make_ffn_graph_key_can_aggregate_attention_counts_to_ffn_counts():
+    metadata = SimpleNamespace(num_tokens_across_dp_cpu=[12] * 8)
+
+    assert make_ffn_graph_key(
+        {0: metadata},
+        attention_size=8,
+        ffn_size=4,
+        fallback=24,
+    ) == ((0, (24, 24, 24, 24)),)

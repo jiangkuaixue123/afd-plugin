@@ -168,9 +168,13 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         self._ffn_forward(dp_metadata_list=dp_metadata_list)
         return None
 
-    @staticmethod
-    def _make_graph_key(dp_metadata_list: dict[int, Any]) -> tuple:
-        return make_ffn_graph_key(dp_metadata_list)
+    def _make_graph_key(self, dp_metadata_list: dict[int, Any]) -> tuple:
+        return make_ffn_graph_key(
+            dp_metadata_list,
+            attention_size=int(self.connector.attn_size),
+            ffn_size=int(self.connector.ffn_size),
+            fallback=int(self.max_num_tokens),
+        )
 
     def _ffn_forward(
         self,
@@ -195,8 +199,13 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
             num_of_stages=num_stages,
         )
         stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
-        num_tokens_across_dp = _first_dp_token_counts(dp_metadata_list)
-        num_tokens = _first_token_count(num_tokens_across_dp)
+        num_tokens_across_dp = _ffn_token_counts_across_ranks(
+            self.connector,
+            dp_metadata_list,
+            stage_ids[0],
+            fallback=self.max_num_tokens,
+        )
+        num_tokens = _ffn_token_count_for_rank(self.connector, num_tokens_across_dp)
         rank_ffn_output = None
 
         with ascend_forward_context(
@@ -411,7 +420,10 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
     def shutdown(self) -> None:
         stop_afd_npu_profiler(self.prof)
         self.connector.close()
-        super().shutdown()
+        try:
+            super().shutdown()
+        except AttributeError:
+            logger.debug("AFD NPU FFN parent model runner has no shutdown()")
 
 
 def _normalize_recv_output(
@@ -447,6 +459,41 @@ def _first_dp_token_counts(dp_metadata_list: dict[int, Any]) -> Any:
     return dp_metadata_list[first_key].num_tokens_across_dp_cpu
 
 
+def _ffn_token_counts_across_ranks(
+    connector: Any,
+    dp_metadata_list: dict[int, Any],
+    stage_idx: int,
+    *,
+    fallback: int,
+) -> Any:
+    dp_metadata = dp_metadata_list.get(int(stage_idx))
+    if dp_metadata is None:
+        values = [max(1, int(fallback))] * int(connector.ffn_size)
+    else:
+        attention_counts = _to_int_list(dp_metadata.num_tokens_across_dp_cpu)
+        if (
+            len(attention_counts) >= int(connector.attn_size)
+            and int(connector.attn_size) >= int(connector.ffn_size)
+            and int(connector.attn_size) % int(connector.ffn_size) == 0
+        ):
+            group_size = int(connector.attn_size) // int(connector.ffn_size)
+            values = [
+                max(1, sum(attention_counts[idx * group_size : (idx + 1) * group_size]))
+                for idx in range(int(connector.ffn_size))
+            ]
+        else:
+            values = [max(1, int(fallback))] * int(connector.ffn_size)
+    return torch.tensor(values, dtype=torch.int32, device="cpu")
+
+
+def _ffn_token_count_for_rank(connector: Any, num_tokens_across_dp: Any) -> int:
+    values = _to_int_list(num_tokens_across_dp)
+    role_rank = int(connector.topology.role_rank)
+    if role_rank >= len(values):
+        return max(1, values[0] if values else 1)
+    return max(1, int(values[role_rank]))
+
+
 def _first_token_count(num_tokens_across_dp: Any) -> int:
     if num_tokens_across_dp is None:
         return 1
@@ -458,6 +505,16 @@ def _first_token_count(num_tokens_across_dp: Any) -> int:
 
 def _tensor_tokens(hidden_states: Any) -> int:
     return max(1, int(hidden_states.shape[0]))
+
+
+def _to_int_list(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, (int, float)):
+        return [int(value)]
+    if isinstance(value, (list, tuple)):
+        return [int(item) for item in value]
+    return [int(item) for item in value.tolist()]
 
 
 def _use_npu_aclgraph(vllm_config: object, runner: object) -> bool:
