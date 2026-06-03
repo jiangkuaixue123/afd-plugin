@@ -55,12 +55,16 @@ class _RecordingConnector:
 
 
 class _FakeFFNConnector:
-    def __init__(self):
+    def __init__(self, *, attn_size=1, ffn_size=1, role_rank=0, world_rank=0):
         self.dp_metadata_list = {}
         self.attn_outputs = deque()
         self.ffn_outputs = []
         self.updates = []
         self.metadata_updates = []
+        self.attn_size = attn_size
+        self.ffn_size = ffn_size
+        self.world_rank = world_rank
+        self.topology = SimpleNamespace(role_rank=role_rank)
 
     def update_state_from_dp_metadata(self, dp_metadata_list, **kwargs):
         self.dp_metadata_list = dict(dp_metadata_list)
@@ -498,6 +502,16 @@ def test_npu_ffn_runner_replays_acl_graph_when_key_exists(caplog):
     assert graph.replay_count == 1
     assert runner.connector.ffn_outputs == []
     assert "AFD NPU FFN ACL graph key hit" in caplog.text
+
+
+def test_npu_ffn_runner_graph_key_uses_ffn_aggregated_token_counts():
+    runner = _new_ffn_runner()
+    runner.connector = _FakeFFNConnector(attn_size=8, ffn_size=4)
+    runner.max_num_tokens = 24
+
+    assert runner._make_graph_key({0: _FakeDPMetadata([12] * 8)}) == (
+        (0, (24, 24, 24, 24)),
+    )
 
 
 def test_npu_ffn_runner_logs_acl_graph_miss_and_falls_back_to_eager(caplog):

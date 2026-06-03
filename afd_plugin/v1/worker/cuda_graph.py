@@ -95,24 +95,34 @@ def cudagraph_mode_name(vllm_config: object) -> str | None:
     return text or None
 
 
-def make_ffn_graph_key(dp_metadata_list: dict[int, Any]) -> tuple[tuple[int, tuple]]:
+def make_ffn_graph_key(
+    dp_metadata_list: dict[int, Any],
+    *,
+    attention_size: int | None = None,
+    ffn_size: int | None = None,
+    fallback: int = 1,
+) -> tuple[tuple[int, tuple]]:
     """Extract the original AFD-style hashable key from DP metadata."""
 
     key_parts: list[tuple[int, tuple]] = []
     for stage_idx, metadata in sorted(dp_metadata_list.items()):
         values = getattr(metadata, "num_tokens_across_dp_cpu", None)
         if values is None:
-            values_tuple = (repr(metadata),)
+            if _use_ffn_aggregated_key(attention_size, ffn_size):
+                values_tuple = tuple(
+                    max(1, int(fallback)) for _ in range(int(ffn_size))
+                )
+            else:
+                values_tuple = (repr(metadata),)
         else:
-            tolist = getattr(values, "tolist", None)
-            if callable(tolist):
-                values = tolist()
-            elif hasattr(values, "item"):
-                values = [values.item()]
-            try:
-                values_tuple = tuple(int(value) for value in values)
-            except TypeError:
-                values_tuple = (int(values),)
+            values_tuple = _metadata_values_tuple(values)
+            if _use_ffn_aggregated_key(attention_size, ffn_size):
+                values_tuple = _aggregate_ffn_values_tuple(
+                    values_tuple,
+                    attention_size=int(attention_size),
+                    ffn_size=int(ffn_size),
+                    fallback=int(fallback),
+                )
         key_parts.append((int(stage_idx), values_tuple))
     return tuple(key_parts)
 
@@ -143,6 +153,46 @@ def _allow_cuda_graph_with_ubatching(vllm_config: object) -> bool:
         return False
     parallel_config = vllm_config.parallel_config
     return int(getattr(parallel_config, "num_ubatches", 0)) == 2
+
+
+def _metadata_values_tuple(values: Any) -> tuple[int, ...]:
+    tolist = getattr(values, "tolist", None)
+    if callable(tolist):
+        values = tolist()
+    elif hasattr(values, "item"):
+        values = [values.item()]
+    try:
+        return tuple(int(value) for value in values)
+    except TypeError:
+        return (int(values),)
+
+
+def _use_ffn_aggregated_key(
+    attention_size: int | None,
+    ffn_size: int | None,
+) -> bool:
+    return (
+        attention_size is not None
+        and ffn_size is not None
+        and int(attention_size) >= int(ffn_size)
+        and int(attention_size) % int(ffn_size) == 0
+    )
+
+
+def _aggregate_ffn_values_tuple(
+    values: tuple[int, ...],
+    *,
+    attention_size: int,
+    ffn_size: int,
+    fallback: int,
+) -> tuple[int, ...]:
+    if len(values) < attention_size:
+        return tuple(max(1, int(fallback)) for _ in range(ffn_size))
+    group_size = attention_size // ffn_size
+    return tuple(
+        max(1, sum(values[idx * group_size : (idx + 1) * group_size]))
+        for idx in range(ffn_size)
+    )
 
 
 __all__ = [
