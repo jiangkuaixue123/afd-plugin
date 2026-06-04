@@ -126,7 +126,7 @@ vllm serve /path/to/DeepSeek-V2-Lite \
   --enforce-eager \
   --host 127.0.0.1 \
   --port 18000 \
-  --additional-config '{"afd":{"enabled":true,"role":"attention","connector":"p2pconnector","host":"127.0.0.1","port":6239,"num_attention_servers":1,"num_ffn_servers":1,"extra_config":{"afd_size":"1A1F"}}}'
+  --additional-config '{"afd":{"enabled":true,"role":"attention","connector":"p2pconnector","host":"127.0.0.1","port":6239,"num_attention_servers":1,"num_ffn_servers":1}}'
 ```
 
 Minimal FFN-side shape:
@@ -141,7 +141,7 @@ vllm serve /path/to/DeepSeek-V2-Lite \
   --enforce-eager \
   --host 127.0.0.1 \
   --port 18001 \
-  --additional-config '{"afd":{"enabled":true,"role":"ffn","connector":"p2pconnector","host":"127.0.0.1","port":6239,"num_attention_servers":1,"num_ffn_servers":1,"extra_config":{"afd_size":"1A1F"}}}'
+  --additional-config '{"afd":{"enabled":true,"role":"ffn","connector":"p2pconnector","host":"127.0.0.1","port":6239,"num_attention_servers":1,"num_ffn_servers":1}}'
 ```
 
 Start the FFN side first, then start the Attention side and send requests to
@@ -176,10 +176,7 @@ The canonical config shape is:
     "port": 1239,
     "num_attention_servers": 2,
     "num_ffn_servers": 1,
-    "afd_server_rank": 0,
-    "extra_config": {
-      "afd_size": "2A1F"
-    }
+    "afd_server_rank": 0
   }
 }
 ```

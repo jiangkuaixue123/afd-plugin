@@ -61,7 +61,7 @@ def test_runner_uses_native_dp_for_attention_topology():
     additional_config = json.loads(_arg_value(command, "--additional-config"))
     assert additional_config["afd"]["num_attention_servers"] == 2
     assert additional_config["afd"]["num_ffn_servers"] == 2
-    assert additional_config["afd"]["extra_config"]["afd_size"] == "2A2F"
+    assert "extra_config" not in additional_config["afd"]
     assert "afd_server_rank" not in additional_config["afd"]
 
 

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -65,26 +64,11 @@ class DefaultProcessGroupSwitcher:
 def topology_from_config(config: AFDConfig) -> tuple[int, int]:
     """Return ``(attention_size, ffn_size)`` for an AFD config.
 
-    ``extra_config["afd_size"]`` is kept for compatibility with the original
-    in-tree AFD branch and accepts values such as ``"4A2F"`` or ``"4:2"``.
-    Canonical plugin fields remain ``num_attention_servers`` and
+    Canonical plugin fields are ``num_attention_servers`` and
     ``num_ffn_servers``.
     """
 
-    afd_size = config.extra_config.get("afd_size")
-    if afd_size is None:
-        return config.num_attention_servers, config.num_ffn_servers
-
-    match = re.fullmatch(r"\s*(\d+)\D+(\d+)\D*\s*", str(afd_size))
-    if match is None:
-        raise ValueError(
-            "extra_config['afd_size'] must contain two positive integers, "
-            f"got {afd_size!r}",
-        )
-    attention_size, ffn_size = (int(match.group(1)), int(match.group(2)))
-    if attention_size <= 0 or ffn_size <= 0:
-        raise ValueError("extra_config['afd_size'] values must be positive")
-    return attention_size, ffn_size
+    return config.num_attention_servers, config.num_ffn_servers
 
 
 def validate_p2p_topology(config: AFDConfig) -> None:

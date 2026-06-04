@@ -9,7 +9,7 @@ import pytest
 
 from afd_plugin.config import AFDConfig, afd_config_from_mapping
 from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata
-from afd_plugin.distributed import build_rank_mapping, topology_from_config
+from afd_plugin.distributed import build_rank_mapping
 
 
 def _fake_vllm_config():
@@ -88,24 +88,6 @@ def test_p2p_connector_uses_dp_rank_as_role_rank_for_native_dp():
     assert connector.p2p_rank == 3
 
 
-def test_p2p_topology_supports_afd_size_alias():
-    config = afd_config_from_mapping(
-        {
-            "enabled": True,
-            "role": "ffn",
-            "connector": "p2pconnector",
-            "extra_config": {"afd_size": "4A2F"},
-            "afd_server_rank": 1,
-        },
-    )
-
-    assert topology_from_config(config) == (4, 2)
-    mapping = build_rank_mapping(config)
-    assert mapping.world_rank == 1
-    assert mapping.subgroup_ranks == (1, 4, 5)
-    assert mapping.rank_in_subgroup == 0
-
-
 @pytest.mark.parametrize(
     ("attention_size", "ffn_size", "role", "role_rank", "subgroup_ranks", "dsts"),
     [
@@ -157,13 +139,6 @@ def test_p2p_topology_supports_equal_and_integer_multiple_attention_counts(
                 "num_ffn_servers": 2,
             },
             "multiple of num_ffn_servers",
-        ),
-        (
-            {
-                "connector": "p2pconnector",
-                "extra_config": {"afd_size": "not-a-topology"},
-            },
-            "extra_config\\['afd_size'\\]",
         ),
     ],
 )

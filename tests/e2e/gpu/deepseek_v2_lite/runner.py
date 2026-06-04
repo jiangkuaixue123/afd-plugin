@@ -258,9 +258,6 @@ def build_vllm_command(
             "port": args.afd_port,
             "num_attention_servers": args.num_attention_servers,
             "num_ffn_servers": args.num_ffn_servers,
-            "extra_config": {
-                "afd_size": f"{args.num_attention_servers}A{args.num_ffn_servers}F",
-            },
         },
     }
     worker_cls = (
