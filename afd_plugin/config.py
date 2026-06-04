@@ -46,6 +46,7 @@ class AFDConfig:
     num_attention_servers: int = 1
     num_ffn_servers: int = 1
     afd_server_rank: int = 0
+    compute_gate_on_attention: bool = False
 
     @property
     def afd_extra_config(self) -> dict[str, Any]:
