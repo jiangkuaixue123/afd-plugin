@@ -17,6 +17,11 @@ from vllm.v1.worker.gpu_model_runner import GPUModelRunner
 from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
 from vllm.v1.worker.ubatch_utils import check_ubatch_thresholds
 
+from afd_plugin.compat.profiler import (
+    create_afd_gpu_profiler,
+    step_afd_gpu_profiler,
+    stop_afd_gpu_profiler,
+)
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
@@ -63,6 +68,7 @@ class AFDAttentionModelRunner(GPUModelRunner):
         self._afd_pending_metadata: AFDMetadata | None = None
         self._afd_suppress_metadata_send = False
         self._afd_transaction_counter = 0
+        self.prof = create_afd_gpu_profiler("attention")
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -303,6 +309,10 @@ class AFDAttentionModelRunner(GPUModelRunner):
         self._install_afd_metadata_on_forward_context(forward_context)
         return super()._model_forward(*args, **kwargs)
 
+    def execute_model(self, *args: Any, **kwargs: Any) -> Any:
+        step_afd_gpu_profiler(self.prof)
+        return super().execute_model(*args, **kwargs)
+
     def _dummy_run(self, *args: Any, **kwargs: Any) -> Any:
         """Run vLLM's DP dummy batch through the AFD model path.
 
@@ -419,6 +429,7 @@ class AFDAttentionModelRunner(GPUModelRunner):
             self._afd_pending_metadata = previous_metadata
 
     def shutdown(self) -> None:
+        stop_afd_gpu_profiler(self.prof)
         self.afd_connector.close()
         super().shutdown()
 

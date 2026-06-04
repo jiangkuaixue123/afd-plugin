@@ -22,6 +22,7 @@ class _FakeConnector:
         self.attn_outputs = deque()
         self.ffn_outputs = []
         self.dp_metadata_updates = []
+        self.closed = False
 
     def update_state_from_dp_metadata(self, dp_metadata_list, is_graph_capturing):
         self.dp_metadata_updates.append((dict(dp_metadata_list), is_graph_capturing))
@@ -39,10 +40,25 @@ class _FakeConnector:
     def send_ffn_output(self, ffn_output, metadata):
         self.ffn_outputs.append((ffn_output, metadata))
 
+    def close(self):
+        self.closed = True
+
 
 class _FakeModel:
     def compute_ffn_output(self, hidden_states, layer_idx):
         return f"ffn({hidden_states}, layer={layer_idx})"
+
+
+class _StepProfiler:
+    def __init__(self):
+        self.steps = 0
+        self.stopped = False
+
+    def step(self):
+        self.steps += 1
+
+    def stop(self):
+        self.stopped = True
 
 
 def _metadata():
@@ -69,6 +85,7 @@ def _runner_with_connector_and_model(model, *, num_layers=1):
     runner.num_layers = num_layers
     runner.use_cuda_graph = False
     runner._cuda_graphs = {}
+    runner.prof = None
     return runner
 
 
@@ -150,6 +167,7 @@ def test_ffn_runner_processes_each_ubatch_for_each_layer():
 
 def test_ffn_runner_requires_dp_metadata_list():
     runner = object.__new__(GPUFFNModelRunner)
+    runner.prof = None
 
     with pytest.raises(RuntimeError, match="requires dp_metadata_list"):
         runner.execute_model()
@@ -192,6 +210,26 @@ def test_ffn_runner_cuda_graph_miss_falls_back_to_eager():
     assert runner.connector.ffn_outputs == [
         ("ffn(hidden, layer=0)", metadata),
     ]
+
+
+def test_ffn_runner_steps_gpu_profiler():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    runner.prof = _StepProfiler()
+    runner.connector.attn_outputs.append(("hidden", _metadata()))
+
+    runner.execute_model(dp_metadata_list={0: "dp"})
+
+    assert runner.prof.steps == 1
+
+
+def test_ffn_runner_stops_gpu_profiler_on_shutdown():
+    runner = _runner_with_connector_and_model(_FakeModel())
+    runner.prof = _StepProfiler()
+
+    runner.shutdown()
+
+    assert runner.prof.stopped is True
+    assert runner.connector.closed is True
 
 
 def test_ffn_forward_can_skip_connector_state_update_for_capture():

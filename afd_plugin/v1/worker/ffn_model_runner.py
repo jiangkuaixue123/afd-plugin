@@ -17,6 +17,11 @@ from vllm.model_executor.model_loader import get_model_loader
 from vllm.utils.mem_utils import DeviceMemoryProfiler
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
 
+from afd_plugin.compat.profiler import (
+    create_afd_gpu_profiler,
+    step_afd_gpu_profiler,
+    stop_afd_gpu_profiler,
+)
 from afd_plugin.config import AFDConfig, parse_afd_config
 from afd_plugin.connectors import (
     AFDConnectorFactory,
@@ -71,6 +76,7 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
         )
         self._cuda_graphs: dict[tuple, dict[str, Any]] = {}
         self._graph_memory_pool: Any | None = None
+        self.prof = create_afd_gpu_profiler("ffn")
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -122,6 +128,7 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
         is_warmup: bool = False,
     ) -> None:
         del scheduler_output, intermediate_tensors
+        step_afd_gpu_profiler(self.prof)
         if dp_metadata_list is None:
             raise RuntimeError("GPUFFNModelRunner requires dp_metadata_list")
         graph_key = self._make_graph_key(dp_metadata_list)
@@ -350,6 +357,7 @@ class GPUFFNModelRunner(LoRAModelRunnerMixin):
         return ()
 
     def shutdown(self) -> None:
+        stop_afd_gpu_profiler(self.prof)
         self.connector.close()
 
 

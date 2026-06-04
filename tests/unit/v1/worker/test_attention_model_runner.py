@@ -44,6 +44,7 @@ class _RecordingConnector:
         self.sent_dp_metadata_lists = []
         self.dp_metadata_update_flags = []
         self.sent_dp_metadata_flags = []
+        self.closed = False
 
     def is_attn_top_min_size_rank(self, world_rank):
         return world_rank == self.world_rank
@@ -67,6 +68,21 @@ class _RecordingConnector:
     ):
         self.sent_dp_metadata_lists.append(dp_metadata_list)
         self.sent_dp_metadata_flags.append((is_graph_capturing, is_warmup))
+
+    def close(self):
+        self.closed = True
+
+
+class _StepProfiler:
+    def __init__(self):
+        self.steps = 0
+        self.stopped = False
+
+    def step(self):
+        self.steps += 1
+
+    def stop(self):
+        self.stopped = True
 
 
 def _install_fake_vllm_forward_context(monkeypatch):
@@ -396,6 +412,43 @@ def test_attention_runner_rejects_empty_native_ubatches():
 
 def test_attention_runner_inherits_native_dummy_run_microbatching():
     assert "_dummy_run" in AFDAttentionModelRunner.__dict__
+
+
+def test_attention_runner_steps_gpu_profiler(monkeypatch):
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.prof = _StepProfiler()
+
+    def execute_model(_self, *args, **kwargs):
+        return args, kwargs
+
+    monkeypatch.setattr(
+        AFDAttentionModelRunner.__mro__[1],
+        "execute_model",
+        execute_model,
+    )
+
+    result = runner.execute_model("scheduler", flag=True)
+
+    assert runner.prof.steps == 1
+    assert result == (("scheduler",), {"flag": True})
+
+
+def test_attention_runner_stops_gpu_profiler_on_shutdown(monkeypatch):
+    runner = object.__new__(AFDAttentionModelRunner)
+    runner.prof = _StepProfiler()
+    runner.afd_connector = _RecordingConnector()
+    called = []
+
+    def shutdown(_self):
+        called.append(True)
+
+    monkeypatch.setattr(AFDAttentionModelRunner.__mro__[1], "shutdown", shutdown)
+
+    runner.shutdown()
+
+    assert runner.prof.stopped is True
+    assert runner.afd_connector.closed is True
+    assert called == [True]
 
 
 def test_forward_context_provider_installs_metadata_before_model_forward(monkeypatch):
