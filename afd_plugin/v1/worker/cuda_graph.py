@@ -186,11 +186,20 @@ def _aggregate_ffn_values_tuple(
     ffn_size: int,
     fallback: int,
 ) -> tuple[int, ...]:
-    if len(values) < attention_size:
+    # Expand DP-level values to AFD-level when TP > 1.
+    # With TP > 1, attention_size = num_attention_servers includes TP workers
+    # but values only has dp_size entries (from num_tokens_across_dp_cpu).
+    # Each DP rank's count is replicated tp_size times because all TP workers
+    # within the same DP rank process the same tokens.
+    expanded = values
+    if len(values) < attention_size and attention_size % len(values) == 0:
+        tp_size = attention_size // len(values)
+        expanded = tuple(values[i // tp_size] for i in range(attention_size))
+    if len(expanded) < attention_size:
         return tuple(max(1, int(fallback)) for _ in range(ffn_size))
     group_size = attention_size // ffn_size
     return tuple(
-        max(1, sum(values[idx * group_size : (idx + 1) * group_size]))
+        max(1, sum(expanded[idx * group_size : (idx + 1) * group_size]))
         for idx in range(ffn_size)
     )
 

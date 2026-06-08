@@ -12,6 +12,7 @@ from afd_plugin.compat.ascend import (
     apply_afd_ascend_patches_if_needed,
     ensure_ascend_runtime_available,
     fail_if_unsupported_npu_afd_features,
+    fix_all2all_backend_for_afd,
     init_ascend_workspace_for_afd,
     npu_afd_num_ubatches,
 )
@@ -42,6 +43,7 @@ class AFDNPUAttentionWorker(NPUWorker):
             expected_worker_qualname_override=NPU_ATTENTION_WORKER_FQCN,
         )
         fail_if_unsupported_npu_afd_features(self.vllm_config)
+        fix_all2all_backend_for_afd(self.vllm_config)
         if self.use_v2_model_runner:
             raise RuntimeError(
                 "AFD NPU Attention supports only vllm-ascend model runner v1",

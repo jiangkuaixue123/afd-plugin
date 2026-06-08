@@ -208,12 +208,21 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         num_tokens = _ffn_token_count_for_rank(self.connector, num_tokens_across_dp)
         rank_ffn_output = None
 
+        # Build DP-level token counts for vLLM's forward context.
+        # num_tokens_across_dp has ffn_size entries (AFD-level, one per
+        # role_rank = dp_rank * tp_size + tp_rank), but vLLM's DPMetadata
+        # expects dp_size entries where [dp_rank] equals batchsize.
+        dp_num_tokens_across_dp = _to_dp_level_token_counts(
+            num_tokens_across_dp,
+            dp_size=int(self.vllm_config.parallel_config.data_parallel_size),
+        )
+
         with ascend_forward_context(
             vllm_config=self.vllm_config,
             afd_metadata=afd_metadata,
             model_instance=self.model,
             num_tokens=num_tokens,
-            num_tokens_across_dp=num_tokens_across_dp,
+            num_tokens_across_dp=dp_num_tokens_across_dp,
             aclgraph_runtime_mode=aclgraph_runtime_mode,
         ) as forward_context:
             for layer_idx in range(max(int(self.num_layers or 0), 1)):
@@ -471,6 +480,19 @@ def _ffn_token_counts_across_ranks(
         values = [max(1, int(fallback))] * int(connector.ffn_size)
     else:
         attention_counts = _to_int_list(dp_metadata.num_tokens_across_dp_cpu)
+        # Expand DP-level counts to AFD-level counts when TP > 1.
+        # With TP, attn_size = num_attention_servers includes TP workers
+        # but num_tokens_across_dp_cpu only has dp_size entries.
+        # Each DP rank's token count is replicated tp_size times because
+        # all TP workers within the same DP rank process the same tokens.
+        if (
+            len(attention_counts) < int(connector.attn_size)
+            and int(connector.attn_size) % len(attention_counts) == 0
+        ):
+            tp_size = int(connector.attn_size) // len(attention_counts)
+            attention_counts = [
+                attention_counts[i // tp_size] for i in range(int(connector.attn_size))
+            ]
         if (
             len(attention_counts) >= int(connector.attn_size)
             and int(connector.attn_size) >= int(connector.ffn_size)
@@ -515,6 +537,29 @@ def _to_int_list(value: Any) -> list[int]:
     if isinstance(value, (list, tuple)):
         return [int(item) for item in value]
     return [int(item) for item in value.tolist()]
+
+
+def _to_dp_level_token_counts(
+    num_tokens_across_dp: Any,
+    *,
+    dp_size: int,
+) -> Any:
+    """Project AFD-level token counts back to DP-level for vLLM's forward context.
+
+    ``num_tokens_across_dp`` has ``ffn_size`` entries (one per AFD role_rank).
+    With TP > 1 each DP rank's count is replicated ``tp_size`` times, so the
+    layout is ``[dp0, dp0, dp1, dp1, ...]``.  vLLM's ``DPMetadata.make()``
+    expects exactly ``dp_size`` entries where ``[dp_rank] == batchsize``.
+    """
+    numel = len(num_tokens_across_dp)
+    if numel == dp_size:
+        return num_tokens_across_dp
+    if dp_size <= 0 or numel % dp_size != 0:
+        return num_tokens_across_dp
+    tp_size = numel // dp_size
+    # Take the first TP slot of each DP group (all TP slots are identical).
+    indices = [dp_idx * tp_size for dp_idx in range(dp_size)]
+    return num_tokens_across_dp[indices].contiguous()
 
 
 def _use_npu_aclgraph(vllm_config: object, runner: object) -> bool:

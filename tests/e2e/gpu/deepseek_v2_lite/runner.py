@@ -77,6 +77,16 @@ def main() -> int:
             print(f"\n=== Completion response: request {request_idx} ===")
             print(json.dumps(response, ensure_ascii=False, indent=2))
 
+        if args.expect_text:
+            for request_idx, response in enumerate(responses):
+                choices = response.get("choices", [])
+                assert choices, f"request {request_idx}: no choices in response"
+                text = choices[0].get("text", "")
+                assert args.expect_text in text, (
+                    f"request {request_idx}: expected {args.expect_text!r} in {text!r}"
+                )
+                print(f"  ✓ request {request_idx}: output contains expected text")
+
         assert_log_expectations(args, logs)
         return 0
     finally:
@@ -202,6 +212,23 @@ def parse_args() -> argparse.Namespace:
         help="Deprecated no-op kept for compatibility with existing scripts.",
     )
     parser.add_argument(
+        "--tp-size",
+        type=int,
+        default=1,
+        help="Tensor parallelism size. Defaults to 1.",
+    )
+    parser.add_argument(
+        "--expect-text",
+        default=None,
+        help="If set, assert that every completion response contains this text.",
+    )
+    parser.add_argument(
+        "--device-backend",
+        choices=["gpu", "npu"],
+        default="gpu",
+        help="Device backend. 'gpu' uses CUDA workers, 'npu' uses Ascend workers.",
+    )
+    parser.add_argument(
         "--common-vllm-arg",
         action="append",
         default=[],
@@ -246,9 +273,13 @@ def build_vllm_command(
     *,
     role: str,
 ) -> list[str]:
-    role_dp_size = (
+    tp_size = args.tp_size
+    role_total_servers = (
         args.num_attention_servers if role == "attention" else args.num_ffn_servers
     )
+    role_dp_size = max(1, role_total_servers // tp_size)
+    is_npu = args.device_backend == "npu"
+
     afd_config = {
         "afd": {
             "enabled": True,
@@ -260,11 +291,18 @@ def build_vllm_command(
             "num_ffn_servers": args.num_ffn_servers,
         },
     }
-    worker_cls = (
-        "afd_plugin.v1.worker.AFDAttentionWorker"
-        if role == "attention"
-        else "afd_plugin.v1.worker.AFDFFNWorker"
-    )
+    if is_npu:
+        worker_cls = (
+            "afd_plugin.v1.worker.ascend.AFDNPUAttentionWorker"
+            if role == "attention"
+            else "afd_plugin.v1.worker.ascend.AFDNPUFFNWorker"
+        )
+    else:
+        worker_cls = (
+            "afd_plugin.v1.worker.AFDAttentionWorker"
+            if role == "attention"
+            else "afd_plugin.v1.worker.AFDFFNWorker"
+        )
     cmd = [
         args.vllm_bin,
         "serve",
@@ -276,7 +314,7 @@ def build_vllm_command(
         "--data-parallel-size",
         str(role_dp_size),
         "--tensor-parallel-size",
-        "1",
+        str(tp_size),
         "--enable-expert-parallel",
         "--additional-config",
         json.dumps(afd_config, separators=(",", ":")),
@@ -362,9 +400,12 @@ def ffn_api_port(args: argparse.Namespace) -> int:
     return args.api_port_base + 1
 
 
-def build_env(cuda_visible_devices: str, args: argparse.Namespace) -> dict[str, str]:
+def build_env(visible_devices: str, args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+    if args.device_backend == "npu":
+        env["ASCEND_RT_VISIBLE_DEVICES"] = visible_devices
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = visible_devices
     env["VLLM_PLUGINS"] = "afd"
     env["PYTHONUNBUFFERED"] = "1"
     env.pop("AFD_PLUGIN_EARLY_ENGINE_PATCH", None)
