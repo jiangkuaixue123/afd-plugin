@@ -308,12 +308,34 @@ def _truthy(value: Any) -> bool:
     return bool(value)
 
 
+def fix_all2all_backend_for_afd(vllm_config: Any) -> None:
+    """Mirror vllm-ascend's platform.py all2all_backend override.
+
+    vllm-ascend sets ``all2all_backend = "flashinfer_all2allv"`` when
+    ``enable_sp`` is False, but only when ``worker_cls == "auto"``.
+    AFD workers use a custom ``worker_cls``, so this override never fires
+    and ``all2all_backend`` keeps its default ``"allgather_reducescatter"``.
+    That value triggers ``use_sequence_parallel_moe = True`` (because
+    ``enable_expert_parallel=True``, ``tp_size > 1``, ``dp_size > 1``),
+    which incorrectly splits MoE tokens via ``sequence_parallel_chunk``,
+    producing wrong output.
+
+    This function applies the same fix for AFD workers.
+    """
+    parallel_config = vllm_config.parallel_config
+    if not vllm_config.compilation_config.pass_config.enable_sp:
+        current = getattr(parallel_config, "all2all_backend", None)
+        if current != "flashinfer_all2allv":
+            parallel_config.all2all_backend = "flashinfer_all2allv"
+
+
 __all__ = [
     "apply_afd_ascend_patches_if_needed",
     "ascend_forward_context",
     "ensure_ascend_runtime_available",
     "ensure_vllm_config_has_afd_proxy",
     "fail_if_unsupported_npu_afd_features",
+    "fix_all2all_backend_for_afd",
     "init_ascend_workspace_for_afd",
     "mirror_afd_metadata_on_forward_context",
     "npu_afd_num_ubatches",

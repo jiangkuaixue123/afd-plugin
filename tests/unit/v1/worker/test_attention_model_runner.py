@@ -581,3 +581,118 @@ def test_afd_rank_derives_from_data_parallel_rank():
 
     assert ranked.afd_server_rank == 1
     assert config.afd_server_rank == 0
+
+
+# --- TP rank derivation tests ---
+
+
+def _parallel_config_with_tp(
+    *,
+    dp_size=1,
+    dp_rank=0,
+    tp_size=1,
+    **overrides,
+):
+    values = {
+        "data_parallel_size": dp_size,
+        "data_parallel_rank": dp_rank,
+        "tensor_parallel_size": tp_size,
+        "use_ubatching": False,
+        "num_ubatches": 1,
+        "dbo_decode_token_threshold": 32,
+        "dbo_prefill_token_threshold": 512,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_afd_rank_derives_from_tp_rank_dp1_tp2(monkeypatch):
+    """DP=1, TP=2: each TP worker gets a unique role_rank."""
+    monkeypatch.setattr(
+        sys.modules["vllm.distributed.parallel_state"],
+        "get_tensor_model_parallel_rank",
+        lambda: 1,
+    )
+    config = AFDConfig(
+        enabled=True,
+        role="attention",
+        connector="p2pconnector",
+        num_attention_servers=4,
+        num_ffn_servers=4,
+        afd_server_rank=0,
+    )
+    vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config_with_tp(dp_size=1, tp_size=2),
+    )
+
+    ranked = _with_dp_derived_afd_rank(vllm_config, config)
+
+    # role_rank = base(0) + dp_rank(0) * tp_size(2) + tp_rank(1) = 1
+    assert ranked.afd_server_rank == 1
+
+
+def test_afd_rank_derives_from_dp_and_tp_ranks_dp2_tp2(monkeypatch):
+    """DP=2, TP=2: role_rank = dp_rank * tp_size + tp_rank."""
+    monkeypatch.setattr(
+        sys.modules["vllm.distributed.parallel_state"],
+        "get_tensor_model_parallel_rank",
+        lambda: 1,
+    )
+    config = AFDConfig(
+        enabled=True,
+        role="attention",
+        connector="p2pconnector",
+        num_attention_servers=4,
+        num_ffn_servers=4,
+        afd_server_rank=0,
+    )
+    vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config_with_tp(dp_size=2, dp_rank=1, tp_size=2),
+    )
+
+    ranked = _with_dp_derived_afd_rank(vllm_config, config)
+
+    # role_rank = base(0) + dp_rank(1) * tp_size(2) + tp_rank(1) = 3
+    assert ranked.afd_server_rank == 3
+
+
+def test_afd_rank_unchanged_when_dp1_tp1():
+    """DP=1, TP=1: no derivation needed, config returned as-is."""
+    config = AFDConfig(
+        enabled=True,
+        role="attention",
+        connector="p2pconnector",
+        num_attention_servers=1,
+        num_ffn_servers=1,
+        afd_server_rank=0,
+    )
+    vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config_with_tp(dp_size=1, tp_size=1),
+    )
+
+    ranked = _with_dp_derived_afd_rank(vllm_config, config)
+
+    assert ranked is config
+
+
+def test_afd_rank_raises_for_out_of_range_dp2_tp2(monkeypatch):
+    """role_rank must stay within role_size."""
+    monkeypatch.setattr(
+        sys.modules["vllm.distributed.parallel_state"],
+        "get_tensor_model_parallel_rank",
+        lambda: 0,
+    )
+    config = AFDConfig(
+        enabled=True,
+        role="attention",
+        connector="p2pconnector",
+        num_attention_servers=2,
+        num_ffn_servers=2,
+        afd_server_rank=0,
+    )
+    vllm_config = SimpleNamespace(
+        parallel_config=_parallel_config_with_tp(dp_size=2, dp_rank=1, tp_size=2),
+    )
+
+    with pytest.raises(ValueError, match="out of range"):
+        _with_dp_derived_afd_rank(vllm_config, config)

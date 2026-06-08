@@ -596,6 +596,13 @@ def _num_tokens_for_ffn_rank(
         return max(1, int(fallback))
     token_counts = dp_metadata.num_tokens_across_dp_cpu
     counts = _to_int_list(token_counts)
+    # Expand DP-level counts to AFD-level when TP > 1.
+    # num_tokens_across_dp_cpu has dp_size entries, but attention_size
+    # = num_attention_servers includes TP workers.  Each DP rank's count
+    # is replicated tp_size times.
+    if len(counts) < attention_size and attention_size % len(counts) == 0:
+        tp_size = attention_size // len(counts)
+        counts = [counts[i // tp_size] for i in range(attention_size)]
     if len(counts) < attention_size:
         return max(1, int(fallback))
     if attention_size >= ffn_size and attention_size % ffn_size == 0:
