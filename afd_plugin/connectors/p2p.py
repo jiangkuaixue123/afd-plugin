@@ -257,7 +257,9 @@ class P2PAFDConnector(AFDConnectorBase):
         self,
         hidden_states: Any,
         metadata: AFDConnectorMetadata,
+        **kwargs: Any,
     ) -> None:
+        del kwargs
         if not _torch_is_compiling() and not metadata.validate_tensor_shape(
             tuple(hidden_states.shape),
         ):
@@ -291,8 +293,9 @@ class P2PAFDConnector(AFDConnectorBase):
         self,
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
+        **kwargs: Any,
     ) -> AFDRecvOutput:
-        del timeout_ms
+        del timeout_ms, kwargs
         import torch
 
         ubatch_idx = 0 if ubatch_idx is None else int(ubatch_idx)
@@ -333,7 +336,9 @@ class P2PAFDConnector(AFDConnectorBase):
         self,
         ffn_output: Any,
         metadata: AFDConnectorMetadata,
+        **kwargs: Any,
     ) -> None:
+        del kwargs
         if not _torch_is_compiling() and not metadata.validate_tensor_shape(
             tuple(ffn_output.shape),
         ):
