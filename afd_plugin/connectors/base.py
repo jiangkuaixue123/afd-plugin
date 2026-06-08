@@ -50,6 +50,7 @@ class AFDConnectorBase(ABC):
         self,
         hidden_states: Any,
         metadata: AFDConnectorMetadata,
+        **kwargs: Any,
     ) -> Any:
         raise NotImplementedError
 
@@ -62,6 +63,7 @@ class AFDConnectorBase(ABC):
         self,
         timeout_ms: int | None = None,
         ubatch_idx: int | None = None,
+        **kwargs: Any,
     ) -> AFDRecvOutput:
         raise NotImplementedError
 
@@ -70,6 +72,7 @@ class AFDConnectorBase(ABC):
         self,
         ffn_output: Any,
         metadata: AFDConnectorMetadata,
+        **kwargs: Any,
     ) -> None:
         raise NotImplementedError
 
