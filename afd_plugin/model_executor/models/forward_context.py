@@ -27,7 +27,7 @@ def get_afd_metadata_from_forward_context(forward_context: object | None = None)
     metadata = additional_kwargs.get("afd_metadata")
     if metadata is not None:
         return metadata
-    return forward_context.afd_metadata
+    return getattr(forward_context, "afd_metadata", None)
 
 
 @contextmanager
