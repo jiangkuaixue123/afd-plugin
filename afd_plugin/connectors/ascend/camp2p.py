@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from afd_plugin.compat.ascend import ensure_afd_ascend_ops_loaded
+from afd_plugin.compat.ascend import ensure_cam_p2p_ops_available
 from afd_plugin.config import AFDConfig
 from afd_plugin.connectors.base import AFDConnectorBase
 from afd_plugin.connectors.metadata import AFDConnectorMetadata, AFDRecvOutput
@@ -146,7 +146,7 @@ class CAMP2PAFDConnector(AFDConnectorBase):
     def init_afd_connector(self) -> None:
         if self._initialized:
             return
-        ensure_afd_ascend_ops_loaded()
+        ensure_cam_p2p_ops_available()
         import torch_npu  # noqa: F401
 
         _register_camp2p_custom_ops()
