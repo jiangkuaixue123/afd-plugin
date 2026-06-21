@@ -78,6 +78,9 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
         self._acl_graphs: dict[tuple, dict[str, Any]] = {}
         self.graph_pool = _resolve_graph_pool() if self.use_aclgraph else None
+        self._afd_world_rank = rank
+        self._afd_local_rank = local_rank
+        self._ffn_step_count = 0
         self.prof = create_afd_npu_profiler("ffn")
 
     @staticmethod
@@ -129,6 +132,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                 "execute_connector_driven_step requires a connector-driven "
                 "AFD connector",
             )
+        self._print_ffn_step_count("connector_driven")
         step_afd_npu_profiler(self.prof)
         self._ffn_forward_connector_driven()
         return None
@@ -143,6 +147,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         is_warmup: bool = False,
     ) -> None:
         del scheduler_output, intermediate_tensors
+        self._print_ffn_step_count("execute_model")
         step_afd_npu_profiler(self.prof)
         if dp_metadata_list is None:
             raise RuntimeError("AFD NPU FFN is connector-driven")
@@ -180,6 +185,18 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
 
         self._ffn_forward(dp_metadata_list=dp_metadata_list)
         return None
+
+    def _print_ffn_step_count(self, source: str) -> None:
+        self._ffn_step_count += 1
+        topology = getattr(self.connector, "topology", None)
+        role_rank = getattr(topology, "role_rank", "unknown")
+        print(
+            "ffn_step_count:"
+            f"{self._ffn_step_count} source:{source} "
+            f"rank:{self._afd_world_rank} local_rank:{self._afd_local_rank} "
+            f"afd_rank:{self.afd_config.afd_server_rank} role_rank:{role_rank}",
+            flush=True,
+        )
 
     def _make_graph_key(self, dp_metadata_list: dict[int, Any]) -> tuple:
         return make_ffn_graph_key(
@@ -684,17 +701,18 @@ def _slice_cam_payload_to_actual_tokens(
 ) -> Any:
     if shared_num_tokens is None:
         shared_num_tokens = num_tokens
-    hidden_states = hidden_states[:num_tokens]
+    shared_slice_tokens = shared_num_tokens if shared_num_tokens > 0 else 100
+    # hidden_states = hidden_states[:num_tokens]
     if payload.expand_x_shared is not None:
-        payload.expand_x_shared = payload.expand_x_shared[:shared_num_tokens]
-    if payload.dynamic_scales is not None:
-        payload.dynamic_scales = payload.dynamic_scales[:num_tokens]
+        payload.expand_x_shared = payload.expand_x_shared[:shared_slice_tokens]
+    # if payload.dynamic_scales is not None:
+    #     payload.dynamic_scales = payload.dynamic_scales[:num_tokens]
     if payload.dynamic_scales_shared is not None:
         payload.dynamic_scales_shared = payload.dynamic_scales_shared[
-            :shared_num_tokens
+            :shared_slice_tokens
         ]
-    if payload.x_active_mask is not None:
-        payload.x_active_mask = payload.x_active_mask[:num_tokens]
+    # if payload.x_active_mask is not None:
+    #     payload.x_active_mask = payload.x_active_mask[:num_tokens]
     return hidden_states
 
 
