@@ -28,7 +28,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> int:
@@ -39,7 +39,6 @@ def main() -> int:
 
     processes: list[subprocess.Popen[str]] = []
     log_threads: list[threading.Thread] = []
-    logs: dict[str, list[str]] = {"ffn": [], "attention": []}
 
     try:
         ffn_cmd = build_vllm_command(args, role="ffn")
@@ -51,9 +50,8 @@ def main() -> int:
             build_env(ffn_cuda_visible_devices, args),
         )
         processes.append(ffn_proc)
-        log_threads.append(stream_output("ffn", ffn_proc, logs["ffn"]))
+        log_threads.append(stream_output("ffn", ffn_proc))
 
-        time.sleep(args.ffn_start_delay)
         ensure_alive(ffn_proc, "FFN process exited during startup")
 
         attention_cmd = build_vllm_command(args, role="attention")
@@ -65,9 +63,7 @@ def main() -> int:
             build_env(attention_cuda_visible_devices, args),
         )
         processes.append(attention_proc)
-        log_threads.append(
-            stream_output("attention", attention_proc, logs["attention"]),
-        )
+        log_threads.append(stream_output("attention", attention_proc))
 
         ensure_alive(attention_proc, "Attention process exited during startup")
         wait_for_openai_api(args)
@@ -87,7 +83,6 @@ def main() -> int:
                 )
                 print(f"  ✓ request {request_idx}: output contains expected text")
 
-        assert_log_expectations(args, logs)
         return 0
     finally:
         terminate_processes(processes)
@@ -132,7 +127,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--afd-host", default="127.0.0.1")
     parser.add_argument("--afd-port", type=int, default=1239)
     parser.add_argument("--startup-timeout", type=float, default=900)
-    parser.add_argument("--ffn-start-delay", type=float, default=8)
     parser.add_argument("--prompt", default="San Francisco is a")
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -194,22 +188,6 @@ def parse_args() -> argparse.Namespace:
         "--use-decode-bench-connector",
         action="store_true",
         help="Pass an AFDDecodeBenchConnector kv-transfer-config to Attention.",
-    )
-    parser.add_argument(
-        "--expect-ffn-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-ffn-ubatch-cudagraph-replay",
-        action="store_true",
-        help="Deprecated no-op kept for compatibility with existing scripts.",
-    )
-    parser.add_argument(
-        "--expect-log-timeout",
-        type=float,
-        default=60,
-        help="Deprecated no-op kept for compatibility with existing scripts.",
     )
     parser.add_argument(
         "--tp-size",
@@ -284,7 +262,7 @@ def build_vllm_command(
         "afd": {
             "enabled": True,
             "role": role,
-            "connector": "p2pconnector",
+            "connector": "camp2pconnector" if is_npu else "p2pconnector",
             "host": args.afd_host,
             "port": args.afd_port,
             "num_attention_servers": args.num_attention_servers,
@@ -406,7 +384,7 @@ def build_env(visible_devices: str, args: argparse.Namespace) -> dict[str, str]:
         env["ASCEND_RT_VISIBLE_DEVICES"] = visible_devices
     else:
         env["CUDA_VISIBLE_DEVICES"] = visible_devices
-    env["VLLM_PLUGINS"] = "afd"
+    env["VLLM_PLUGINS"] = "ascend,afd" if args.device_backend == "npu" else "afd"
     env["PYTHONUNBUFFERED"] = "1"
     env.pop("AFD_PLUGIN_EARLY_ENGINE_PATCH", None)
     current_pythonpath = env.get("PYTHONPATH")
@@ -439,12 +417,10 @@ def start_process(
 def stream_output(
     name: str,
     process: subprocess.Popen[str],
-    log_lines: list[str],
 ) -> threading.Thread:
     def worker() -> None:
         assert process.stdout is not None
         for line in process.stdout:
-            log_lines.append(line)
             print(f"[{name}] {line}", end="")
 
     thread = threading.Thread(target=worker, name=f"{name}-log-stream", daemon=True)
@@ -537,14 +513,6 @@ def request_completions(args: argparse.Namespace) -> list[dict[str, Any]]:
     if not completed_responses:
         raise RuntimeError("All completion requests failed")
     return completed_responses
-
-
-def assert_log_expectations(
-    args: argparse.Namespace,
-    logs: dict[str, list[str]],
-) -> None:
-    del args, logs
-    return
 
 
 def ensure_alive(process: subprocess.Popen[str], message: str) -> None:
