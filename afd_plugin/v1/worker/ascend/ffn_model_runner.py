@@ -32,7 +32,6 @@ from afd_plugin.connectors import (
     AFDMetadata,
     AFDRecvOutput,
 )
-from afd_plugin.envs import camp2p_stub_io_enabled
 from afd_plugin.v1.worker.attention_model_runner import (
     _resolve_world_ranks,
     _with_dp_derived_afd_rank,
@@ -78,9 +77,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
         self._acl_graphs: dict[tuple, dict[str, Any]] = {}
         self.graph_pool = _resolve_graph_pool() if self.use_aclgraph else None
-        self._afd_world_rank = rank
-        self._afd_local_rank = local_rank
-        self._ffn_step_count = 0
         self.prof = create_afd_npu_profiler("ffn")
 
     @staticmethod
@@ -132,7 +128,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                 "execute_connector_driven_step requires a connector-driven "
                 "AFD connector",
             )
-        self._print_ffn_step_count("connector_driven")
         step_afd_npu_profiler(self.prof)
         self._ffn_forward_connector_driven()
         return None
@@ -147,7 +142,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         is_warmup: bool = False,
     ) -> None:
         del scheduler_output, intermediate_tensors
-        self._print_ffn_step_count("execute_model")
         step_afd_npu_profiler(self.prof)
         if dp_metadata_list is None:
             raise RuntimeError("AFD NPU FFN is connector-driven")
@@ -185,18 +179,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
 
         self._ffn_forward(dp_metadata_list=dp_metadata_list)
         return None
-
-    def _print_ffn_step_count(self, source: str) -> None:
-        self._ffn_step_count += 1
-        topology = getattr(self.connector, "topology", None)
-        role_rank = getattr(topology, "role_rank", "unknown")
-        print(
-            "ffn_step_count:"
-            f"{self._ffn_step_count} source:{source} "
-            f"rank:{self._afd_world_rank} local_rank:{self._afd_local_rank} "
-            f"afd_rank:{self.afd_config.afd_server_rank} role_rank:{role_rank}",
-            flush=True,
-        )
 
     def _make_graph_key(self, dp_metadata_list: dict[int, Any]) -> tuple:
         return make_ffn_graph_key(
@@ -306,15 +288,9 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         rank_ffn_output = None
 
         for _ in _ffn_layer_indices(self):
-            _log_ffn_runner_step(
-                "connector_driven_recv_begin",
-            )
             recv_output = self._recv_attn_output(
                 stage_idx,
                 CAM_RECV_PLACEHOLDER_LAYER_IDX,
-            )
-            _log_ffn_runner_step(
-                "connector_driven_recv_end",
             )
             hidden_states, metadata, payload = _normalize_recv_output(
                 recv_output,
@@ -398,21 +374,11 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                     x_active_mask=payload.x_active_mask,
                     cam_p2p_ep_name=payload.cam_p2p_ep_name or "",
                 )
-                _log_ffn_runner_step(
-                    "connector_driven_send_begin",
-                    stage_idx=stage_idx,
-                    layer_idx=layer_idx,
-                )
                 _send_ffn_output(
                     self.connector,
                     rank_ffn_output,
                     metadata,
                     stage_idx=stage_idx,
-                )
-                _log_ffn_runner_step(
-                    "connector_driven_send_end",
-                    stage_idx=stage_idx,
-                    layer_idx=layer_idx,
                 )
         return rank_ffn_output
 
@@ -520,10 +486,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         return int(torch.npu.mem_get_info()[0])
 
     def _recv_attn_output(self, stage_idx: int, layer_idx: int) -> Any:
-        _log_ffn_runner_step(
-            "recv_attn_output_begin",
-            layer_idx=layer_idx,
-        )
         recv_metadata_kwargs = {
             "ubatch_idx": stage_idx,
             "layer_idx": layer_idx,
@@ -540,10 +502,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         output = self.connector.recv_attn_output(
             metadata=metadata,
             ubatch_idx=stage_idx,
-        )
-        _log_ffn_runner_step(
-            "recv_attn_output_end",
-            layer_idx=layer_idx,
         )
         return output
 
@@ -612,13 +570,6 @@ def _normalize_recv_output(
         )
         recv_output.metadata = metadata
     return hidden_states, metadata, recv_output
-
-
-def _log_ffn_runner_step(event: str, **kwargs: object) -> None:
-    if not camp2p_stub_io_enabled():
-        return
-    fields = " ".join(f"{key}={value}" for key, value in kwargs.items())
-    logger.warning("AFD NPU FFN runner %s; %s", event, fields)
 
 
 def _cam_token_nums_rankid_layeridx(
@@ -840,6 +791,7 @@ def _to_dp_level_token_counts(
     # Take the first TP slot of each DP group (all TP slots are identical).
     indices = [dp_idx * tp_size for dp_idx in range(dp_size)]
     return num_tokens_across_dp[indices].contiguous()
+
 
 def _connector_driven_batch_size(connector: Any, fallback: int) -> int:
     return max(1, int(getattr(connector, "max_seq_len", fallback) or fallback))
