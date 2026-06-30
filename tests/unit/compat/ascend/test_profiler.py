@@ -107,7 +107,7 @@ def test_create_npu_profiler_uses_configured_schedule(monkeypatch):
         "skip_first": 7,
     }
     assert profiler_module.profile_kwargs["record_shapes"] is True
-    assert profiler_module.profile_kwargs["with_stack"] is False
+    assert profiler_module.profile_kwargs["with_stack"] is True
     assert profiler_module.profile_kwargs["with_modules"] is True
     assert profiler_module.trace_dir == "/tmp/afd-ffn"
 

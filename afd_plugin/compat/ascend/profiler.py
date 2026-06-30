@@ -78,8 +78,7 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> Any | None:
         aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
     )
     logger.info(
-        "AFD NPU %s profiler enabled. Traces will be saved to: %s; "
-        "with_stack=%s",
+        "AFD NPU %s profiler enabled. Traces will be saved to: %s; with_stack=%s",
         role,
         config.trace_dir,
         config.with_stack,
@@ -96,7 +95,7 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> Any | None:
             repeat=config.repeat,
             skip_first=config.skip_first,
         ),
-        with_stack=False,
+        with_stack=config.with_stack,
         with_modules=config.with_stack,
         record_shapes=True,
         experimental_config=experimental_config,
