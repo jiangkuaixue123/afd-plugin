@@ -18,6 +18,24 @@ def debug_pcp_metadata_enabled() -> bool:
     }
 
 
+def debug_tensor_values_enabled() -> bool:
+    return os.getenv("AFD_DEBUG_TENSOR_VALUES", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def debug_metadata_values_enabled() -> bool:
+    return os.getenv("AFD_DEBUG_METADATA_VALUES", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def debug_slice_summary(value: Any) -> tuple[Any, Any, Any]:
     return (
         getattr(value, "start", None),
@@ -35,7 +53,12 @@ def debug_scalar(value: Any) -> Any:
         return repr(value)
 
 
-def debug_value_summary(value: Any, *, limit: int = 8) -> Any:
+def debug_value_summary(
+    value: Any,
+    *,
+    limit: int = 8,
+    include_tensor_values: bool = False,
+) -> Any:
     if value is None:
         return None
     summary: dict[str, Any] = {"type": type(value).__name__}
@@ -50,7 +73,21 @@ def debug_value_summary(value: Any, *, limit: int = 8) -> Any:
         summary["device"] = str(value.device)
 
     try:
-        flat = value.detach().flatten().to("cpu") if hasattr(value, "detach") else None
+        if hasattr(value, "detach"):
+            try:
+                summary["numel"] = int(value.numel())
+            except Exception:
+                pass
+            device = str(getattr(value, "device", ""))
+            if (
+                device != "cpu"
+                and not include_tensor_values
+                and not debug_tensor_values_enabled()
+            ):
+                return summary
+            flat = value.detach().flatten().to("cpu")
+        else:
+            flat = None
         if flat is not None:
             total = int(flat.numel())
             summary["numel"] = total
@@ -59,6 +96,12 @@ def debug_value_summary(value: Any, *, limit: int = 8) -> Any:
             if total > limit:
                 tail_count = min(limit, total)
                 summary["tail"] = [debug_scalar(item) for item in flat[-tail_count:]]
+            if total > 0:
+                try:
+                    summary["min"] = debug_scalar(flat.min())
+                    summary["max"] = debug_scalar(flat.max())
+                except Exception as exc:
+                    summary["min_max_error"] = repr(exc)
             return summary
     except Exception as exc:
         summary["values_error"] = repr(exc)
@@ -73,6 +116,12 @@ def debug_value_summary(value: Any, *, limit: int = 8) -> Any:
             summary["head"] = [debug_scalar(item) for item in flat[:head_count]]
             if total > limit:
                 summary["tail"] = [debug_scalar(item) for item in flat[-limit:]]
+            if total > 0:
+                try:
+                    summary["min"] = debug_scalar(flat.min())
+                    summary["max"] = debug_scalar(flat.max())
+                except Exception as exc:
+                    summary["min_max_error"] = repr(exc)
             return summary
     except Exception as exc:
         summary["values_error"] = repr(exc)
@@ -92,6 +141,14 @@ def debug_value_summary(value: Any, *, limit: int = 8) -> Any:
         return summary
 
     return value
+
+
+def debug_metadata_value_summary(value: Any, *, limit: int = 8) -> Any:
+    return debug_value_summary(
+        value,
+        limit=limit,
+        include_tensor_values=debug_metadata_values_enabled(),
+    )
 
 
 def debug_pcp_metadata_summary(pcp_metadata: Any) -> Any:
@@ -123,7 +180,7 @@ def debug_pcp_metadata_summary(pcp_metadata: Any) -> Any:
     summary: dict[str, Any] = {"type": type(pcp_metadata).__name__}
     for name in fields:
         if hasattr(pcp_metadata, name):
-            summary[name] = debug_value_summary(getattr(pcp_metadata, name))
+            summary[name] = debug_metadata_value_summary(getattr(pcp_metadata, name))
     return summary
 
 
@@ -141,14 +198,88 @@ def debug_pcp_common_metadata_summary(common_attn_metadata: Any) -> dict[str, An
         "num_computed_tokens_cpu",
         "block_table_tensor",
         "slot_mapping",
+        "actual_seq_lengths_q",
+        "positions",
+        "attn_state",
     )
     summary: dict[str, Any] = {"type": type(common_attn_metadata).__name__}
     for name in fields:
         if hasattr(common_attn_metadata, name):
-            summary[name] = debug_value_summary(getattr(common_attn_metadata, name))
+            summary[name] = debug_metadata_value_summary(
+                getattr(common_attn_metadata, name),
+            )
     if hasattr(common_attn_metadata, "prefill_context_parallel_metadata"):
         summary["prefill_context_parallel_metadata"] = debug_pcp_metadata_summary(
             common_attn_metadata.prefill_context_parallel_metadata,
+        )
+    return summary
+
+
+def debug_dsa_cp_context_summary(dsa_cp_context: Any) -> Any:
+    if dsa_cp_context is None:
+        return None
+    fields = (
+        "num_tokens",
+        "num_tokens_pad",
+        "local_start",
+        "local_end",
+        "local_end_with_pad",
+        "slot_mapping_cp",
+        "actual_seq_lengths_query",
+        "actual_seq_lengths_key",
+    )
+    summary: dict[str, Any] = {"type": type(dsa_cp_context).__name__}
+    for name in fields:
+        if hasattr(dsa_cp_context, name):
+            summary[name] = debug_metadata_value_summary(getattr(dsa_cp_context, name))
+    return summary
+
+
+def debug_attn_metadata_summary(attn_metadata: Any) -> dict[str, Any]:
+    summary: dict[str, Any] = {"type": type(attn_metadata).__name__}
+    if isinstance(attn_metadata, dict):
+        summary["len"] = len(attn_metadata)
+        layer_names = list(attn_metadata.keys())
+        summary["layer_names_head"] = layer_names[:4]
+        if not layer_names:
+            return summary
+        summary["sample_layer"] = layer_names[0]
+        attn_metadata = attn_metadata[layer_names[0]]
+        summary["sample_type"] = type(attn_metadata).__name__
+
+    fields = (
+        "num_input_tokens",
+        "num_actual_tokens",
+        "num_prefills",
+        "num_decodes",
+        "num_spec_decodes",
+        "max_query_len",
+        "max_seq_len",
+        "cum_query_lens",
+        "query_start_loc",
+        "query_start_loc_cpu",
+        "seq_lens",
+        "seq_lens_cpu",
+        "block_table",
+        "slot_mapping",
+        "positions",
+        "cos",
+        "sin",
+        "attn_mask",
+        "attn_state",
+    )
+    for name in fields:
+        if hasattr(attn_metadata, name):
+            summary[name] = debug_metadata_value_summary(
+                getattr(attn_metadata, name),
+            )
+    if hasattr(attn_metadata, "prefill_context_parallel_metadata"):
+        summary["prefill_context_parallel_metadata"] = debug_pcp_metadata_summary(
+            attn_metadata.prefill_context_parallel_metadata,
+        )
+    if hasattr(attn_metadata, "dsa_cp_context"):
+        summary["dsa_cp_context"] = debug_dsa_cp_context_summary(
+            attn_metadata.dsa_cp_context,
         )
     return summary
 

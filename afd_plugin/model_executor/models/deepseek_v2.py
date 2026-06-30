@@ -45,6 +45,11 @@ from afd_plugin.model_executor.models import (
     get_afd_metadata_from_forward_context,
     get_async_moe_ubatch_metadata_from_forward_context,
 )
+from afd_plugin.v1.worker.ascend.pcp_debug import (
+    debug_attn_metadata_summary as _debug_attn_metadata_summary,
+    debug_slice_summary as _debug_slice_summary,
+    debug_value_summary as _debug_value_summary,
+)
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 logger = init_logger(__name__)
@@ -867,25 +872,23 @@ class AFDDeepseekV2Model(torch.nn.Module):
         if dense_end_layer == self.end_layer:
             return hidden_states, residual
 
-        stage_hidden_states = [
-            hidden_states[ubatch_slice.token_slice] for ubatch_slice in ubatch_slices
-        ]
-        stage_residual = [
-            _slice_optional_first_dim(residual, ubatch_slice.token_slice)
-            for ubatch_slice in ubatch_slices
-        ]
-        stage_positions = [
-            _slice_positions(positions, ubatch_slice.token_slice)
-            for ubatch_slice in ubatch_slices
-        ]
-        stage_llama_4_scaling = [
-            _slice_llama_4_scaling(
-                llama_4_scaling,
-                ubatch_slice.token_slice,
-                num_tokens=int(hidden_states.shape[0]),
-            )
-            for ubatch_slice in ubatch_slices
-        ]
+        (
+            stage_hidden_states,
+            stage_residual,
+            stage_positions,
+            stage_llama_4_scaling,
+            tensor_ubatch_slices,
+        ) = _build_async_moe_stage_inputs(
+            hidden_states=hidden_states,
+            residual=residual,
+            positions=positions,
+            llama_4_scaling=llama_4_scaling,
+            ubatch_slices=ubatch_slices,
+            use_tensor_ubatch_slices=bool(
+                async_moe_ubatch_metadata.get("use_tensor_ubatch_slices", False),
+            ),
+        )
+        async_moe_ubatch_metadata["tensor_ubatch_slices"] = tensor_ubatch_slices
 
         moe_start_layer = max(self.start_layer, first_moe_layer)
         moe_layers = list(islice(self.layers, moe_start_layer, self.end_layer))
@@ -895,12 +898,35 @@ class AFDDeepseekV2Model(torch.nn.Module):
             stage_idx: int,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
             ubatch_slice = ubatch_slices[stage_idx]
+            tensor_ubatch_slice = tensor_ubatch_slices[stage_idx]
             with _use_async_moe_ubatch_forward_context(
                 forward_context=forward_context,
                 parent_afd_metadata=afd_metadata,
                 async_moe_ubatch_metadata=async_moe_ubatch_metadata,
                 stage_idx=stage_idx,
             ):
+                logger.warning(
+                    "AFD DEBUG async MoE compute attention input; layer_idx=%s "
+                    "stage_idx=%s request_slice=%s token_slice=%s "
+                    "tensor_token_slice=%s expected_tokens=%s "
+                    "hidden_states=%s residual=%s "
+                    "positions=%s llama_4_scaling=%s context_num_tokens=%s "
+                    "context_attn_metadata=%s",
+                    getattr(layer, "layer_idx", None),
+                    stage_idx,
+                    _debug_slice_summary(ubatch_slice.request_slice),
+                    _debug_slice_summary(ubatch_slice.token_slice),
+                    _debug_slice_summary(tensor_ubatch_slice.token_slice),
+                    int(tensor_ubatch_slice.num_tokens),
+                    _debug_value_summary(stage_hidden_states[stage_idx]),
+                    _debug_value_summary(stage_residual[stage_idx]),
+                    _debug_value_summary(stage_positions[stage_idx]),
+                    _debug_value_summary(stage_llama_4_scaling[stage_idx]),
+                    _debug_value_summary(getattr(forward_context, "num_tokens", None)),
+                    _debug_attn_metadata_summary(
+                        getattr(forward_context, "attn_metadata", None),
+                    ),
+                )
                 (
                     stage_hidden_states[stage_idx],
                     stage_residual[stage_idx],
@@ -917,7 +943,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
                 raise RuntimeError(
                     "async_moe_ubatching requires Attention-side topk payloads",
                 )
-            expected_tokens = int(ubatch_slice.num_tokens)
+            expected_tokens = int(tensor_ubatch_slice.num_tokens)
             if int(stage_hidden_states[stage_idx].shape[0]) != expected_tokens:
                 raise RuntimeError(
                     "async_moe_ubatching stage output token count mismatch: "
@@ -933,7 +959,7 @@ class AFDDeepseekV2Model(torch.nn.Module):
             topk_ids: torch.Tensor,
             router_logits: torch.Tensor | None,
         ) -> None:
-            expected_tokens = int(ubatch_slices[stage_idx].num_tokens)
+            expected_tokens = int(tensor_ubatch_slices[stage_idx].num_tokens)
             stage_metadata = AFDConnectorMetadata.create_attention_metadata(
                 layer_idx=layer.layer_idx,
                 stage_idx=stage_idx,
@@ -1060,10 +1086,14 @@ def _use_async_moe_ubatch_forward_context(
     stage_idx: int,
 ) -> Iterator[None]:
     ubatch_slices = async_moe_ubatch_metadata["ubatch_slices"]
+    tensor_ubatch_slices = async_moe_ubatch_metadata.get(
+        "tensor_ubatch_slices",
+        ubatch_slices,
+    )
     attn_metadata = async_moe_ubatch_metadata["attn_metadata"]
     stage_afd_metadata = _build_async_moe_stage_afd_metadata(
         parent_afd_metadata,
-        ubatch_slices,
+        tensor_ubatch_slices,
         stage_idx,
     )
 
@@ -1102,7 +1132,27 @@ def _use_async_moe_ubatch_forward_context(
         forward_context.afd_metadata = stage_afd_metadata
         forward_context.ubatch_idx = stage_idx
         forward_context.num_ubatches = len(ubatch_slices)
-        forward_context.num_tokens = int(ubatch_slices[stage_idx].num_tokens)
+        forward_context.num_tokens = int(tensor_ubatch_slices[stage_idx].num_tokens)
+        logger.warning(
+            "AFD DEBUG async MoE forward context installed; stage_idx=%s "
+            "num_ubatches=%s request_slice=%s token_slice=%s "
+            "tensor_token_slice=%s num_tokens=%s tensor_num_tokens=%s "
+            "attn_metadata=%s "
+            "afd_tokens_start_loc=%s afd_reqs_start_loc=%s afd_tokens_lens=%s "
+            "afd_tokens_unpadded_lens=%s",
+            stage_idx,
+            len(ubatch_slices),
+            _debug_slice_summary(ubatch_slices[stage_idx].request_slice),
+            _debug_slice_summary(ubatch_slices[stage_idx].token_slice),
+            _debug_slice_summary(tensor_ubatch_slices[stage_idx].token_slice),
+            int(ubatch_slices[stage_idx].num_tokens),
+            int(tensor_ubatch_slices[stage_idx].num_tokens),
+            _debug_attn_metadata_summary(forward_context.attn_metadata),
+            getattr(stage_afd_metadata, "afd_tokens_start_loc", None),
+            getattr(stage_afd_metadata, "afd_reqs_start_loc", None),
+            getattr(stage_afd_metadata, "afd_tokens_lens", None),
+            getattr(stage_afd_metadata, "afd_tokens_unpadded_lens", None),
+        )
         yield
     finally:
         for name, value in saved_attrs.items():
@@ -1147,6 +1197,283 @@ def _cat_optional_async_moe_stage_outputs(
         ],
         dim=0,
     )
+
+
+def _build_async_moe_stage_inputs(
+    *,
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor | None,
+    positions: torch.Tensor,
+    llama_4_scaling: torch.Tensor | None,
+    ubatch_slices: Any,
+    use_tensor_ubatch_slices: bool,
+) -> tuple[
+    list[torch.Tensor],
+    list[torch.Tensor | None],
+    list[torch.Tensor],
+    list[torch.Tensor | None],
+    Any,
+]:
+    tensor_ubatch_slices = (
+        _build_tensor_ubatch_slices_for_current_rank(hidden_states, ubatch_slices)
+        if use_tensor_ubatch_slices
+        else ubatch_slices
+    )
+    if tensor_ubatch_slices is ubatch_slices:
+        return _build_async_moe_stage_inputs_with_slices(
+            hidden_states=hidden_states,
+            residual=residual,
+            positions=positions,
+            llama_4_scaling=llama_4_scaling,
+            ubatch_slices=ubatch_slices,
+            tensor_ubatch_slices=tensor_ubatch_slices,
+            num_tokens=int(hidden_states.shape[0]),
+        )
+
+    from vllm.distributed.parallel_state import get_tp_group
+
+    tp_group = get_tp_group()
+    tp_rank = int(tp_group.rank_in_group)
+    tp_size = int(tp_group.world_size)
+    global_num_tokens = sum(int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices)
+
+    stage_hidden_states: list[torch.Tensor] = []
+    stage_residual: list[torch.Tensor | None] = []
+    stage_positions: list[torch.Tensor] = []
+    stage_llama_4_scaling: list[torch.Tensor | None] = []
+
+    for ubatch_slice, tensor_ubatch_slice in zip(
+        ubatch_slices,
+        tensor_ubatch_slices,
+        strict=True,
+    ):
+        local_stage_hidden = _slice_and_pad_first_dim(
+            hidden_states,
+            tensor_ubatch_slice.token_slice,
+        )
+        local_stage_residual = _slice_optional_with_tensor_slice(
+            residual,
+            tensor_ubatch_slice.token_slice,
+        )
+        local_stage_positions = _slice_sequence_tensor_for_sp_stage(
+            positions,
+            ubatch_slice.token_slice,
+            tensor_ubatch_slice.token_slice,
+            local_num_tokens=int(hidden_states.shape[0]),
+            global_num_tokens=global_num_tokens,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+        )
+        local_stage_llama_4_scaling = _slice_optional_sequence_tensor_for_sp_stage(
+            llama_4_scaling,
+            ubatch_slice.token_slice,
+            tensor_ubatch_slice.token_slice,
+            local_num_tokens=int(hidden_states.shape[0]),
+            global_num_tokens=global_num_tokens,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+        )
+
+        stage_hidden_states.append(local_stage_hidden)
+        stage_residual.append(local_stage_residual)
+        stage_positions.append(local_stage_positions)
+        stage_llama_4_scaling.append(local_stage_llama_4_scaling)
+
+    return (
+        stage_hidden_states,
+        stage_residual,
+        stage_positions,
+        stage_llama_4_scaling,
+        tensor_ubatch_slices,
+    )
+
+
+def _build_async_moe_stage_inputs_with_slices(
+    *,
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor | None,
+    positions: torch.Tensor,
+    llama_4_scaling: torch.Tensor | None,
+    ubatch_slices: Any,
+    tensor_ubatch_slices: Any,
+    num_tokens: int,
+) -> tuple[
+    list[torch.Tensor],
+    list[torch.Tensor | None],
+    list[torch.Tensor],
+    list[torch.Tensor | None],
+    Any,
+]:
+    stage_hidden_states = [
+        hidden_states[tensor_ubatch_slice.token_slice]
+        for tensor_ubatch_slice in tensor_ubatch_slices
+    ]
+    stage_residual = [
+        _slice_optional_first_dim(residual, tensor_ubatch_slice.token_slice)
+        for tensor_ubatch_slice in tensor_ubatch_slices
+    ]
+    stage_positions = [
+        _slice_positions(positions, tensor_ubatch_slice.token_slice)
+        for tensor_ubatch_slice in tensor_ubatch_slices
+    ]
+    stage_llama_4_scaling = [
+        _slice_llama_4_scaling(
+            llama_4_scaling,
+            tensor_ubatch_slice.token_slice,
+            num_tokens=num_tokens,
+        )
+        for tensor_ubatch_slice in tensor_ubatch_slices
+    ]
+    return (
+        stage_hidden_states,
+        stage_residual,
+        stage_positions,
+        stage_llama_4_scaling,
+        tensor_ubatch_slices,
+    )
+
+
+def _build_tensor_ubatch_slices_for_current_rank(
+    hidden_states: torch.Tensor,
+    ubatch_slices: Any,
+) -> Any:
+    global_num_tokens = sum(int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices)
+    if int(hidden_states.shape[0]) == global_num_tokens:
+        return ubatch_slices
+    try:
+        from vllm.distributed.parallel_state import get_tp_group
+        from vllm_ascend.utils import enable_sp
+
+        tp_size = int(get_tp_group().world_size)
+        if not bool(enable_sp()) or tp_size <= 1:
+            return ubatch_slices
+    except Exception:
+        return ubatch_slices
+
+    from vllm.v1.worker.ubatch_utils import UBatchSlice
+
+    tensor_ubatch_slices = []
+    local_start = 0
+    for ubatch_slice in ubatch_slices:
+        local_tokens = _sp_local_token_count(int(ubatch_slice.num_tokens), tp_size)
+        local_stop = local_start + local_tokens
+        tensor_ubatch_slices.append(
+            UBatchSlice(
+                ubatch_slice.request_slice,
+                slice(local_start, local_stop),
+            ),
+        )
+        local_start = local_stop
+    return tensor_ubatch_slices
+
+
+def _sp_local_token_count(num_tokens: int, tp_size: int) -> int:
+    return (int(num_tokens) + int(tp_size) - 1) // int(tp_size)
+
+
+def _slice_optional_with_tensor_slice(
+    tensor: torch.Tensor | None,
+    token_slice: slice,
+) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    return _slice_and_pad_first_dim(tensor, token_slice)
+
+
+def _slice_and_pad_first_dim(
+    tensor: torch.Tensor,
+    tensor_slice: slice,
+) -> torch.Tensor:
+    stage_tensor = tensor[tensor_slice]
+    expected_tokens = int(tensor_slice.stop) - int(tensor_slice.start)
+    missing_tokens = expected_tokens - int(stage_tensor.shape[0])
+    if missing_tokens > 0:
+        stage_tensor = _pad_first_dim(stage_tensor, missing_tokens)
+    return stage_tensor
+
+
+def _slice_optional_sequence_tensor_for_sp_stage(
+    tensor: torch.Tensor | None,
+    global_token_slice: slice,
+    tensor_token_slice: slice,
+    *,
+    local_num_tokens: int,
+    global_num_tokens: int,
+    tp_rank: int,
+    tp_size: int,
+) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    return _slice_sequence_tensor_for_sp_stage(
+        tensor,
+        global_token_slice,
+        tensor_token_slice,
+        local_num_tokens=local_num_tokens,
+        global_num_tokens=global_num_tokens,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+    )
+
+
+def _slice_sequence_tensor_for_sp_stage(
+    tensor: torch.Tensor,
+    global_token_slice: slice,
+    tensor_token_slice: slice,
+    *,
+    local_num_tokens: int,
+    global_num_tokens: int,
+    tp_rank: int,
+    tp_size: int,
+) -> torch.Tensor:
+    if _sequence_tensor_token_dim(tensor, local_num_tokens) is not None:
+        return _slice_sequence_tensor(tensor, tensor_token_slice)
+    if _sequence_tensor_token_dim(tensor, global_num_tokens) is None:
+        return tensor
+
+    stage_tensor = _slice_sequence_tensor(tensor, global_token_slice)
+    stage_tokens = int(global_token_slice.stop) - int(global_token_slice.start)
+    padded_tokens = _sp_local_token_count(stage_tokens, tp_size) * tp_size
+    if padded_tokens > stage_tokens:
+        stage_tensor = _pad_sequence_tensor(
+            stage_tensor,
+            padded_tokens - stage_tokens,
+        )
+    tokens_per_rank = padded_tokens // tp_size
+    local_start = tp_rank * tokens_per_rank
+    local_stop = local_start + tokens_per_rank
+    return _slice_sequence_tensor(stage_tensor, slice(local_start, local_stop))
+
+
+def _sequence_tensor_token_dim(tensor: torch.Tensor, num_tokens: int) -> int | None:
+    if tensor.dim() > 0 and int(tensor.shape[0]) == int(num_tokens):
+        return 0
+    if tensor.dim() > 1 and int(tensor.shape[1]) == int(num_tokens):
+        return 1
+    return None
+
+
+def _slice_sequence_tensor(tensor: torch.Tensor, token_slice: slice) -> torch.Tensor:
+    if tensor.dim() > 1 and int(tensor.shape[0]) <= 4:
+        return tensor[:, token_slice]
+    return tensor[token_slice]
+
+
+def _pad_sequence_tensor(tensor: torch.Tensor, pad_tokens: int) -> torch.Tensor:
+    if pad_tokens <= 0:
+        return tensor
+    if tensor.dim() > 1 and int(tensor.shape[0]) <= 4:
+        pad_shape = (tensor.shape[0], pad_tokens, *tensor.shape[2:])
+        padding = tensor.new_zeros(pad_shape)
+        return torch.cat([tensor, padding], dim=1)
+    return _pad_first_dim(tensor, pad_tokens)
+
+
+def _pad_first_dim(tensor: torch.Tensor, pad_tokens: int) -> torch.Tensor:
+    if pad_tokens <= 0:
+        return tensor
+    pad_shape = (pad_tokens, *tensor.shape[1:])
+    padding = tensor.new_zeros(pad_shape)
+    return torch.cat([tensor, padding], dim=0)
 
 
 def _slice_optional_first_dim(

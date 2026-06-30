@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +35,8 @@ from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadat
 from afd_plugin.model_executor.models import ASYNC_MOE_UBATCH_METADATA_KEY
 from afd_plugin.v1.worker.ascend.pcp_debug import (
     clone_pcp_metadata,
+    debug_attn_metadata_summary as _debug_attn_metadata_summary,
+    debug_metadata_value_summary,
     debug_pcp_common_metadata_summary,
     debug_pcp_manager_summary,
     debug_pcp_metadata_enabled,
@@ -46,6 +49,7 @@ from afd_plugin.v1.worker.ascend.pcp_debug import (
 from afd_plugin.v1.worker.ascend.ubatch_utils import (
     check_enable_ubatch,
     create_request_boundary_ubatch_slices,
+    create_ubatch_slices,
     pad_out_ubatch_slices,
 )
 from afd_plugin.v1.worker.attention_model_runner import (
@@ -90,6 +94,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self._afd_async_moe_ubatch_metadata = None
         self.ubatch_slices = None
         self.prof = create_afd_npu_profiler("attention")
+        _apply_debug_sfa_indexer_dump_patch_if_needed()
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -190,6 +195,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         values: dict[str, Any],
     ) -> Any:
         full_metadata = super()._build_attention_metadata(*args, **kwargs)
+        _refresh_dsa_cp_context_tensors_inplace(full_metadata)
         self._afd_async_moe_ubatch_metadata = None
         self._afd_pending_metadata = self._build_afd_metadata(
             None,
@@ -200,17 +206,22 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         if num_scheduled_tokens_np is None:
             return full_metadata
 
-        ubatch_slices = create_request_boundary_ubatch_slices(
+        ubatch_slices, split_mode = _create_async_moe_ubatch_slices(
+            self.vllm_config,
             num_scheduled_tokens_np,
+            num_tokens=int(values.get("num_tokens", 0)),
+            num_tokens_padded=values.get("num_tokens_padded"),
+            num_reqs_padded=values.get("num_reqs_padded"),
             num_ubatches=async_moe_num_ubatches(self.afd_config),
         )
         if ubatch_slices is None:
             return full_metadata
 
         logger.warning(
-            "AFD NPU async MoE ubatch split; num_reqs=%s num_tokens=%s "
+            "AFD NPU async MoE ubatch split; mode=%s num_reqs=%s num_tokens=%s "
             "num_scheduled_tokens=%s request_slices=%s token_slices=%s "
             "stage_num_tokens=%s",
+            split_mode,
             len(num_scheduled_tokens_np),
             int(values.get("num_tokens", 0)),
             num_scheduled_tokens_np.tolist(),
@@ -234,6 +245,18 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             *stage_args,
             **stage_kwargs,
         )
+        _refresh_dsa_cp_context_tensors_inplace(full_metadata)
+        _refresh_dsa_cp_context_tensors_inplace(stage_attn_metadata)
+        for ubid, ubatch_slice in enumerate(ubatch_slices):
+            logger.warning(
+                "AFD DEBUG async MoE stage metadata built; ubid=%s "
+                "request_slice=%s token_slice=%s expected_tokens=%s metadata=%s",
+                ubid,
+                debug_slice_summary(ubatch_slice.request_slice),
+                debug_slice_summary(ubatch_slice.token_slice),
+                int(ubatch_slice.num_tokens),
+                _debug_attn_metadata_summary(stage_attn_metadata[ubid]),
+            )
         self._afd_pending_metadata = self._build_afd_metadata(
             ubatch_slices,
             int(values.get("num_tokens", 0)),
@@ -241,7 +264,15 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self._afd_async_moe_ubatch_metadata = {
             "attn_metadata": stage_attn_metadata,
             "ubatch_slices": ubatch_slices,
+            "use_tensor_ubatch_slices": split_mode == "token_balanced_tp_sp",
         }
+        if split_mode == "token_balanced_tp_sp":
+            self._afd_async_moe_ubatch_metadata["dp_ubatch_slices"] = (
+                _make_tp_local_ubatch_slices(
+                    ubatch_slices,
+                    int(self.vllm_config.parallel_config.tensor_parallel_size),
+                )
+            )
         return full_metadata
 
     def _build_attention_metadata_with_ubatches(
@@ -566,6 +597,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                         attn_metadata_i.num_spec_decodes :
                     ].fill_(0)
 
+            _refresh_dsa_cp_context_tensors_inplace(attn_metadata_i)
             assert ubid is not None
             attn_metadata_dict = attn_metadata[ubid]
             for layer_name in attn_group.layer_names:
@@ -627,6 +659,18 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                         ubid,
                         kv_cache_gid,
                         attn_gid,
+                    )
+                    logger.warning(
+                        "AFD DEBUG async MoE common metadata before build; "
+                        "kv_cache_gid=%s attn_gid=%s ubid=%s request_slice=%s "
+                        "token_slice=%s expected_tokens=%s common=%s",
+                        kv_cache_gid,
+                        attn_gid,
+                        ubid,
+                        debug_slice_summary(ubatch_slices[ubid].request_slice),
+                        debug_slice_summary(ubatch_slices[ubid].token_slice),
+                        int(ubatch_slices[ubid].num_tokens),
+                        debug_pcp_common_metadata_summary(ubatch_cm),
                     )
                     _build_attn_group_metadata(kv_cache_gid, attn_gid, ubatch_cm, ubid)
 
@@ -1258,8 +1302,17 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         forward_context.additional_kwargs[ASYNC_MOE_UBATCH_METADATA_KEY] = (
             self._afd_async_moe_ubatch_metadata
         )
+        dp_ubatch_slices = self._afd_async_moe_ubatch_metadata.get(
+            "dp_ubatch_slices",
+        )
+        if dp_ubatch_slices:
+            self._send_dp_metadata(forward_context.dp_metadata, dp_ubatch_slices)
 
     def _send_dp_metadata(self, dp_metadata: Any, ubatch_slices: Any) -> None:
+        if not bool(
+            getattr(self.afd_connector, "uses_dp_metadata_control_plane", True),
+        ):
+            return
         if ubatch_slices and len(ubatch_slices) > 1:
             dp_metadata_list = {
                 idx: metadata
@@ -1749,6 +1802,319 @@ def _normalize_metadata_ubatch_slices(
         int(num_tokens_padded),
         int(num_reqs_padded),
     )
+
+
+def _create_async_moe_ubatch_slices(
+    vllm_config: object,
+    num_scheduled_tokens_np: Any,
+    *,
+    num_tokens: int,
+    num_tokens_padded: Any,
+    num_reqs_padded: Any,
+    num_ubatches: int,
+) -> tuple[Any | None, str]:
+    if _enable_token_balanced_async_moe_split(vllm_config):
+        split_total = int(num_tokens_padded or num_tokens)
+        token_split_points = _token_balanced_split_points(
+            split_total,
+            num_ubatches,
+            int(vllm_config.parallel_config.tensor_parallel_size),
+        )
+        if token_split_points is not None:
+            ubatch_slices = create_ubatch_slices(
+                num_scheduled_tokens_np,
+                token_split_points,
+            )
+            if num_tokens_padded is not None and num_reqs_padded is not None:
+                ubatch_slices = pad_out_ubatch_slices(
+                    ubatch_slices,
+                    int(num_tokens_padded),
+                    int(num_reqs_padded),
+                )
+            return ubatch_slices, "token_balanced_tp_sp"
+
+    return (
+        create_request_boundary_ubatch_slices(
+            num_scheduled_tokens_np,
+            num_ubatches=num_ubatches,
+        ),
+        "request_boundary",
+    )
+
+
+def _enable_token_balanced_async_moe_split(vllm_config: object) -> bool:
+    parallel_config = vllm_config.parallel_config
+    if int(getattr(parallel_config, "tensor_parallel_size", 1)) <= 1:
+        return False
+    if int(getattr(parallel_config, "prefill_context_parallel_size", 1)) != 1:
+        return False
+    if int(getattr(parallel_config, "decode_context_parallel_size", 1)) != 1:
+        return False
+    try:
+        from vllm_ascend.utils import enable_sp
+
+        return bool(enable_sp(vllm_config))
+    except TypeError:
+        from vllm_ascend.utils import enable_sp
+
+        return bool(enable_sp())
+    except Exception:
+        return False
+
+
+def _token_balanced_split_points(
+    num_tokens: int,
+    num_ubatches: int,
+    tp_size: int,
+) -> list[int] | None:
+    if num_ubatches <= 1 or num_tokens < num_ubatches:
+        return None
+    split_points: list[int] = []
+    for idx in range(1, num_ubatches):
+        split_point = (num_tokens * idx) // num_ubatches
+        if tp_size > 1:
+            split_point = (split_point // tp_size) * tp_size
+        if split_point <= 0 or split_point >= num_tokens:
+            return None
+        if split_points and split_point <= split_points[-1]:
+            return None
+        split_points.append(split_point)
+    return split_points
+
+
+def _make_tp_local_ubatch_slices(ubatch_slices: Any, tp_size: int) -> Any:
+    from vllm.v1.worker.ubatch_utils import UBatchSlice
+
+    local_slices = []
+    local_start = 0
+    for ubatch_slice in ubatch_slices:
+        local_tokens = (int(ubatch_slice.num_tokens) + int(tp_size) - 1) // int(
+            tp_size,
+        )
+        local_stop = local_start + local_tokens
+        local_slices.append(
+            UBatchSlice(
+                ubatch_slice.request_slice,
+                slice(local_start, local_stop),
+            ),
+        )
+        local_start = local_stop
+    return local_slices
+
+
+def _refresh_dsa_cp_context_tensors_inplace(attn_metadata: Any) -> None:
+    if attn_metadata is None:
+        return
+    if isinstance(attn_metadata, dict):
+        for value in attn_metadata.values():
+            _refresh_dsa_cp_context_tensors_inplace(value)
+        return
+    if isinstance(attn_metadata, list | tuple):
+        for value in attn_metadata:
+            _refresh_dsa_cp_context_tensors_inplace(value)
+        return
+
+    dsa_cp_context = getattr(attn_metadata, "dsa_cp_context", None)
+    if dsa_cp_context is None:
+        return
+    cloned_context = copy.copy(dsa_cp_context)
+    slot_mapping_cp = getattr(cloned_context, "slot_mapping_cp", None)
+    if hasattr(slot_mapping_cp, "clone"):
+        cloned_context.slot_mapping_cp = slot_mapping_cp.clone()
+
+    recomputed = _recompute_dsa_cp_actual_seq_lengths(attn_metadata, cloned_context)
+    if recomputed is None:
+        for name in ("actual_seq_lengths_query", "actual_seq_lengths_key"):
+            value = getattr(cloned_context, name, None)
+            if hasattr(value, "clone"):
+                setattr(cloned_context, name, value.clone())
+    else:
+        query_lengths, key_lengths = recomputed
+        cloned_context.actual_seq_lengths_query = query_lengths
+        cloned_context.actual_seq_lengths_key = key_lengths
+        _warn_if_dsa_cp_lengths_suspicious(attn_metadata, cloned_context)
+    attn_metadata.dsa_cp_context = cloned_context
+
+
+def _recompute_dsa_cp_actual_seq_lengths(
+    attn_metadata: Any,
+    dsa_cp_context: Any,
+) -> tuple[Any, Any] | None:
+    cum_query_lens = getattr(attn_metadata, "cum_query_lens", None)
+    seq_lens = getattr(attn_metadata, "seq_lens", None)
+    if cum_query_lens is None or seq_lens is None:
+        return None
+
+    try:
+        cum_query_lens_cpu = [
+            int(value)
+            for value in cum_query_lens.detach().flatten().to("cpu").tolist()
+        ]
+        seq_lens_cpu = [
+            int(value) for value in seq_lens.detach().flatten().to("cpu").tolist()
+        ]
+        local_start = int(getattr(dsa_cp_context, "local_start"))
+        local_end_with_pad = int(getattr(dsa_cp_context, "local_end_with_pad"))
+    except Exception as exc:
+        logger.warning(
+            "AFD DEBUG DSA CP lengths refresh skipped; metadata=%s error=%r",
+            _debug_attn_metadata_summary(attn_metadata),
+            exc,
+        )
+        return None
+
+    num_reqs = min(len(cum_query_lens_cpu), len(seq_lens_cpu))
+    query_values: list[int] = []
+    key_values: list[int] = []
+    last_token = 0
+    local_cum = 0
+    for req_idx in range(num_reqs):
+        global_start = last_token
+        global_end = int(cum_query_lens_cpu[req_idx])
+        last_token = global_end
+
+        req_local_start = max(global_start, local_start)
+        req_local_end = min(global_end, local_end_with_pad)
+        num_local_tokens = max(0, req_local_end - req_local_start)
+        if num_local_tokens > 0:
+            local_cum += num_local_tokens
+            offset = global_end - req_local_end
+            key_len = int(seq_lens_cpu[req_idx]) - offset
+            key_values.append(max(0, key_len))
+        else:
+            key_values.append(0)
+        query_values.append(local_cum)
+
+    query_template = getattr(dsa_cp_context, "actual_seq_lengths_query", None)
+    key_template = getattr(dsa_cp_context, "actual_seq_lengths_key", None)
+    if not hasattr(query_template, "new_tensor"):
+        query_template = cum_query_lens
+    if not hasattr(key_template, "new_tensor"):
+        key_template = seq_lens
+    return (
+        query_template.new_tensor(query_values),
+        key_template.new_tensor(key_values),
+    )
+
+
+def _warn_if_dsa_cp_lengths_suspicious(attn_metadata: Any, dsa_cp_context: Any) -> None:
+    query_lengths = getattr(dsa_cp_context, "actual_seq_lengths_query", None)
+    if not hasattr(query_lengths, "detach"):
+        return
+    try:
+        query_values = [
+            int(value)
+            for value in query_lengths.detach().flatten().to("cpu").tolist()
+        ]
+    except Exception:
+        return
+    if any(
+        later < earlier
+        for earlier, later in zip(query_values, query_values[1:], strict=False)
+    ):
+        logger.warning(
+            "AFD DEBUG DSA CP query lengths are non-monotonic after refresh; "
+            "query_lengths=%s metadata=%s",
+            query_values,
+            _debug_attn_metadata_summary(attn_metadata),
+        )
+    local_tokens = int(getattr(dsa_cp_context, "local_end_with_pad", 0)) - int(
+        getattr(dsa_cp_context, "local_start", 0),
+    )
+    if query_values and query_values[-1] > local_tokens:
+        logger.warning(
+            "AFD DEBUG DSA CP query lengths exceed local token span; "
+            "query_lengths=%s local_tokens=%s metadata=%s",
+            query_values,
+            local_tokens,
+            _debug_attn_metadata_summary(attn_metadata),
+        )
+
+
+def _debug_sfa_indexer_dump_enabled() -> bool:
+    return os.getenv("AFD_DEBUG_SFA_INDEXER", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _apply_debug_sfa_indexer_dump_patch_if_needed() -> None:
+    if not _debug_sfa_indexer_dump_enabled():
+        return
+    try:
+        from vllm_ascend.attention.sfa_v1 import AscendSFAImpl
+    except Exception as exc:
+        logger.warning("AFD DEBUG SFA indexer patch skipped; error=%r", exc)
+        return
+
+    patch_attr = "_afd_plugin_debug_sfa_indexer_dump_patch"
+    if getattr(AscendSFAImpl, patch_attr, False):
+        return
+
+    original = AscendSFAImpl.indexer_select_post_process
+
+    def wrapped_indexer_select_post_process(
+        self: Any,
+        x: Any,
+        q_c: Any,
+        kv_cache: Any,
+        attn_metadata: Any,
+        cos: Any,
+        sin: Any,
+        actual_seq_lengths_query: Any,
+        actual_seq_lengths_key: Any,
+    ) -> Any:
+        _refresh_dsa_cp_context_tensors_inplace(attn_metadata)
+        dsa_cp_context = getattr(attn_metadata, "dsa_cp_context", None)
+        if dsa_cp_context is not None:
+            actual_seq_lengths_query = dsa_cp_context.actual_seq_lengths_query
+            actual_seq_lengths_key = dsa_cp_context.actual_seq_lengths_key
+
+        kv_cache_summary = None
+        try:
+            if kv_cache is not None:
+                kv_cache_summary = [
+                    debug_value_summary(kv_cache_item)
+                    for kv_cache_item in kv_cache
+                ]
+        except Exception as exc:
+            kv_cache_summary = {"error": repr(exc)}
+
+        logger.warning(
+            "AFD DEBUG SFA indexer input; impl=%s "
+            "use_sparse_c8_indexer=%s use_torch_npu_lightning_indexer=%s "
+            "x=%s q_c=%s kv_cache=%s cos=%s sin=%s "
+            "actual_seq_lengths_query=%s actual_seq_lengths_key=%s "
+            "attn_metadata=%s",
+            type(self).__name__,
+            getattr(self, "use_sparse_c8_indexer", None),
+            getattr(self, "use_torch_npu_lightning_indexer", None),
+            debug_value_summary(x),
+            debug_value_summary(q_c),
+            kv_cache_summary,
+            debug_metadata_value_summary(cos),
+            debug_metadata_value_summary(sin),
+            debug_metadata_value_summary(actual_seq_lengths_query),
+            debug_metadata_value_summary(actual_seq_lengths_key),
+            _debug_attn_metadata_summary(attn_metadata),
+        )
+        return original(
+            self,
+            x,
+            q_c,
+            kv_cache,
+            attn_metadata,
+            cos,
+            sin,
+            actual_seq_lengths_query,
+            actual_seq_lengths_key,
+        )
+
+    AscendSFAImpl.indexer_select_post_process = wrapped_indexer_select_post_process
+    setattr(AscendSFAImpl, patch_attr, True)
+    logger.warning("AFD DEBUG SFA indexer patch applied")
 
 
 def _replace_attention_metadata_ubatch_slices(
