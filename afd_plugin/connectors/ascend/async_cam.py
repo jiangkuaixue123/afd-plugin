@@ -500,6 +500,11 @@ class AFDAsyncConnector(AFDConnectorBase):
                 "AFD async CAM combine send requires "
                 "TokenNums_Rankid_Layeridx from async_dispatch_recv",
             )
+        ffn_output = _ensure_non_empty_routed_output_for_combine_send(
+            ffn_output,
+            expand_x_shared,
+            token_nums_rankid_layeridx,
+        )
         _log_cam_op_inputs(
             "async_combine_send",
             ffn_output=ffn_output,
@@ -642,6 +647,48 @@ def _log_cam_op_inputs(op_name: str, **kwargs: object) -> None:
 
 def _log_cam_op_outputs(op_name: str, **kwargs: object) -> None:
     _log_cam_op_values(op_name, "outputs", **kwargs)
+
+
+def _ensure_non_empty_routed_output_for_combine_send(
+    ffn_output: Tensor,
+    expand_x_shared: object,
+    token_nums_rankid_layeridx: object,
+) -> Tensor:
+    if not isinstance(expand_x_shared, Tensor):
+        return ffn_output
+    if ffn_output.ndim < 2 or expand_x_shared.ndim < 2:
+        return ffn_output
+    if ffn_output.shape[0] != 0 or expand_x_shared.shape[0] <= 0:
+        return ffn_output
+    total_tokens = _cam_metadata_int_or_none(token_nums_rankid_layeridx, 0)
+    if total_tokens not in (None, int(expand_x_shared.shape[0])):
+        return ffn_output
+    logger.warning(
+        "AFD CAM async_combine_send using dummy routed output for "
+        "shared-only payload; routed_shape=%s shared_shape=%s total_tokens=%s",
+        tuple(ffn_output.shape),
+        tuple(expand_x_shared.shape),
+        total_tokens,
+    )
+    return ffn_output.new_zeros((1, *tuple(ffn_output.shape[1:])))
+
+
+def _cam_metadata_int_or_none(value: object, index: int) -> int | None:
+    if isinstance(value, Tensor):
+        item = value[index]
+    elif isinstance(value, (list, tuple)):
+        try:
+            item = value[index]
+        except IndexError:
+            return None
+    else:
+        return None
+    if isinstance(item, (int, float)):
+        return int(item)
+    try:
+        return int(item.item())
+    except Exception:
+        return None
 
 
 def build_async_topology(

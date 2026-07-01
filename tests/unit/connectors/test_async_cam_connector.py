@@ -328,6 +328,52 @@ def test_async_ffn_side_dispatch_recv_and_combine_send(monkeypatch):
     assert fake_torch.ops.umdk_cam_op_lib.calls[1][1][3] is recv_output.atten_batch_size
 
 
+def test_async_combine_send_uses_dummy_routed_output_for_shared_only_payload(
+    monkeypatch,
+):
+    import torch
+
+    fake_torch = _FakeTorch()
+    monkeypatch.setattr(async_cam_module, "torch", fake_torch)
+    connector = AFDAsyncConnector(
+        0,
+        0,
+        _vllm_config(),
+        _afd_config(role="ffn"),
+    )
+    connector._initialized = True
+    connector.comm_args = _FakeTensor((1,), dtype="fp16")
+
+    token_metadata = torch.tensor([1, 0, 7, 1, 16], dtype=torch.int64)
+    metadata = AFDConnectorMetadata.create_ffn_metadata(
+        layer_idx=7,
+        stage_idx=0,
+        seq_lens=[0],
+    )
+    metadata.connector_data = AFDAsyncConnectorData(
+        batch_size=8,
+        hidden_size=16,
+        topk=2,
+        layer_idx=7,
+        token_nums_rankid_layeridx=token_metadata,
+    )
+    routed_output = torch.empty((0, 16), dtype=torch.bfloat16)
+    shared_output = torch.empty((1, 16), dtype=torch.bfloat16)
+
+    connector.send_ffn_output(
+        routed_output,
+        metadata,
+        expand_x_shared=shared_output,
+    )
+
+    assert fake_torch.ops.umdk_cam_op_lib.calls[0][0] == "combine_send"
+    combine_args = fake_torch.ops.umdk_cam_op_lib.calls[0][1]
+    assert combine_args[0].shape == (1, 16)
+    assert combine_args[0] is not routed_output
+    assert combine_args[1] is shared_output
+    assert combine_args[3] is token_metadata
+
+
 def test_async_combine_send_requires_dispatch_recv_token_metadata(monkeypatch):
     fake_torch = _FakeTorch()
     monkeypatch.setattr(async_cam_module, "torch", fake_torch)
