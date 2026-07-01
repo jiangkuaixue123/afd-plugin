@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import copy
-import os
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -35,8 +34,6 @@ from afd_plugin.connectors import AFDConnectorFactory, AFDDPMetadata, AFDMetadat
 from afd_plugin.model_executor.models import ASYNC_MOE_UBATCH_METADATA_KEY
 from afd_plugin.v1.worker.ascend.pcp_debug import (
     clone_pcp_metadata,
-    debug_attn_metadata_summary as _debug_attn_metadata_summary,
-    debug_metadata_value_summary,
     debug_pcp_common_metadata_summary,
     debug_pcp_manager_summary,
     debug_pcp_metadata_enabled,
@@ -94,7 +91,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self._afd_async_moe_ubatch_metadata = None
         self.ubatch_slices = None
         self.prof = create_afd_npu_profiler("attention")
-        _apply_debug_sfa_indexer_dump_patch_if_needed()
 
     @staticmethod
     def parse_config(vllm_config: object) -> AFDConfig:
@@ -217,25 +213,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         if ubatch_slices is None:
             return full_metadata
 
-        logger.warning(
-            "AFD NPU async MoE ubatch split; mode=%s num_reqs=%s num_tokens=%s "
-            "num_scheduled_tokens=%s request_slices=%s token_slices=%s "
-            "stage_num_tokens=%s",
-            split_mode,
-            len(num_scheduled_tokens_np),
-            int(values.get("num_tokens", 0)),
-            num_scheduled_tokens_np.tolist(),
-            [
-                (ubatch_slice.request_slice.start, ubatch_slice.request_slice.stop)
-                for ubatch_slice in ubatch_slices
-            ],
-            [
-                (ubatch_slice.token_slice.start, ubatch_slice.token_slice.stop)
-                for ubatch_slice in ubatch_slices
-            ],
-            [int(ubatch_slice.num_tokens) for ubatch_slice in ubatch_slices],
-        )
-
         stage_args, stage_kwargs = _replace_attention_metadata_ubatch_slices(
             args,
             kwargs,
@@ -247,16 +224,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         )
         _refresh_dsa_cp_context_tensors_inplace(full_metadata)
         _refresh_dsa_cp_context_tensors_inplace(stage_attn_metadata)
-        for ubid, ubatch_slice in enumerate(ubatch_slices):
-            logger.warning(
-                "AFD DEBUG async MoE stage metadata built; ubid=%s "
-                "request_slice=%s token_slice=%s expected_tokens=%s metadata=%s",
-                ubid,
-                debug_slice_summary(ubatch_slice.request_slice),
-                debug_slice_summary(ubatch_slice.token_slice),
-                int(ubatch_slice.num_tokens),
-                _debug_attn_metadata_summary(stage_attn_metadata[ubid]),
-            )
         self._afd_pending_metadata = self._build_afd_metadata(
             ubatch_slices,
             int(values.get("num_tokens", 0)),
@@ -659,18 +626,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                         ubid,
                         kv_cache_gid,
                         attn_gid,
-                    )
-                    logger.warning(
-                        "AFD DEBUG async MoE common metadata before build; "
-                        "kv_cache_gid=%s attn_gid=%s ubid=%s request_slice=%s "
-                        "token_slice=%s expected_tokens=%s common=%s",
-                        kv_cache_gid,
-                        attn_gid,
-                        ubid,
-                        debug_slice_summary(ubatch_slices[ubid].request_slice),
-                        debug_slice_summary(ubatch_slices[ubid].token_slice),
-                        int(ubatch_slices[ubid].num_tokens),
-                        debug_pcp_common_metadata_summary(ubatch_cm),
                     )
                     _build_attn_group_metadata(kv_cache_gid, attn_gid, ubatch_cm, ubid)
 
@@ -1957,8 +1912,7 @@ def _recompute_dsa_cp_actual_seq_lengths(
         local_end_with_pad = int(getattr(dsa_cp_context, "local_end_with_pad"))
     except Exception as exc:
         logger.warning(
-            "AFD DEBUG DSA CP lengths refresh skipped; metadata=%s error=%r",
-            _debug_attn_metadata_summary(attn_metadata),
+            "AFD DSA CP lengths refresh skipped; error=%r",
             exc,
         )
         return None
@@ -2013,108 +1967,20 @@ def _warn_if_dsa_cp_lengths_suspicious(attn_metadata: Any, dsa_cp_context: Any) 
         for earlier, later in zip(query_values, query_values[1:], strict=False)
     ):
         logger.warning(
-            "AFD DEBUG DSA CP query lengths are non-monotonic after refresh; "
-            "query_lengths=%s metadata=%s",
+            "AFD DSA CP query lengths are non-monotonic after refresh; "
+            "query_lengths=%s",
             query_values,
-            _debug_attn_metadata_summary(attn_metadata),
         )
     local_tokens = int(getattr(dsa_cp_context, "local_end_with_pad", 0)) - int(
         getattr(dsa_cp_context, "local_start", 0),
     )
     if query_values and query_values[-1] > local_tokens:
         logger.warning(
-            "AFD DEBUG DSA CP query lengths exceed local token span; "
-            "query_lengths=%s local_tokens=%s metadata=%s",
+            "AFD DSA CP query lengths exceed local token span; "
+            "query_lengths=%s local_tokens=%s",
             query_values,
             local_tokens,
-            _debug_attn_metadata_summary(attn_metadata),
         )
-
-
-def _debug_sfa_indexer_dump_enabled() -> bool:
-    return os.getenv("AFD_DEBUG_SFA_INDEXER", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _apply_debug_sfa_indexer_dump_patch_if_needed() -> None:
-    if not _debug_sfa_indexer_dump_enabled():
-        return
-    try:
-        from vllm_ascend.attention.sfa_v1 import AscendSFAImpl
-    except Exception as exc:
-        logger.warning("AFD DEBUG SFA indexer patch skipped; error=%r", exc)
-        return
-
-    patch_attr = "_afd_plugin_debug_sfa_indexer_dump_patch"
-    if getattr(AscendSFAImpl, patch_attr, False):
-        return
-
-    original = AscendSFAImpl.indexer_select_post_process
-
-    def wrapped_indexer_select_post_process(
-        self: Any,
-        x: Any,
-        q_c: Any,
-        kv_cache: Any,
-        attn_metadata: Any,
-        cos: Any,
-        sin: Any,
-        actual_seq_lengths_query: Any,
-        actual_seq_lengths_key: Any,
-    ) -> Any:
-        _refresh_dsa_cp_context_tensors_inplace(attn_metadata)
-        dsa_cp_context = getattr(attn_metadata, "dsa_cp_context", None)
-        if dsa_cp_context is not None:
-            actual_seq_lengths_query = dsa_cp_context.actual_seq_lengths_query
-            actual_seq_lengths_key = dsa_cp_context.actual_seq_lengths_key
-
-        kv_cache_summary = None
-        try:
-            if kv_cache is not None:
-                kv_cache_summary = [
-                    debug_value_summary(kv_cache_item)
-                    for kv_cache_item in kv_cache
-                ]
-        except Exception as exc:
-            kv_cache_summary = {"error": repr(exc)}
-
-        logger.warning(
-            "AFD DEBUG SFA indexer input; impl=%s "
-            "use_sparse_c8_indexer=%s use_torch_npu_lightning_indexer=%s "
-            "x=%s q_c=%s kv_cache=%s cos=%s sin=%s "
-            "actual_seq_lengths_query=%s actual_seq_lengths_key=%s "
-            "attn_metadata=%s",
-            type(self).__name__,
-            getattr(self, "use_sparse_c8_indexer", None),
-            getattr(self, "use_torch_npu_lightning_indexer", None),
-            debug_value_summary(x),
-            debug_value_summary(q_c),
-            kv_cache_summary,
-            debug_metadata_value_summary(cos),
-            debug_metadata_value_summary(sin),
-            debug_metadata_value_summary(actual_seq_lengths_query),
-            debug_metadata_value_summary(actual_seq_lengths_key),
-            _debug_attn_metadata_summary(attn_metadata),
-        )
-        return original(
-            self,
-            x,
-            q_c,
-            kv_cache,
-            attn_metadata,
-            cos,
-            sin,
-            actual_seq_lengths_query,
-            actual_seq_lengths_key,
-        )
-
-    AscendSFAImpl.indexer_select_post_process = wrapped_indexer_select_post_process
-    setattr(AscendSFAImpl, patch_attr, True)
-    logger.warning("AFD DEBUG SFA indexer patch applied")
 
 
 def _replace_attention_metadata_ubatch_slices(

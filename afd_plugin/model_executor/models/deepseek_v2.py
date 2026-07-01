@@ -45,11 +45,6 @@ from afd_plugin.model_executor.models import (
     get_afd_metadata_from_forward_context,
     get_async_moe_ubatch_metadata_from_forward_context,
 )
-from afd_plugin.v1.worker.ascend.pcp_debug import (
-    debug_attn_metadata_summary as _debug_attn_metadata_summary,
-    debug_slice_summary as _debug_slice_summary,
-    debug_value_summary as _debug_value_summary,
-)
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 logger = init_logger(__name__)
@@ -897,7 +892,6 @@ class AFDDeepseekV2Model(torch.nn.Module):
             layer: Any,
             stage_idx: int,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-            ubatch_slice = ubatch_slices[stage_idx]
             tensor_ubatch_slice = tensor_ubatch_slices[stage_idx]
             with _use_async_moe_ubatch_forward_context(
                 forward_context=forward_context,
@@ -905,28 +899,6 @@ class AFDDeepseekV2Model(torch.nn.Module):
                 async_moe_ubatch_metadata=async_moe_ubatch_metadata,
                 stage_idx=stage_idx,
             ):
-                logger.warning(
-                    "AFD DEBUG async MoE compute attention input; layer_idx=%s "
-                    "stage_idx=%s request_slice=%s token_slice=%s "
-                    "tensor_token_slice=%s expected_tokens=%s "
-                    "hidden_states=%s residual=%s "
-                    "positions=%s llama_4_scaling=%s context_num_tokens=%s "
-                    "context_attn_metadata=%s",
-                    getattr(layer, "layer_idx", None),
-                    stage_idx,
-                    _debug_slice_summary(ubatch_slice.request_slice),
-                    _debug_slice_summary(ubatch_slice.token_slice),
-                    _debug_slice_summary(tensor_ubatch_slice.token_slice),
-                    int(tensor_ubatch_slice.num_tokens),
-                    _debug_value_summary(stage_hidden_states[stage_idx]),
-                    _debug_value_summary(stage_residual[stage_idx]),
-                    _debug_value_summary(stage_positions[stage_idx]),
-                    _debug_value_summary(stage_llama_4_scaling[stage_idx]),
-                    _debug_value_summary(getattr(forward_context, "num_tokens", None)),
-                    _debug_attn_metadata_summary(
-                        getattr(forward_context, "attn_metadata", None),
-                    ),
-                )
                 (
                     stage_hidden_states[stage_idx],
                     stage_residual[stage_idx],
@@ -1133,26 +1105,6 @@ def _use_async_moe_ubatch_forward_context(
         forward_context.ubatch_idx = stage_idx
         forward_context.num_ubatches = len(ubatch_slices)
         forward_context.num_tokens = int(tensor_ubatch_slices[stage_idx].num_tokens)
-        logger.warning(
-            "AFD DEBUG async MoE forward context installed; stage_idx=%s "
-            "num_ubatches=%s request_slice=%s token_slice=%s "
-            "tensor_token_slice=%s num_tokens=%s tensor_num_tokens=%s "
-            "attn_metadata=%s "
-            "afd_tokens_start_loc=%s afd_reqs_start_loc=%s afd_tokens_lens=%s "
-            "afd_tokens_unpadded_lens=%s",
-            stage_idx,
-            len(ubatch_slices),
-            _debug_slice_summary(ubatch_slices[stage_idx].request_slice),
-            _debug_slice_summary(ubatch_slices[stage_idx].token_slice),
-            _debug_slice_summary(tensor_ubatch_slices[stage_idx].token_slice),
-            int(ubatch_slices[stage_idx].num_tokens),
-            int(tensor_ubatch_slices[stage_idx].num_tokens),
-            _debug_attn_metadata_summary(forward_context.attn_metadata),
-            getattr(stage_afd_metadata, "afd_tokens_start_loc", None),
-            getattr(stage_afd_metadata, "afd_reqs_start_loc", None),
-            getattr(stage_afd_metadata, "afd_tokens_lens", None),
-            getattr(stage_afd_metadata, "afd_tokens_unpadded_lens", None),
-        )
         yield
     finally:
         for name, value in saved_attrs.items():
