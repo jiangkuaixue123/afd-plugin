@@ -53,7 +53,7 @@ Connector support:
 | Connector | Platform | Status | Notes |
 | --- | --- | --- | --- |
 | `p2pconnector` | CUDA | Supported | FFN ranks are ordered before Attention ranks. `num_attention_servers` must be greater than or equal to `num_ffn_servers` and divisible by it. |
-| `camp2pconnector` | Ascend NPU | Supported | Uses HCCL/CAMP2P custom ops. Requires an Ascend build with `AFD_BUILD_ASCEND_OPS=1`. |
+| `camp2pconnector` | Ascend NPU | Supported | Uses HCCL/CAMP2P custom ops. Ascend ops build by default; set `AFD_BUILD_ASCEND_OPS=0` to skip them. |
 
 Connector implementations are grouped by backend package:
 `afd_plugin.connectors.gpu` for GPU-only connectors,

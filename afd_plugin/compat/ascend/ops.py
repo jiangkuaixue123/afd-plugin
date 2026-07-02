@@ -59,8 +59,8 @@ def _assert_afd_namespace_registered(torch: object) -> None:
 def ensure_afd_ascend_ops_loaded() -> None:
     """Import the compiled extension that registers ``torch.ops.afd_ascend``.
 
-    The extension is optional at package import time.  It is built only when
-    ``AFD_BUILD_ASCEND_OPS=1`` is set in an Ascend environment.
+    The extension is optional at package import time.  It is built by default
+    in an Ascend environment unless ``AFD_BUILD_ASCEND_OPS=0`` is set.
     """
 
     _ensure_custom_opp_env()
@@ -71,7 +71,7 @@ def ensure_afd_ascend_ops_loaded() -> None:
     except ImportError as exc:
         raise RuntimeError(
             "AFD Ascend custom ops are not available. Build the package with "
-            "AFD_BUILD_ASCEND_OPS=1 in a torch-npu/CANN environment.",
+            "Ascend ops enabled in a torch-npu/CANN environment.",
         ) from exc
     _assert_afd_namespace_registered(torch)
 

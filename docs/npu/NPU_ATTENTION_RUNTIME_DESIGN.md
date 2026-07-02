@@ -125,10 +125,11 @@ groups and loads plugin-owned Ascend custom ops lazily when
 `init_afd_connector()` runs.
 
 The custom ops are optional at package import time, but NPU AFD data path
-requires a build with:
+requires an Ascend ops build. This build is enabled by default; set
+`AFD_BUILD_ASCEND_OPS=0` only when intentionally skipping the NPU extension.
 
 ```bash
-AFD_BUILD_ASCEND_OPS=1
+AFD_BUILD_ASCEND_OPS=0
 ```
 
 ## Supported And Rejected Features

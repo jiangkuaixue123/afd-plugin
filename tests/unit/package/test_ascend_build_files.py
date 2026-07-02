@@ -24,11 +24,11 @@ def test_ascend_a2e_e2a_sources_are_vendored():
         assert (root / relpath).is_file(), relpath
 
 
-def test_ascend_ops_build_is_opt_in_by_default():
+def test_ascend_ops_build_is_enabled_by_default():
     root = Path(__file__).resolve().parents[3]
     setup_py = (root / "setup.py").read_text()
 
-    assert 'AFD_BUILD_ASCEND_OPS", "0"' in setup_py
+    assert 'AFD_BUILD_ASCEND_OPS", "1"' in setup_py
     assert "csrc/npu/build_aclnn.sh" in setup_py
 
 
@@ -40,9 +40,7 @@ def test_ascend_ops_use_isolated_namespace_and_vendor_path():
     ).read_text()
     torch_cmake = (root / "csrc/npu/torch_extension/CMakeLists.txt").read_text()
     cann_cmake = (root / "csrc/npu/CMakeLists.txt").read_text()
-    op_api_common = (
-        root / "csrc/npu/aclnn_torch_adapter/op_api_common.h"
-    ).read_text()
+    op_api_common = (root / "csrc/npu/aclnn_torch_adapter/op_api_common.h").read_text()
 
     assert "TORCH_LIBRARY(afd_ascend" in torch_binding
     assert "TORCH_LIBRARY(_C_ascend" not in torch_binding

@@ -17,18 +17,21 @@ csrc/npu/torch_extension
 
 ## Default Behavior
 
-Local CPU and macOS development does not build Ascend custom ops by default.
-The Python package remains import-safe unless the Ascend build is explicitly
-enabled.
+Ascend custom ops build by default. Set `AFD_BUILD_ASCEND_OPS=0` only when
+intentionally skipping the NPU extension, for example on local CPU or macOS
+development machines. The Python package remains import-safe when the extension
+is not built.
 
 ## Build In An Ascend Environment
 
-Install the package with Ascend custom ops enabled:
+Install the package with Ascend custom ops enabled. Use
+`--no-build-isolation` so pip builds against the current CANN/torch-npu
+environment; pip's isolated build environment may not include CANN-provided
+Python modules or packages such as `numpy`, `cmake`, and `tbe`.
 
 ```bash
-AFD_BUILD_ASCEND_OPS=1 \
 SOC_VERSION=910c \
-pip install -e .
+pip install -e . -v --no-build-isolation
 ```
 
 Common environment variables:
