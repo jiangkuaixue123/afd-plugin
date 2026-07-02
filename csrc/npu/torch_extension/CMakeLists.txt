@@ -39,23 +39,24 @@ if(ASCEND_HOME_PATH STREQUAL "")
   set(ASCEND_HOME_PATH "/usr/local/Ascend/ascend-toolkit/latest")
 endif()
 
-set(AFD_PLUGIN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+set(AFD_PLUGIN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
+set(AFD_NPU_CSRC_DIR "${AFD_PLUGIN_ROOT}/csrc/npu")
 set(AFD_CANN_OPS_DIR "${AFD_PLUGIN_ROOT}/afd_plugin/_cann_ops_custom/vendors/afd-plugin/op_api/lib")
 
 pybind11_add_module(afd_plugin_ascend_C
   "${CMAKE_CURRENT_LIST_DIR}/torch_binding.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/torch_binding_meta.cpp"
-  "${AFD_PLUGIN_ROOT}/csrc/aclnn_torch_adapter/NPUBridge.cpp"
-  "${AFD_PLUGIN_ROOT}/csrc/aclnn_torch_adapter/NPUStorageImpl.cpp")
+  "${AFD_NPU_CSRC_DIR}/aclnn_torch_adapter/NPUBridge.cpp"
+  "${AFD_NPU_CSRC_DIR}/aclnn_torch_adapter/NPUStorageImpl.cpp")
 
 set_target_properties(afd_plugin_ascend_C PROPERTIES OUTPUT_NAME "_C_ascend")
 target_compile_definitions(afd_plugin_ascend_C PRIVATE TORCH_EXTENSION_NAME=_C_ascend)
 
 target_include_directories(afd_plugin_ascend_C PRIVATE
-  "${AFD_PLUGIN_ROOT}/csrc"
-  "${AFD_PLUGIN_ROOT}/csrc/aclnn_torch_adapter"
-  "${AFD_PLUGIN_ROOT}/csrc/a2e/op_host"
-  "${AFD_PLUGIN_ROOT}/csrc/e2a/op_host"
+  "${AFD_NPU_CSRC_DIR}"
+  "${AFD_NPU_CSRC_DIR}/aclnn_torch_adapter"
+  "${AFD_NPU_CSRC_DIR}/a2e/op_host"
+  "${AFD_NPU_CSRC_DIR}/e2a/op_host"
   "${TORCH_INCLUDE_DIRS}"
   "${TORCH_NPU_PATH}/include"
   "${ASCEND_HOME_PATH}/include"

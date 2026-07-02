@@ -17,6 +17,17 @@ def test_dummy_connector_is_not_registered():
         AFDConnectorFactory.get_connector_class("dummy")
 
 
+def test_backend_connector_modules_are_registered_by_backend_package():
+    assert (
+        AFDConnectorFactory.get_connector_class("p2pconnector").__module__
+        == "afd_plugin.connectors.gpu.p2p"
+    )
+    assert (
+        AFDConnectorFactory.get_connector_class("camp2pconnector").__module__
+        == "afd_plugin.connectors.npu.camp2p"
+    )
+
+
 def test_connector_metadata_validates_sequence_lengths():
     with pytest.raises(ValueError, match="sequence lengths"):
         AFDConnectorMetadata(

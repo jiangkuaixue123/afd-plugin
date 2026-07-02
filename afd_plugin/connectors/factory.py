@@ -60,12 +60,12 @@ class AFDConnectorFactory:
 
 AFDConnectorFactory.register_connector(
     "p2pconnector",
-    "afd_plugin.connectors.p2p",
+    "afd_plugin.connectors.gpu.p2p",
     "P2PAFDConnector",
 )
 AFDConnectorFactory.register_connector(
     "camp2pconnector",
-    "afd_plugin.connectors.ascend.camp2p",
+    "afd_plugin.connectors.npu.camp2p",
     "CAMP2PAFDConnector",
 )
 

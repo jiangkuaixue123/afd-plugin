@@ -31,7 +31,7 @@ def _tolist(value):
 
 
 def test_p2p_connector_is_registered_and_import_is_cpu_safe():
-    sys.modules.pop("afd_plugin.connectors.p2p", None)
+    sys.modules.pop("afd_plugin.connectors.gpu.p2p", None)
     sys.modules.pop("vllm.distributed.device_communicators.pynccl", None)
 
     cls = AFDConnectorFactory.get_connector_class("p2pconnector")
@@ -148,13 +148,13 @@ def test_p2p_topology_validation_errors_are_clear(raw, message):
 
 
 def test_p2p_module_exports_connector_class():
-    module = importlib.import_module("afd_plugin.connectors.p2p")
+    module = importlib.import_module("afd_plugin.connectors.gpu.p2p")
 
-    assert module.P2PAFDConnector.__module__ == "afd_plugin.connectors.p2p"
+    assert module.P2PAFDConnector.__module__ == "afd_plugin.connectors.gpu.p2p"
 
 
 def test_p2p_dp_metadata_serialization_uses_json_payload():
-    module = importlib.import_module("afd_plugin.connectors.p2p")
+    module = importlib.import_module("afd_plugin.connectors.gpu.p2p")
     metadata = SimpleNamespace(
         num_tokens_across_dp_cpu=[3, 5],
         max_tokens_across_dp_cpu=5,
@@ -181,7 +181,7 @@ def test_p2p_dp_metadata_serialization_uses_json_payload():
 
 
 def test_p2p_custom_ops_register_send_recv_with_fake_impls(monkeypatch):
-    module = importlib.import_module("afd_plugin.connectors.p2p")
+    module = importlib.import_module("afd_plugin.connectors.gpu.p2p")
     calls = []
 
     torch_module = types.ModuleType("torch")

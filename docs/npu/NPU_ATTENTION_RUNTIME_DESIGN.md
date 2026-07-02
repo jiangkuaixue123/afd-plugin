@@ -119,8 +119,9 @@ the plugin-owned fallback `AFDDPMetadata`.
 
 ## Connector
 
-NPU Attention uses `camp2pconnector`. The connector initializes HCCL/Gloo
-process groups and loads plugin-owned Ascend custom ops lazily when
+NPU Attention uses `camp2pconnector`, implemented by
+`afd_plugin.connectors.npu.camp2p`. The connector initializes HCCL/Gloo process
+groups and loads plugin-owned Ascend custom ops lazily when
 `init_afd_connector()` runs.
 
 The custom ops are optional at package import time, but NPU AFD data path

@@ -17,7 +17,7 @@ case "$SOC_VERSION" in
     ;;
 esac
 
-cd "${ROOT_DIR}/csrc"
+cd "${ROOT_DIR}/csrc/npu"
 rm -rf build output
 echo "building AFD ACLNN custom ops a2e;e2a for ${SOC_ARG}"
 bash build.sh -n "a2e;e2a" -c "${SOC_ARG}"

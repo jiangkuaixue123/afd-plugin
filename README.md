@@ -55,6 +55,11 @@ Connector support:
 | `p2pconnector` | CUDA | Supported | FFN ranks are ordered before Attention ranks. `num_attention_servers` must be greater than or equal to `num_ffn_servers` and divisible by it. |
 | `camp2pconnector` | Ascend NPU | Supported | Uses HCCL/CAMP2P custom ops. Requires an Ascend build with `AFD_BUILD_ASCEND_OPS=1`. |
 
+Connector implementations are grouped by backend package:
+`afd_plugin.connectors.gpu` for GPU-only connectors,
+`afd_plugin.connectors.npu` for NPU-only connectors, and
+`afd_plugin.connectors` for shared contracts and metadata.
+
 Known gaps:
 
 - vLLM versions other than `0.19.1` are not claimed as supported.
@@ -211,6 +216,10 @@ Run the default CPU-safe checks:
 uv run pytest
 uv run ruff check .
 ```
+
+Native C/C++ sources are grouped by backend under `csrc/`: Ascend/CANN sources
+live in `csrc/npu`, including the `a2e` and `e2a` ACLNN operators, and
+`csrc/gpu` is reserved for GPU native sources.
 
 Opt-in GPU E2E tests require a CUDA-capable vLLM environment and a DeepSeekV2
 Lite model path:
