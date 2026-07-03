@@ -36,15 +36,25 @@ class AFDConfig:
     compatibility aliases for code migrated from the original commit.
     """
 
+    # Enables the AFD runtime for the selected worker role.
     enabled: bool = False
+    # Open connector/plugin extension namespace, aligned with vLLM extra config.
     extra_config: dict[str, Any] = field(default_factory=dict)
+    # Connector implementation name used to create the backend data path.
     connector: str = "p2pconnector"
+    # Role owned by this process: Attention sends hidden states; FFN receives.
     role: AFDRole = "attention"
+    # Port used by the AFD connector rendezvous/control path.
     port: int = 1239
+    # Host used by the AFD connector rendezvous/control path.
     host: str = "127.0.0.1"
+    # Number of AFD Attention ranks participating in this topology.
     num_attention_ranks: int = 1
+    # Number of AFD FFN ranks participating in this topology.
     num_ffn_ranks: int = 1
+    # Rank of this process within its AFD role group.
     afd_role_rank: int = 0
+    # Whether Attention computes MoE gate outputs before sending to FFN.
     compute_gate_on_attention: bool = False
 
     @property
@@ -78,7 +88,7 @@ class AFDConfig:
     def compute_hash(self) -> str:
         """Return a stable hash for graph-affecting AFD settings."""
 
-        factors: list[Any] = [
+        factors: list[object] = [
             self.enabled,
             self.connector,
             self.role,
@@ -91,7 +101,7 @@ class AFDConfig:
         validate_afd_config(self, expected_role=expected_role)
 
 
-def _coerce_bool(value: Any, *, field_name: str) -> bool:
+def _coerce_bool(value: object, *, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -103,17 +113,23 @@ def _coerce_bool(value: Any, *, field_name: str) -> bool:
     raise TypeError(f"{field_name} must be a boolean, got {value!r}")
 
 
-def _coerce_int(value: Any, *, field_name: str) -> int:
+def _coerce_int(value: object, *, field_name: str) -> int:
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must be an integer, got {value!r}")
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{field_name} must be an integer, got {value!r}") from exc
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise TypeError(
+                f"{field_name} must be an integer, got {value!r}",
+            ) from exc
+    raise TypeError(f"{field_name} must be an integer, got {value!r}")
 
 
-def _normalize_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
-    normalized: dict[str, Any] = {}
+def _normalize_mapping(raw: Mapping[str, Any]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
     valid_fields = set(AFDConfig.__dataclass_fields__)  # type: ignore[attr-defined]
 
     for key, value in raw.items():
