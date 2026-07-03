@@ -481,7 +481,7 @@ def _ffn_token_counts_across_ranks(
     else:
         attention_counts = _to_int_list(dp_metadata.num_tokens_across_dp_cpu)
         # Expand DP-level counts to AFD-level counts when TP > 1.
-        # With TP, attn_size = num_attention_servers includes TP workers
+        # With TP, attn_size = num_attention_ranks includes TP workers
         # but num_tokens_across_dp_cpu only has dp_size entries.
         # Each DP rank's token count is replicated tp_size times because
         # all TP workers within the same DP rank process the same tokens.

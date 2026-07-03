@@ -42,9 +42,9 @@ class AFDConfig:
     role: AFDRole = "attention"
     port: int = 1239
     host: str = "127.0.0.1"
-    num_attention_servers: int = 1
-    num_ffn_servers: int = 1
-    afd_server_rank: int = 0
+    num_attention_ranks: int = 1
+    num_ffn_ranks: int = 1
+    afd_role_rank: int = 0
     compute_gate_on_attention: bool = False
 
     @property
@@ -82,8 +82,8 @@ class AFDConfig:
             self.enabled,
             self.connector,
             self.role,
-            self.num_attention_servers,
-            self.num_ffn_servers,
+            self.num_attention_ranks,
+            self.num_ffn_ranks,
         ]
         return hashlib.sha256(str(factors).encode()).hexdigest()
 
@@ -138,9 +138,9 @@ def _normalize_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     for field_name in (
         "port",
-        "num_attention_servers",
-        "num_ffn_servers",
-        "afd_server_rank",
+        "num_attention_ranks",
+        "num_ffn_ranks",
+        "afd_role_rank",
     ):
         if field_name in normalized:
             normalized[field_name] = _coerce_int(
@@ -245,24 +245,24 @@ def validate_afd_config(
         raise ValueError("AFD host must be non-empty")
     if not 0 < config.port < 65536:
         raise ValueError(f"AFD port must be in 1..65535, got {config.port}")
-    if config.num_attention_servers <= 0:
+    if config.num_attention_ranks <= 0:
         raise ValueError(
-            "num_attention_servers must be positive, "
-            f"got {config.num_attention_servers}",
+            "num_attention_ranks must be positive, "
+            f"got {config.num_attention_ranks}",
         )
-    if config.num_ffn_servers <= 0:
+    if config.num_ffn_ranks <= 0:
         raise ValueError(
-            f"num_ffn_servers must be positive, got {config.num_ffn_servers}",
+            f"num_ffn_ranks must be positive, got {config.num_ffn_ranks}",
         )
 
     if config.role == "attention":
-        server_count = p2p_sizes[0] if p2p_sizes else config.num_attention_servers
+        rank_count = p2p_sizes[0] if p2p_sizes else config.num_attention_ranks
     else:
-        server_count = p2p_sizes[1] if p2p_sizes else config.num_ffn_servers
-    if not 0 <= config.afd_server_rank < server_count:
+        rank_count = p2p_sizes[1] if p2p_sizes else config.num_ffn_ranks
+    if not 0 <= config.afd_role_rank < rank_count:
         raise ValueError(
-            "afd_server_rank must be within this role's server count "
-            f"(rank={config.afd_server_rank}, count={server_count})",
+            "afd_role_rank must be within this role's rank count "
+            f"(rank={config.afd_role_rank}, count={rank_count})",
         )
 
 
