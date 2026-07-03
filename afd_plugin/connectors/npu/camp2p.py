@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
-"""CAMP2P Ascend connector for the first real NPU AFD data path.
+"""CAMP2P NPU connector for the first real NPU AFD data path.
 
 The module stays import-safe on CPU/GPU machines.  torch-npu, HCCL process
 groups, and the plugin-owned ``torch.ops.afd_ascend`` custom ops are imported

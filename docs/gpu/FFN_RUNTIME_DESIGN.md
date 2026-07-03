@@ -109,6 +109,7 @@ Warmup and capture are driven by flags received from the Attention side through
 - Only vLLM `0.19.1` and model runner v1 are supported.
 - FFN workers are connector-driven only; scheduler-driven request execution is
   rejected.
-- The GPU connector is `p2pconnector`.
+- The GPU connector is `p2pconnector`, implemented by
+  `afd_plugin.connectors.gpu.p2p`.
 - DBO requires exactly two ubatches.
 - Role-based weight pruning is not implemented.

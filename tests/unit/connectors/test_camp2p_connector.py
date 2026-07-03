@@ -11,8 +11,8 @@ from afd_plugin.connectors import (
     AFDConnectorMetadata,
     AFDRecvOutput,
 )
-from afd_plugin.connectors.ascend import camp2p as camp2p_module
-from afd_plugin.connectors.ascend.camp2p import (
+from afd_plugin.connectors.npu import camp2p as camp2p_module
+from afd_plugin.connectors.npu.camp2p import (
     CAMP2PAFDConnector,
     CAMP2PAFDConnectorMetadata,
     build_camp2p_topology,

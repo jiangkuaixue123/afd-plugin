@@ -17,6 +17,8 @@ permissions:
 jobs:
   cpu-only:
     runs-on: ubuntu-latest
+    env:
+      AFD_BUILD_ASCEND_OPS: "0"
     strategy:
       fail-fast: false
       matrix:

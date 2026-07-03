@@ -126,9 +126,9 @@ The current compute call forwards these payload fields when available:
 
 ## CAMP2P
 
-`camp2pconnector` owns NPU topology, HCCL/Gloo process groups, custom-op loading,
-DP metadata exchange, receive metadata construction, and FFN/Attention payload
-transfer.
+`camp2pconnector`, implemented by `afd_plugin.connectors.npu.camp2p`, owns NPU
+topology, HCCL/Gloo process groups, custom-op loading, DP metadata exchange,
+receive metadata construction, and FFN/Attention payload transfer.
 
 The connector supports non-equal A/F topologies where
 `num_attention_servers >= num_ffn_servers` and the ratio is integral. FFN token

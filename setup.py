@@ -25,7 +25,7 @@ class BuildAscendOps(build_ext):
         if os.environ.get("AFD_SKIP_ACLNN_BUILD", "0") != "1":
             soc_version = os.environ.get("SOC_VERSION", "910c")
             subprocess.check_call(
-                ["bash", "csrc/build_aclnn.sh", str(ROOT), soc_version],
+                ["bash", "csrc/npu/build_aclnn.sh", str(ROOT), soc_version],
                 cwd=ROOT,
             )
         return super().run()
@@ -37,7 +37,7 @@ class BuildAscendOps(build_ext):
         build_temp = Path(self.build_temp) / ext.name
         build_temp.mkdir(parents=True, exist_ok=True)
 
-        install_prefix = Path(self.build_lib)
+        install_prefix = Path(self.build_lib).resolve()
         cmake_args = [
             "cmake",
             ext.source_dir,
@@ -72,9 +72,9 @@ class BuildAscendOps(build_ext):
 
 
 ext_modules = []
-if os.environ.get("AFD_BUILD_ASCEND_OPS", "0") == "1":
+if os.environ.get("AFD_BUILD_ASCEND_OPS", "1") == "1":
     ext_modules.append(
-        CMakeExtension("afd_plugin._C_ascend", "csrc/torch_extension"),
+        CMakeExtension("afd_plugin._C_ascend", "csrc/npu/torch_extension"),
     )
 
 

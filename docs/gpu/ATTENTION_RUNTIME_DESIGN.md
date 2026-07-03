@@ -98,7 +98,8 @@ Unsupported graph modes fail fast in `validate_cuda_graph_mode`.
 
 ## Connector
 
-GPU Attention uses `p2pconnector`. The connector is created during runner
+GPU Attention uses `p2pconnector`, implemented by
+`afd_plugin.connectors.gpu.p2p`. The connector is created during runner
 initialization and remains owned by the model runner. Rank topology is validated
 from `AFDConfig`; FFN ranks are ordered before Attention ranks.
 
