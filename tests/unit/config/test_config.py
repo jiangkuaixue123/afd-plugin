@@ -22,7 +22,6 @@ def test_parse_canonical_additional_config_namespace():
                 "enabled": True,
                 "role": "ffn",
                 "connector": "p2pconnector",
-                "num_afd_stages": "3",
                 "num_attention_servers": 2,
                 "num_ffn_servers": 2,
                 "afd_server_rank": 1,
@@ -35,7 +34,6 @@ def test_parse_canonical_additional_config_namespace():
     assert config.role == "ffn"
     assert config.afd_role == "ffn"
     assert config.is_ffn_server
-    assert config.num_afd_stages == 3
     assert config.afd_server_rank == 1
 
 
@@ -81,7 +79,6 @@ def test_original_afd_field_aliases_are_supported():
         ({"enabled": "maybe"}, "enabled must be a boolean"),
         ({"role": "decode"}, "AFD role must be one of"),
         ({"connector": "tcp"}, "AFD connector must be one of"),
-        ({"num_afd_stages": 0}, "num_afd_stages must be positive"),
         ({"afd_server_rank": 2, "num_attention_servers": 2}, "afd_server_rank"),
         ({"unknown": True}, "unknown AFD config field"),
     ],

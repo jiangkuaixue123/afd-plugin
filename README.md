@@ -194,7 +194,6 @@ The canonical config shape is:
     "connector": "p2pconnector",
     "host": "127.0.0.1",
     "port": 1239,
-    "num_afd_stages": 3,
     "num_attention_servers": 2,
     "num_ffn_servers": 1,
     "afd_server_rank": 0,

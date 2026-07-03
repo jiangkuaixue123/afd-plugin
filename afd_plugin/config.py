@@ -42,7 +42,6 @@ class AFDConfig:
     role: AFDRole = "attention"
     port: int = 1239
     host: str = "127.0.0.1"
-    num_afd_stages: int = 3
     num_attention_servers: int = 1
     num_ffn_servers: int = 1
     afd_server_rank: int = 0
@@ -83,7 +82,6 @@ class AFDConfig:
             self.enabled,
             self.connector,
             self.role,
-            self.num_afd_stages,
             self.num_attention_servers,
             self.num_ffn_servers,
         ]
@@ -140,7 +138,6 @@ def _normalize_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     for field_name in (
         "port",
-        "num_afd_stages",
         "num_attention_servers",
         "num_ffn_servers",
         "afd_server_rank",
@@ -248,10 +245,6 @@ def validate_afd_config(
         raise ValueError("AFD host must be non-empty")
     if not 0 < config.port < 65536:
         raise ValueError(f"AFD port must be in 1..65535, got {config.port}")
-    if config.num_afd_stages <= 0:
-        raise ValueError(
-            f"num_afd_stages must be positive, got {config.num_afd_stages}",
-        )
     if config.num_attention_servers <= 0:
         raise ValueError(
             "num_attention_servers must be positive, "
