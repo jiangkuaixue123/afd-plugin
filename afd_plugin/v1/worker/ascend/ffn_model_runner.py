@@ -461,13 +461,6 @@ def _resolve_num_hidden_layers(model_config: object) -> int:
     return int(model_config.hf_config.num_hidden_layers)
 
 
-def _first_dp_token_counts(dp_metadata_list: dict[int, Any]) -> Any:
-    if not dp_metadata_list:
-        return None
-    first_key = sorted(int(key) for key in dp_metadata_list)[0]
-    return dp_metadata_list[first_key].num_tokens_across_dp_cpu
-
-
 def _ffn_token_counts_across_ranks(
     connector: Any,
     dp_metadata_list: dict[int, Any],
@@ -514,15 +507,6 @@ def _ffn_token_count_for_rank(connector: Any, num_tokens_across_dp: Any) -> int:
     if role_rank >= len(values):
         return max(1, values[0] if values else 1)
     return max(1, int(values[role_rank]))
-
-
-def _first_token_count(num_tokens_across_dp: Any) -> int:
-    if num_tokens_across_dp is None:
-        return 1
-    first = num_tokens_across_dp[0]
-    if not isinstance(first, (int, float)):
-        first = first.item()
-    return max(1, int(first))
 
 
 def _tensor_tokens(hidden_states: Any) -> int:
