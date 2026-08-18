@@ -1,0 +1,2349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Afd Async Pipeline</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Afd Async Pipeline" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Afd Async Pipeline&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: var(--border-radius-lg, 12.5px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress {
+  display: flex;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;afd-async-pipeline-viz&quot;&gt;
+  &lt;h2&gt;异步 AFD 与同步大 EP 流水模拟&lt;/h2&gt;
+
+  &lt;div class=&quot;viz-controls&quot; aria-label=&quot;模拟参数&quot;&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;apv-request-count&quot;&gt;
+      全局请求个数（轮询分配到 DP） &lt;span id=&quot;apv-request-count-value&quot;&gt;6&lt;/span&gt;
+      &lt;input id=&quot;apv-request-count&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;2&quot; max=&quot;8&quot; step=&quot;1&quot; value=&quot;6&quot;&gt;
+    &lt;/label&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;apv-layer-count&quot;&gt;
+      模型层数（按真实层序） &lt;span id=&quot;apv-layer-count-value&quot;&gt;6&lt;/span&gt;
+      &lt;input id=&quot;apv-layer-count&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;1&quot; max=&quot;43&quot; step=&quot;1&quot; value=&quot;6&quot;&gt;
+    &lt;/label&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;apv-split-policy&quot;&gt;
+      ubatch 切分
+      &lt;select id=&quot;apv-split-policy&quot; class=&quot;form-select&quot;&gt;
+        &lt;option value=&quot;request&quot;&gt;请求边界均衡&lt;/option&gt;
+        &lt;option value=&quot;token&quot;&gt;Token 均衡&lt;/option&gt;
+      &lt;/select&gt;
+    &lt;/label&gt;
+  &lt;/div&gt;
+
+  &lt;div id=&quot;apv-request-editor&quot; class=&quot;apv-request-grid&quot; aria-label=&quot;请求长度&quot;&gt;&lt;/div&gt;
+
+  &lt;div id=&quot;apv-split-status&quot; class=&quot;apv-split-status&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+
+  &lt;div class=&quot;apv-status viz-row&quot; aria-live=&quot;polite&quot;&gt;
+    &lt;span id=&quot;apv-makespan&quot;&gt;&lt;/span&gt;
+    &lt;span id=&quot;apv-ffn-util&quot;&gt;&lt;/span&gt;
+    &lt;span id=&quot;apv-attn-wait&quot;&gt;&lt;/span&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;apv-legend&quot; aria-label=&quot;图例&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-attn-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Attention / SWA&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-csa-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;CSA（m=4）&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-hca-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;HCA（m′=128）&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-dispatch-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;A→F dispatch&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-ffn-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;FFN&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-combine-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;F→A combine&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;apv-swatch apv-wait-swatch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;等待 / 同步屏障&lt;/span&gt;
+    &lt;span id=&quot;apv-layer-legend&quot; class=&quot;text-muted&quot;&gt;U0 实色 · U1 半透明 · 前 6 个模型层&lt;/span&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;viz-controls apv-viewport-controls&quot; aria-label=&quot;时间轴视图&quot;&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;apv-zoom&quot;&gt;
+      时间轴缩放 &lt;span id=&quot;apv-zoom-value&quot;&gt;1.0×&lt;/span&gt;
+      &lt;input id=&quot;apv-zoom&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;1&quot; max=&quot;8&quot; step=&quot;0.25&quot; value=&quot;1&quot;&gt;
+    &lt;/label&gt;
+    &lt;label class=&quot;form-label&quot; for=&quot;apv-pan&quot;&gt;
+      窗口位置（按各自总跨度） &lt;span id=&quot;apv-pan-value&quot;&gt;全时段&lt;/span&gt;
+      &lt;input id=&quot;apv-pan&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; step=&quot;1&quot; value=&quot;0&quot; disabled&gt;
+    &lt;/label&gt;
+  &lt;/div&gt;
+
+  &lt;h3 class=&quot;apv-section-title&quot;&gt;异步 AFD · Attention DP2×TP4 / FFN EP8&lt;/h3&gt;
+  &lt;div id=&quot;apv-chart-wrap&quot; class=&quot;apv-chart-wrap&quot;&gt;
+    &lt;svg id=&quot;apv-timeline&quot; role=&quot;img&quot; aria-labelledby=&quot;apv-svg-title apv-svg-desc&quot;&gt;&lt;/svg&gt;
+  &lt;/div&gt;
+
+  &lt;div id=&quot;apv-detail&quot; class=&quot;card apv-detail&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;apv-note text-small text-muted&quot;&gt;AF 分离拓扑使用 Attention DP2×TP4 与 FFN EP8。Attention 按真实 SWA/CSA/HCA 层序、FFN compute 按同步大 EP 的 P512/P8K/Q16 operator profiling 拟合；A→F dispatch、recv/send 与 F→A combine 通信开销沿用原估算公式。&lt;/div&gt;
+
+  &lt;h3 class=&quot;apv-section-title&quot;&gt;同步大 EP · AF 合并（DP4×TP4 / EP16）&lt;/h3&gt;
+  &lt;div id=&quot;apv-sync-status&quot; class=&quot;apv-sync-status viz-row&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+  &lt;div id=&quot;apv-sync-chart-wrap&quot; class=&quot;apv-chart-wrap&quot;&gt;
+    &lt;svg id=&quot;apv-sync-timeline&quot; role=&quot;img&quot; aria-labelledby=&quot;apv-sync-svg-title apv-sync-svg-desc&quot;&gt;&lt;/svg&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;apv-note text-small text-muted&quot;&gt;实际模型结构：L0–L1 为纯 SWA；L2–L42 按偶数 CSA（m=4）、奇数 HCA（m′=128）交替，共 2 SWA + 21 CSA + 20 HCA。三类 Attention 分别按 DP4×TP4×EP16 的 P512、P8K、Q16 operator profiling 与每请求长度分段拟合；首次出现某类层时单独计入该类一次性 Metadata setup，CompressorMetadata 保留在逐层耗时中。MoE 使用最重 DP 的 q；Dispatch 与 Combine 锚点采用 16-rank 中位数，FFN 保持原 profiling 口径。可信域均为 512–16K tokens。Q16 已由本地归档的 16/16 rank trace 复核；Q32767 没有 operator trace，因此不扩展可信域。展示的是算子级关键路径估算，不等同于端到端 TTFT。&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;style&gt;
+  #afd-async-pipeline-viz {
+    width: 100%;
+    color: var(--foreground);
+  }
+
+  #afd-async-pipeline-viz h2 {
+    margin-bottom: 12px;
+  }
+
+  #afd-async-pipeline-viz .viz-controls {
+    align-items: end;
+  }
+
+  #afd-async-pipeline-viz .viz-controls &gt; .form-label {
+    min-width: min(240px, 100%);
+    flex: 1 1 240px;
+  }
+
+  #afd-async-pipeline-viz .apv-request-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 20px;
+    margin: 14px 0 12px;
+  }
+
+  #afd-async-pipeline-viz .apv-request-control {
+    min-width: 0;
+  }
+
+  #afd-async-pipeline-viz .apv-request-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 2px;
+  }
+
+  #afd-async-pipeline-viz .apv-request-heading span:last-child,
+  #afd-async-pipeline-viz .apv-status {
+    font-variant-numeric: tabular-nums;
+  }
+
+  #afd-async-pipeline-viz .apv-status {
+    gap: 16px;
+    margin: 6px 0;
+  }
+
+  #afd-async-pipeline-viz .apv-split-status {
+    margin: 4px 0 8px;
+  }
+
+  #afd-async-pipeline-viz .apv-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin: 8px 0 4px;
+  }
+
+  #afd-async-pipeline-viz .apv-legend &gt; span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  #afd-async-pipeline-viz .apv-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 8px;
+  }
+
+  #afd-async-pipeline-viz .apv-attn-swatch { background: var(--viz-series-1); }
+  #afd-async-pipeline-viz .apv-csa-swatch { background: var(--viz-series-5); }
+  #afd-async-pipeline-viz .apv-hca-swatch { background: var(--viz-series-6); }
+  #afd-async-pipeline-viz .apv-dispatch-swatch { background: var(--viz-series-2); }
+  #afd-async-pipeline-viz .apv-ffn-swatch { background: var(--viz-series-3); }
+  #afd-async-pipeline-viz .apv-combine-swatch { background: var(--viz-series-4); }
+  #afd-async-pipeline-viz .apv-wait-swatch { background: var(--muted); }
+
+  #afd-async-pipeline-viz .apv-viewport-controls {
+    margin-top: 8px;
+    align-items: end;
+  }
+
+  #afd-async-pipeline-viz .apv-viewport-controls &gt; .form-label {
+    min-width: min(220px, 100%);
+    flex: 1 1 220px;
+  }
+
+  #afd-async-pipeline-viz .apv-chart-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  #afd-async-pipeline-viz .apv-chart-wrap svg {
+    display: block;
+    width: 100%;
+  }
+
+  #afd-async-pipeline-viz .apv-detail {
+    margin-top: 8px;
+  }
+
+  #afd-async-pipeline-viz .apv-section-title {
+    margin: 16px 0 4px;
+  }
+
+  #afd-async-pipeline-viz .apv-sync-status {
+    margin-bottom: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #afd-async-pipeline-viz .apv-note {
+    margin-top: 6px;
+  }
+
+  #afd-async-pipeline-viz .apv-grid-line,
+  #afd-async-pipeline-viz .apv-frame,
+  #afd-async-pipeline-viz .apv-separator {
+    stroke: var(--border);
+    vector-effect: non-scaling-stroke;
+  }
+
+  #afd-async-pipeline-viz .apv-grid-line { stroke-width: 1; }
+  #afd-async-pipeline-viz .apv-frame { fill: transparent; stroke-width: 1; }
+  #afd-async-pipeline-viz .apv-separator { stroke-width: 1.5; }
+  #afd-async-pipeline-viz .apv-lane-band { fill: var(--muted); opacity: 0.18; }
+
+  #afd-async-pipeline-viz .apv-axis-text,
+  #afd-async-pipeline-viz .apv-axis-title,
+  #afd-async-pipeline-viz .apv-lane-label,
+  #afd-async-pipeline-viz .apv-bar-label {
+    fill: var(--foreground);
+    font-size: 12px;
+  }
+
+  #afd-async-pipeline-viz .apv-axis-text { fill: var(--muted-foreground); }
+  #afd-async-pipeline-viz .apv-axis-title { font-weight: 500; }
+  #afd-async-pipeline-viz .apv-lane-label { font-weight: 500; }
+  #afd-async-pipeline-viz .apv-bar-label {
+    pointer-events: none;
+    font-weight: 500;
+  }
+
+  #afd-async-pipeline-viz .apv-segment {
+    cursor: crosshair;
+    transition: opacity 120ms ease, stroke-width 120ms ease;
+  }
+
+  #afd-async-pipeline-viz .apv-stage-1 { opacity: 0.66; }
+  #afd-async-pipeline-viz .apv-segment-attn { fill: var(--viz-series-1); }
+  #afd-async-pipeline-viz .apv-segment-attn-swa { fill: var(--viz-series-1); }
+  #afd-async-pipeline-viz .apv-segment-attn-csa { fill: var(--viz-series-5); }
+  #afd-async-pipeline-viz .apv-segment-attn-hca { fill: var(--viz-series-6); }
+  #afd-async-pipeline-viz .apv-segment-dispatch,
+  #afd-async-pipeline-viz .apv-segment-recv { fill: var(--viz-series-2); }
+  #afd-async-pipeline-viz .apv-segment-ffn { fill: var(--viz-series-3); }
+  #afd-async-pipeline-viz .apv-segment-send,
+  #afd-async-pipeline-viz .apv-segment-combine { fill: var(--viz-series-4); }
+  #afd-async-pipeline-viz .apv-segment-wait,
+  #afd-async-pipeline-viz .apv-segment-barrier { fill: var(--muted); opacity: 0.72; }
+
+  #afd-async-pipeline-viz .apv-segment.is-selected {
+    stroke: var(--foreground);
+    stroke-width: 2;
+    opacity: 1;
+  }
+
+  #afd-async-pipeline-viz .apv-flow-link {
+    fill: none;
+    stroke: var(--foreground);
+    stroke-width: 1.5;
+    opacity: 0.74;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+  }
+
+  @media (max-width: 520px) {
+    #afd-async-pipeline-viz .apv-request-grid {
+      grid-template-columns: 1fr;
+    }
+
+    #afd-async-pipeline-viz .apv-status,
+    #afd-async-pipeline-viz .apv-legend {
+      gap: 6px 10px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #afd-async-pipeline-viz .apv-segment {
+      transition: none;
+    }
+  }
+&lt;/style&gt;
+
+&lt;script&gt;
+(() =&gt; {
+  const root = document.getElementById(&#x27;afd-async-pipeline-viz&#x27;);
+  const countInput = root.querySelector(&#x27;#apv-request-count&#x27;);
+  const countValue = root.querySelector(&#x27;#apv-request-count-value&#x27;);
+  const layerInput = root.querySelector(&#x27;#apv-layer-count&#x27;);
+  const layerValue = root.querySelector(&#x27;#apv-layer-count-value&#x27;);
+  const layerLegend = root.querySelector(&#x27;#apv-layer-legend&#x27;);
+  const splitInput = root.querySelector(&#x27;#apv-split-policy&#x27;);
+  const editor = root.querySelector(&#x27;#apv-request-editor&#x27;);
+  const splitStatus = root.querySelector(&#x27;#apv-split-status&#x27;);
+  const chartWrap = root.querySelector(&#x27;#apv-chart-wrap&#x27;);
+  const svg = root.querySelector(&#x27;#apv-timeline&#x27;);
+  const syncChartWrap = root.querySelector(&#x27;#apv-sync-chart-wrap&#x27;);
+  const syncSvg = root.querySelector(&#x27;#apv-sync-timeline&#x27;);
+  const syncStatus = root.querySelector(&#x27;#apv-sync-status&#x27;);
+  const zoomInput = root.querySelector(&#x27;#apv-zoom&#x27;);
+  const zoomValue = root.querySelector(&#x27;#apv-zoom-value&#x27;);
+  const panInput = root.querySelector(&#x27;#apv-pan&#x27;);
+  const panValue = root.querySelector(&#x27;#apv-pan-value&#x27;);
+  const detail = root.querySelector(&#x27;#apv-detail&#x27;);
+  const makespanText = root.querySelector(&#x27;#apv-makespan&#x27;);
+  const ffnUtilText = root.querySelector(&#x27;#apv-ffn-util&#x27;);
+  const attnWaitText = root.querySelector(&#x27;#apv-attn-wait&#x27;);
+
+  const SVG_NS = &#x27;http://www.w3.org/2000/svg&#x27;;
+  const TOPOLOGIES = {
+    async: { dp: 2, tp: 4, ep: 8 },
+    synchronous: { dp: 4, tp: 4, ep: 16 },
+  };
+  const PROFILE_TOKEN_MIN = 512;
+  const PROFILE_TOKEN_MAX = 16384;
+  const MODEL_ATTENTION_SCHEDULE = Array.from({ length: 43 }, (_, layer) =&gt; (
+    layer &lt; 2 ? &#x27;SWA&#x27; : layer % 2 === 0 ? &#x27;CSA&#x27; : &#x27;HCA&#x27;
+  ));
+  const SYNCHRONOUS_PROFILE = {
+    attention: {
+      SWA: {
+        layer: [[512, 0.157978187], [8192, 1.483639750], [16384, 3.133890000]],
+        setup: [[512, 0.215094375], [8192, 0.973779375], [16384, 1.689420000]],
+      },
+      CSA: {
+        layer: [[512, 0.559431649], [8192, 9.510374298], [16384, 20.427389524]],
+        setup: [[512, 0.316016125], [8192, 1.184383750], [16384, 2.088420000]],
+      },
+      HCA: {
+        layer: [[512, 0.308826206], [8192, 2.783436112], [16384, 6.007728000]],
+        setup: [[512, 0.139782750], [8192, 0.786795875], [16384, 1.464260000]],
+      },
+    },
+    dispatch: [[512, 1.912178138], [8192, 1.932897222], [16384, 2.214553244]],
+    ffn: [[512, 0.484], [8192, 1.788], [16384, 2.972902]],
+    combine: [[512, 0.018196558], [8192, 0.017993303], [16384, 0.017245302]],
+  };
+  const presets = [512, 8192, 1024, 12288, 2048, 6144, 768, 16384];
+  const lengths = presets.slice();
+  let selectedJobKey = null;
+  let lastSimulation = null;
+
+  function svgNode(name, attrs = {}, text = &#x27;&#x27;) {
+    const node = document.createElementNS(SVG_NS, name);
+    Object.entries(attrs).forEach(([key, value]) =&gt; node.setAttribute(key, String(value)));
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  function fmtTokens(value) {
+    if (value &gt;= 1024) {
+      const k = value / 1024;
+      return `${k &gt;= 10 ? k.toFixed(0) : k.toFixed(1)}K`;
+    }
+    return String(value);
+  }
+
+  function requestObjects() {
+    const count = Number(countInput.value);
+    return Array.from({ length: count }, (_, index) =&gt; ({
+      id: index + 1,
+      length: lengths[index],
+    }));
+  }
+
+  function assignRequests(requests, dpCount) {
+    return requests.map((request, index) =&gt; ({ ...request, dp: index % dpCount }));
+  }
+
+  function interpolateProfile(points, tokens) {
+    const upperIndex = points.findIndex(point =&gt; tokens &lt;= point[0]);
+    const right = upperIndex &lt;= 0
+      ? points[1]
+      : upperIndex === -1 ? points[points.length - 1] : points[upperIndex];
+    const left = upperIndex &lt;= 0
+      ? points[0]
+      : upperIndex === -1 ? points[points.length - 2] : points[upperIndex - 1];
+    const ratio = (tokens - left[0]) / (right[0] - left[0]);
+    return Math.max(0, left[1] + (right[1] - left[1]) * ratio);
+  }
+
+  function synchronousAttentionDuration(stage, attentionType, includeSetup) {
+    const typeProfile = SYNCHRONOUS_PROFILE.attention[attentionType];
+    return stage.parts.reduce((sum, part) =&gt; (
+      sum
+      + interpolateProfile(typeProfile.layer, part.tokens)
+      + (includeSetup ? interpolateProfile(typeProfile.setup, part.tokens) : 0)
+    ), 0);
+  }
+
+  function synchronousMoeDurations(dpStages) {
+    const effectiveTokens = Math.max(...dpStages.map(stage =&gt; stage.tokens));
+    return {
+      effectiveTokens,
+      dispatch: interpolateProfile(SYNCHRONOUS_PROFILE.dispatch, effectiveTokens),
+      ffn: interpolateProfile(SYNCHRONOUS_PROFILE.ffn, effectiveTokens),
+      combine: interpolateProfile(SYNCHRONOUS_PROFILE.combine, effectiveTokens),
+    };
+  }
+
+  function requestStageCost(parts) {
+    return parts.reduce((sum, part) =&gt; sum + part.tokens * part.tokens, 0);
+  }
+
+  function makeRequestStages(requests) {
+    if (requests.length &lt; 2) {
+      return [{
+        index: 0,
+        tokens: requests.reduce((sum, request) =&gt; sum + request.length, 0),
+        parts: requests.map(request =&gt; ({ id: request.id, tokens: request.length, full: true })),
+      }];
+    }
+    const total = requests.reduce((sum, request) =&gt; sum + request.length, 0);
+    let prefix = 0;
+    let bestIndex = 1;
+    let bestDistance = Infinity;
+    for (let index = 1; index &lt; requests.length; index += 1) {
+      prefix += requests[index - 1].length;
+      const distance = Math.abs(prefix * 2 - total);
+      if (distance &lt; bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+    return [requests.slice(0, bestIndex), requests.slice(bestIndex)].map((group, index) =&gt; ({
+      index,
+      tokens: group.reduce((sum, request) =&gt; sum + request.length, 0),
+      parts: group.map(request =&gt; ({ id: request.id, tokens: request.length, full: true })),
+    }));
+  }
+
+  function partsForTokenRange(requests, start, stop) {
+    const parts = [];
+    let cursor = 0;
+    requests.forEach(request =&gt; {
+      const requestStart = cursor;
+      const requestStop = cursor + request.length;
+      const overlapStart = Math.max(start, requestStart);
+      const overlapStop = Math.min(stop, requestStop);
+      if (overlapStop &gt; overlapStart) {
+        const tokens = overlapStop - overlapStart;
+        parts.push({ id: request.id, tokens, full: tokens === request.length });
+      }
+      cursor = requestStop;
+    });
+    return parts;
+  }
+
+  function makeTokenStages(requests) {
+    const total = requests.reduce((sum, request) =&gt; sum + request.length, 0);
+    if (total &lt; 2) return makeRequestStages(requests);
+    const split = Math.ceil(total / 2);
+    return [[0, split], [split, total]].map(([start, stop], index) =&gt; ({
+      index,
+      tokens: stop - start,
+      parts: partsForTokenRange(requests, start, stop),
+    }));
+  }
+
+  function buildStages(requests) {
+    const stages = splitInput.value === &#x27;token&#x27;
+      ? makeTokenStages(requests)
+      : makeRequestStages(requests);
+    stages.forEach(stage =&gt; {
+      stage.attentionCost = requestStageCost(stage.parts);
+      stage.requestLabel = stage.parts.map(part =&gt; `R${part.id}${part.full ? &#x27;&#x27; : &#x27;*&#x27;}`).join(&#x27; + &#x27;);
+    });
+    return stages;
+  }
+
+  function attnDuration(stage, attentionType, includeSetup) {
+    return synchronousAttentionDuration(stage, attentionType, includeSetup);
+  }
+
+  function dispatchDuration(stage) {
+    return 0.11 + stage.tokens / 52000;
+  }
+
+  function recvDuration(stage) {
+    return 0.10 + stage.tokens / 68000;
+  }
+
+  function ffnDuration(stage) {
+    return interpolateProfile(SYNCHRONOUS_PROFILE.ffn, stage.tokens);
+  }
+
+  function sendDuration(stage) {
+    return 0.10 + stage.tokens / 70000;
+  }
+
+  function combineDuration(stage) {
+    return 0.12 + stage.tokens / 58000;
+  }
+
+  function op(type, stage, layer) {
+    return { type, stage, layer, jobKey: `DPPENDING-U${stage}-L${layer}` };
+  }
+
+  function buildDpOps(stageCount) {
+    const layerCount = Number(layerInput.value);
+    if (stageCount === 1) {
+      const ops = [];
+      for (let layer = 0; layer &lt; layerCount; layer += 1) {
+        ops.push(op(&#x27;attn&#x27;, 0, layer), op(&#x27;dispatch&#x27;, 0, layer), op(&#x27;combine&#x27;, 0, layer));
+      }
+      return ops;
+    }
+
+    const ops = [op(&#x27;attn&#x27;, 0, 0), op(&#x27;dispatch&#x27;, 0, 0)];
+    for (let layer = 0; layer &lt; layerCount - 1; layer += 1) {
+      ops.push(
+        op(&#x27;attn&#x27;, 1, layer),
+        op(&#x27;combine&#x27;, 0, layer),
+        op(&#x27;dispatch&#x27;, 1, layer),
+        op(&#x27;attn&#x27;, 0, layer + 1),
+        op(&#x27;combine&#x27;, 1, layer),
+        op(&#x27;dispatch&#x27;, 0, layer + 1),
+      );
+    }
+    const lastLayer = layerCount - 1;
+    ops.push(
+      op(&#x27;attn&#x27;, 1, lastLayer),
+      op(&#x27;combine&#x27;, 0, lastLayer),
+      op(&#x27;dispatch&#x27;, 1, lastLayer),
+      op(&#x27;combine&#x27;, 1, lastLayer),
+    );
+    return ops;
+  }
+
+  function simulate() {
+    const requests = assignRequests(requestObjects(), TOPOLOGIES.async.dp);
+    const dpStages = Array.from({ length: TOPOLOGIES.async.dp }, (_, dp) =&gt; (
+      buildStages(requests.filter(request =&gt; request.dp === dp))
+    ));
+    const states = Array.from({ length: TOPOLOGIES.async.dp }, (_, dp) =&gt; ({
+      dp,
+      stages: dpStages[dp],
+      ops: buildDpOps(dpStages[dp].length).map(item =&gt; ({
+        ...item,
+        jobKey: `DP${dp}-U${item.stage}-L${item.layer}`,
+      })),
+      index: 0,
+      time: dp * 0.08,
+    }));
+    const jobs = new Map();
+    const attentionSegments = [];
+    const ffnSegments = [];
+    let ffnAvailable = 0;
+    let ffnBusy = 0;
+    let totalAttentionWait = 0;
+
+    while (states.some(state =&gt; state.index &lt; state.ops.length)) {
+      const candidates = states
+        .filter(state =&gt; state.index &lt; state.ops.length)
+        .map(state =&gt; {
+          const next = state.ops[state.index];
+          let ready = state.time;
+          if (next.type === &#x27;combine&#x27;) {
+            const job = jobs.get(next.jobKey);
+            if (!job) throw new Error(`Missing FFN job ${next.jobKey}`);
+            ready = Math.max(ready, job.end);
+          }
+          return { state, next, ready };
+        })
+        .sort((a, b) =&gt; a.ready - b.ready || a.state.dp - b.state.dp);
+
+      const { state, next } = candidates[0];
+      const stage = state.stages[next.stage];
+      if (next.type === &#x27;attn&#x27;) {
+        const attentionType = MODEL_ATTENTION_SCHEDULE[next.layer];
+        const includeAttentionSetup = MODEL_ATTENTION_SCHEDULE.indexOf(attentionType) === next.layer;
+        const start = state.time;
+        const end = start + attnDuration(stage, attentionType, includeAttentionSetup);
+        attentionSegments.push({
+          ...next,
+          dp: state.dp,
+          start,
+          end,
+          stageData: stage,
+          attentionType,
+          includeAttentionSetup,
+        });
+        state.time = end;
+      } else if (next.type === &#x27;dispatch&#x27;) {
+        const start = state.time;
+        const end = start + dispatchDuration(stage);
+        attentionSegments.push({ ...next, dp: state.dp, start, end, stageData: stage });
+
+        const recvStart = Math.max(ffnAvailable, end);
+        const recvEnd = recvStart + recvDuration(stage);
+        const computeEnd = recvEnd + ffnDuration(stage);
+        const sendEnd = computeEnd + sendDuration(stage);
+        const job = {
+          key: next.jobKey,
+          dp: state.dp,
+          stage: next.stage,
+          layer: next.layer,
+          stageData: stage,
+          dispatchStart: start,
+          dispatchEnd: end,
+          recvStart,
+          recvEnd,
+          computeEnd,
+          end: sendEnd,
+        };
+        jobs.set(next.jobKey, job);
+        ffnSegments.push(
+          { ...job, type: &#x27;recv&#x27;, jobKey: next.jobKey, start: recvStart, end: recvEnd },
+          { ...job, type: &#x27;ffn&#x27;, jobKey: next.jobKey, start: recvEnd, end: computeEnd },
+          { ...job, type: &#x27;send&#x27;, jobKey: next.jobKey, start: computeEnd, end: sendEnd },
+        );
+        ffnBusy += sendEnd - recvStart;
+        ffnAvailable = sendEnd;
+        state.time = end;
+      } else {
+        const job = jobs.get(next.jobKey);
+        if (job.end &gt; state.time) {
+          attentionSegments.push({
+            type: &#x27;wait&#x27;,
+            jobKey: next.jobKey,
+            dp: state.dp,
+            stage: next.stage,
+            layer: next.layer,
+            start: state.time,
+            end: job.end,
+            stageData: stage,
+          });
+          totalAttentionWait += job.end - state.time;
+          state.time = job.end;
+        }
+        const start = state.time;
+        const end = start + combineDuration(stage);
+        attentionSegments.push({ ...next, dp: state.dp, start, end, stageData: stage });
+        job.combineStart = start;
+        job.combineEnd = end;
+        state.time = end;
+      }
+      state.index += 1;
+    }
+
+    const makespan = Math.max(ffnAvailable, ...states.map(state =&gt; state.time));
+    const simulation = {
+      requests,
+      dpStages,
+      jobs,
+      attentionSegments,
+      ffnSegments,
+      makespan,
+      ffnBusy,
+      totalAttentionWait,
+    };
+    updateRequestAssignments(simulation);
+    return simulation;
+  }
+
+  function makeFullStage(requests, index = 0) {
+    const parts = requests.map(request =&gt; ({
+      id: request.id,
+      tokens: request.length,
+      full: true,
+    }));
+    return {
+      index,
+      parts,
+      tokens: parts.reduce((sum, part) =&gt; sum + part.tokens, 0),
+      attentionCost: requestStageCost(parts),
+      requestLabel: parts.length ? parts.map(part =&gt; `R${part.id}`).join(&#x27; + &#x27;) : &#x27;无请求&#x27;,
+    };
+  }
+
+  function simulateSynchronous(requests) {
+    const synchronousRequests = assignRequests(requests, TOPOLOGIES.synchronous.dp);
+    const dpStages = Array.from({ length: TOPOLOGIES.synchronous.dp }, (_, dp) =&gt; makeFullStage(
+      synchronousRequests.filter(request =&gt; request.dp === dp),
+    ));
+    const globalStage = makeFullStage(synchronousRequests);
+    const moeDurations = synchronousMoeDurations(dpStages);
+    const segments = [];
+    const layerCount = Number(layerInput.value);
+    let layerStart = 0;
+    let totalBarrierWait = 0;
+
+    for (let layer = 0; layer &lt; layerCount; layer += 1) {
+      const attentionType = MODEL_ATTENTION_SCHEDULE[layer];
+      const includeAttentionSetup = MODEL_ATTENTION_SCHEDULE.indexOf(attentionType) === layer;
+      const attentionEnds = dpStages.map((stage, dp) =&gt; {
+        if (!stage.parts.length) return null;
+        const end = layerStart + synchronousAttentionDuration(stage, attentionType, includeAttentionSetup);
+        segments.push({
+          type: &#x27;attn&#x27;, attentionType, includeAttentionSetup, layer, stage: 0, start: layerStart, end,
+          lanes: Array.from({ length: TOPOLOGIES.synchronous.tp }, (_, tp) =&gt; (
+            dp * TOPOLOGIES.synchronous.tp + tp
+          )),
+          stageData: stage,
+        });
+        return end;
+      });
+      const activeAttentionEnds = attentionEnds.filter(end =&gt; end !== null);
+      const barrierEnd = Math.max(layerStart, ...activeAttentionEnds);
+      attentionEnds.forEach((end, dp) =&gt; {
+        const barrierStart = end === null ? layerStart : end;
+        if (barrierStart &lt; barrierEnd) {
+          segments.push({
+            type: &#x27;barrier&#x27;, layer, stage: 0, start: barrierStart, end: barrierEnd,
+            lanes: Array.from({ length: TOPOLOGIES.synchronous.tp }, (_, tp) =&gt; (
+              dp * TOPOLOGIES.synchronous.tp + tp
+            )),
+            stageData: dpStages[dp],
+          });
+          if (end !== null) totalBarrierWait += barrierEnd - end;
+        }
+      });
+
+      const dispatchStart = barrierEnd;
+      const dispatchEnd = dispatchStart + moeDurations.dispatch;
+      const ffnEnd = dispatchEnd + moeDurations.ffn;
+      const combineEnd = ffnEnd + moeDurations.combine;
+      const allRankLanes = Array.from({ length: TOPOLOGIES.synchronous.ep }, (_, rank) =&gt; rank);
+      segments.push(
+        {
+          type: &#x27;dispatch&#x27;, layer, stage: 0, start: dispatchStart, end: dispatchEnd,
+          lanes: allRankLanes, stageData: globalStage,
+        },
+        {
+          type: &#x27;ffn&#x27;, layer, stage: 0, start: dispatchEnd, end: ffnEnd,
+          lanes: allRankLanes, stageData: globalStage,
+        },
+        {
+          type: &#x27;combine&#x27;, layer, stage: 0, start: ffnEnd, end: combineEnd,
+          lanes: allRankLanes, stageData: globalStage,
+        },
+      );
+      layerStart = combineEnd;
+    }
+
+    return {
+      segments,
+      makespan: layerStart,
+      totalBarrierWait,
+      layerCount,
+      layerTypeCounts: MODEL_ATTENTION_SCHEDULE.slice(0, layerCount).reduce((counts, type) =&gt; {
+        counts[type] += 1;
+        return counts;
+      }, { SWA: 0, CSA: 0, HCA: 0 }),
+      activeDpCount: dpStages.filter(stage =&gt; stage.parts.length).length,
+      effectiveTokens: moeDurations.effectiveTokens,
+      fitOutOfRange: moeDurations.effectiveTokens &lt; PROFILE_TOKEN_MIN
+        || moeDurations.effectiveTokens &gt; PROFILE_TOKEN_MAX
+        || globalStage.parts.some(part =&gt; (
+          part.tokens &lt; PROFILE_TOKEN_MIN || part.tokens &gt; PROFILE_TOKEN_MAX
+        )),
+    };
+  }
+
+  function updateRequestAssignments(simulation) {
+    const assignments = new Map();
+    simulation.dpStages.forEach((stages, dp) =&gt; {
+      stages.forEach(stage =&gt; {
+        stage.parts.forEach(part =&gt; {
+          const label = `DP${dp}·U${stage.index}${part.full ? &#x27;&#x27; : &#x27;·partial&#x27;}`;
+          const current = assignments.get(part.id) || [];
+          current.push(label);
+          assignments.set(part.id, current);
+        });
+      });
+    });
+    editor.querySelectorAll(&#x27;[data-request-map]&#x27;).forEach(node =&gt; {
+      const id = Number(node.getAttribute(&#x27;data-request-map&#x27;));
+      const asyncLabel = (assignments.get(id) || []).join(&#x27; / &#x27;);
+      const synchronousDp = (id - 1) % TOPOLOGIES.synchronous.dp;
+      node.textContent = `AF 分离 ${asyncLabel} · 大 EP DP${synchronousDp}`;
+    });
+  }
+
+  function updateSplitStatus(simulation) {
+    const states = simulation.dpStages.map((stages, dp) =&gt; {
+      if (stages.length &gt; 1) return `DP${dp}: U0/U1`;
+      return `DP${dp}: 仅 U0（回退单 batch）`;
+    });
+    const hasFallback = simulation.dpStages.some(stages =&gt; stages.length === 1);
+    if (splitInput.value === &#x27;request&#x27; &amp;&amp; hasFallback) {
+      splitStatus.textContent = `ubatch 状态 · ${states.join(&#x27;；&#x27;)}。请求边界切分要求同一 DP 至少有 2 个请求；可将全局请求增至 4 个，或改用 Token 均衡。`;
+      return;
+    }
+    splitStatus.textContent = `ubatch 状态 · ${states.join(&#x27;；&#x27;)}`;
+  }
+
+  function buildRequestEditor() {
+    const count = Number(countInput.value);
+    countValue.textContent = String(count);
+    editor.replaceChildren();
+    for (let index = 0; index &lt; count; index += 1) {
+      const label = document.createElement(&#x27;label&#x27;);
+      label.className = &#x27;form-label apv-request-control&#x27;;
+      label.setAttribute(&#x27;for&#x27;, `apv-length-${index}`);
+
+      const heading = document.createElement(&#x27;span&#x27;);
+      heading.className = &#x27;apv-request-heading&#x27;;
+      const name = document.createElement(&#x27;span&#x27;);
+      name.textContent = `R${index + 1} · ${fmtTokens(lengths[index])} tokens`;
+      name.setAttribute(&#x27;data-request-length-label&#x27;, String(index));
+      const mapping = document.createElement(&#x27;span&#x27;);
+      mapping.className = &#x27;text-small text-muted&#x27;;
+      mapping.setAttribute(&#x27;data-request-map&#x27;, String(index + 1));
+      heading.append(name, mapping);
+
+      const input = document.createElement(&#x27;input&#x27;);
+      input.id = `apv-length-${index}`;
+      input.className = &#x27;form-range&#x27;;
+      input.type = &#x27;range&#x27;;
+      input.min = &#x27;128&#x27;;
+      input.max = &#x27;16384&#x27;;
+      input.step = &#x27;128&#x27;;
+      input.value = String(lengths[index]);
+      input.addEventListener(&#x27;input&#x27;, () =&gt; {
+        lengths[index] = Number(input.value);
+        name.textContent = `R${index + 1} · ${fmtTokens(lengths[index])} tokens`;
+        render();
+      });
+      label.append(heading, input);
+      editor.append(label);
+    }
+  }
+
+  function segmentLabel(segment, widthPx) {
+    if (widthPx &lt; 17) return &#x27;&#x27;;
+    if (segment.type === &#x27;wait&#x27;) return widthPx &gt; 34 ? &#x27;wait&#x27; : &#x27;&#x27;;
+    if (segment.type === &#x27;barrier&#x27;) return widthPx &gt; 46 ? &#x27;barrier&#x27; : &#x27;B&#x27;;
+    if (segment.type === &#x27;dispatch&#x27;) return widthPx &gt; 26 ? &#x27;D&#x27; : &#x27;&#x27;;
+    if (segment.type === &#x27;combine&#x27;) return widthPx &gt; 26 ? &#x27;C&#x27; : &#x27;&#x27;;
+    if (segment.type === &#x27;recv&#x27;) return widthPx &gt; 24 ? &#x27;R&#x27; : &#x27;&#x27;;
+    if (segment.type === &#x27;send&#x27;) return widthPx &gt; 24 ? &#x27;S&#x27; : &#x27;&#x27;;
+    if (segment.type === &#x27;attn&#x27; &amp;&amp; segment.attentionType) {
+      return widthPx &gt; 58 ? `${segment.attentionType} L${segment.layer}` : widthPx &gt; 34 ? segment.attentionType : &#x27;A&#x27;;
+    }
+    if (segment.type === &#x27;attn&#x27;) return widthPx &gt; 58 ? `A L${segment.layer}·U${segment.stage}` : &#x27;A&#x27;;
+    if (segment.type === &#x27;ffn&#x27;) return widthPx &gt; 58 ? `F L${segment.layer}·U${segment.stage}` : &#x27;F&#x27;;
+    return &#x27;&#x27;;
+  }
+
+  function tooltipFor(segment, resource) {
+    const stage = segment.stageData;
+    const phaseNames = {
+      attn: &#x27;Attention&#x27;, dispatch: &#x27;A→F dispatch&#x27;, wait: &#x27;等待 FFN&#x27;, barrier: &#x27;全局同步屏障&#x27;,
+      combine: &#x27;F→A combine&#x27;, recv: &#x27;dispatch recv&#x27;, ffn: &#x27;FFN experts&#x27;, send: &#x27;combine send&#x27;,
+    };
+    const phaseName = segment.type === &#x27;attn&#x27; &amp;&amp; segment.attentionType
+      ? `${segment.attentionType} Attention`
+      : phaseNames[segment.type];
+    return `${resource} · ${phaseName} · L${segment.layer} U${segment.stage} · ${stage.requestLabel} · ${fmtTokens(stage.tokens)} tokens · ${(segment.end - segment.start).toFixed(2)} ms`;
+  }
+
+  function renderSynchronous(simulation, width, zoom, panFraction) {
+    const laneStep = 26;
+    const groupGap = 10;
+    const laneYs = Array.from({ length: TOPOLOGIES.synchronous.ep }, (_, rank) =&gt; (
+      38 + rank * laneStep + Math.floor(rank / TOPOLOGIES.synchronous.tp) * groupGap
+    ));
+    const laneLabels = Array.from({ length: TOPOLOGIES.synchronous.ep }, (_, rank) =&gt; [
+      `AF-EP${rank}`,
+      `DP${Math.floor(rank / TOPOLOGIES.synchronous.tp)}/TP${rank % TOPOLOGIES.synchronous.tp}`,
+    ]);
+    const height = laneYs[laneYs.length - 1] + 64;
+    const margin = { left: width &lt; 430 ? 92 : 116, right: 16, top: 28, bottom: 34 };
+    const plotWidth = Math.max(166, width - margin.left - margin.right);
+    const plotTop = margin.top;
+    const plotBottom = height - margin.bottom;
+    const barHeight = 18;
+    const visibleSpan = simulation.makespan / zoom;
+    const windowStart = (simulation.makespan - visibleSpan) * panFraction;
+    const windowEnd = windowStart + visibleSpan;
+    const x = time =&gt; margin.left + ((time - windowStart) / visibleSpan) * plotWidth;
+
+    const fitLabel = simulation.fitOutOfRange ? &#x27;含 P/Q 实测域外推&#x27; : &#x27;P/Q 实测域内拟合&#x27;;
+    const typeCounts = simulation.layerTypeCounts;
+    syncStatus.textContent = `总跨度 ${simulation.makespan.toFixed(1)} ms · 前 ${simulation.layerCount} 层：SWA ${typeCounts.SWA} / CSA ${typeCounts.CSA} / HCA ${typeCounts.HCA} · ${simulation.activeDpCount}/4 DP 活跃 · DP 同步等待 ${simulation.totalBarrierWait.toFixed(1)} ms · 慢 DP q ${fmtTokens(simulation.effectiveTokens)} · ${fitLabel} · 全局 EP16`;
+    syncSvg.replaceChildren();
+    syncSvg.setAttribute(&#x27;viewBox&#x27;, `0 0 ${width} ${height}`);
+    syncSvg.setAttribute(&#x27;height&#x27;, String(height));
+    syncSvg.append(
+      svgNode(&#x27;title&#x27;, { id: &#x27;apv-sync-svg-title&#x27; }, &#x27;同步大 EP AF 合并时间线&#x27;),
+      svgNode(&#x27;desc&#x27;, { id: &#x27;apv-sync-svg-desc&#x27; }, `十六条 AF rank 泳道展示 DP4×TP4、EP16 上前 ${simulation.layerCount} 个真实模型层的 SWA、CSA、HCA Attention、全局同步屏障和 FFN。`),
+    );
+
+    const defs = svgNode(&#x27;defs&#x27;);
+    const clipPath = svgNode(&#x27;clipPath&#x27;, { id: &#x27;apv-sync-plot-clip&#x27; });
+    clipPath.append(svgNode(&#x27;rect&#x27;, {
+      x: margin.left, y: plotTop, width: plotWidth, height: plotBottom - plotTop,
+    }));
+    defs.append(clipPath);
+    syncSvg.append(defs);
+
+    laneYs.forEach((laneY, index) =&gt; {
+      if (index % 2 === 1) {
+        syncSvg.append(svgNode(&#x27;rect&#x27;, {
+          class: &#x27;apv-lane-band&#x27;, x: margin.left, y: laneY - 3,
+          width: plotWidth, height: 26,
+        }));
+      }
+      const label = svgNode(&#x27;text&#x27;, {
+        class: &#x27;apv-lane-label&#x27;, x: margin.left - 8, y: laneY + 9, &#x27;text-anchor&#x27;: &#x27;end&#x27;,
+      });
+      label.append(svgNode(&#x27;tspan&#x27;, {}, laneLabels[index][0]));
+      label.append(svgNode(&#x27;tspan&#x27;, {
+        x: margin.left - 8, dy: 12, class: &#x27;apv-axis-text&#x27;,
+      }, laneLabels[index][1]));
+      syncSvg.append(label);
+    });
+    for (let dp = 1; dp &lt; TOPOLOGIES.synchronous.dp; dp += 1) {
+      const previousLane = dp * TOPOLOGIES.synchronous.tp - 1;
+      const nextLane = dp * TOPOLOGIES.synchronous.tp;
+      const separatorY = (laneYs[previousLane] + laneYs[nextLane]) / 2 + 10;
+      syncSvg.append(svgNode(&#x27;line&#x27;, {
+        class: &#x27;apv-separator&#x27;, x1: margin.left, x2: margin.left + plotWidth,
+        y1: separatorY, y2: separatorY,
+      }));
+    }
+
+    const tickCount = width &lt; 480 ? 4 : 6;
+    for (let tick = 0; tick &lt;= tickCount; tick += 1) {
+      const time = windowStart + visibleSpan * tick / tickCount;
+      const tickX = x(time);
+      syncSvg.append(svgNode(&#x27;line&#x27;, {
+        class: &#x27;apv-grid-line&#x27;, x1: tickX, x2: tickX, y1: plotTop, y2: plotBottom,
+      }));
+      syncSvg.append(svgNode(&#x27;text&#x27;, {
+        class: &#x27;apv-axis-text&#x27;, x: tickX, y: plotBottom + 18,
+        &#x27;text-anchor&#x27;: tick === 0 ? &#x27;start&#x27; : tick === tickCount ? &#x27;end&#x27; : &#x27;middle&#x27;,
+      }, `${time.toFixed(0)} ms`));
+    }
+    syncSvg.append(svgNode(&#x27;rect&#x27;, {
+      class: &#x27;apv-frame&#x27;, &#x27;data-chart-frame&#x27;: &#x27;&#x27;, x: margin.left, y: plotTop,
+      width: plotWidth, height: plotBottom - plotTop,
+    }));
+    syncSvg.append(svgNode(&#x27;text&#x27;, {
+      class: &#x27;apv-axis-title&#x27;, &#x27;data-axis&#x27;: &#x27;x&#x27;, x: margin.left + plotWidth / 2,
+      y: height - 3, &#x27;text-anchor&#x27;: &#x27;middle&#x27;,
+    }, &#x27;相对时间（ms）&#x27;));
+
+    const barLayer = svgNode(&#x27;g&#x27;, { &#x27;clip-path&#x27;: &#x27;url(#apv-sync-plot-clip)&#x27; });
+    syncSvg.append(barLayer);
+    simulation.segments.forEach(segment =&gt; {
+      if (segment.end &lt;= windowStart || segment.start &gt;= windowEnd) return;
+      const startX = x(Math.max(segment.start, windowStart));
+      const endX = x(Math.min(segment.end, windowEnd));
+      const rectWidth = Math.max(1.5, endX - startX);
+      segment.lanes.forEach(laneIndex =&gt; {
+        const y = laneYs[laneIndex] + 2;
+        const resource = `${laneLabels[laneIndex][0]} ${laneLabels[laneIndex][1]}`;
+        const phaseTooltip = segment.type === &#x27;barrier&#x27;
+          ? &#x27;全局同步屏障&#x27;
+          : tooltipFor(segment, resource).split(&#x27; · &#x27;).slice(1).join(&#x27; · &#x27;);
+        const fitTooltip = [&#x27;dispatch&#x27;, &#x27;ffn&#x27;, &#x27;combine&#x27;].includes(segment.type)
+          ? ` · profiling 拟合输入：慢 DP q ${fmtTokens(simulation.effectiveTokens)} · 锚点：${[&#x27;dispatch&#x27;, &#x27;combine&#x27;].includes(segment.type) ? &#x27;16-rank 中位数&#x27; : &#x27;原 FFN 口径&#x27;}`
+          : segment.type === &#x27;attn&#x27;
+            ? ` · profiling 拟合输入：${segment.attentionType} / 每请求长度${segment.includeAttentionSetup ? &#x27; / 含首次 Metadata setup&#x27; : &#x27;&#x27;}`
+            : &#x27;&#x27;;
+        const attentionClass = segment.type === &#x27;attn&#x27; &amp;&amp; segment.attentionType
+          ? ` apv-segment-attn-${segment.attentionType.toLowerCase()}`
+          : &#x27;&#x27;;
+        barLayer.append(svgNode(&#x27;rect&#x27;, {
+          class: `apv-segment apv-segment-${segment.type}${attentionClass}`,
+          x: startX, y, width: rectWidth, height: barHeight, rx: 2,
+          &#x27;data-tooltip&#x27;: `${resource} · ${phaseTooltip}${fitTooltip}`,
+        }));
+        const label = segmentLabel(segment, rectWidth);
+        if (label) {
+          const syncLabel = segment.type === &#x27;attn&#x27; &amp;&amp; rectWidth &gt; 58
+            ? `${segment.attentionType} L${segment.layer}`
+            : segment.type === &#x27;ffn&#x27; &amp;&amp; rectWidth &gt; 58
+              ? `F L${segment.layer}`
+              : label;
+          barLayer.append(svgNode(&#x27;text&#x27;, {
+            class: &#x27;apv-bar-label&#x27;, x: startX + rectWidth / 2, y: y + 13,
+            &#x27;text-anchor&#x27;: &#x27;middle&#x27;,
+          }, syncLabel));
+        }
+      });
+    });
+  }
+
+  function render() {
+    const simulation = simulate();
+    const synchronousSimulation = simulateSynchronous(simulation.requests);
+    lastSimulation = simulation;
+    updateSplitStatus(simulation);
+    const layerCount = Number(layerInput.value);
+    layerValue.textContent = String(layerCount);
+    layerLegend.textContent = `U0 实色 · U1 半透明 · 前 ${layerCount} 个模型层`;
+    const jobKeys = Array.from(simulation.jobs.keys());
+    if (!selectedJobKey || !simulation.jobs.has(selectedJobKey)) selectedJobKey = jobKeys[0] || null;
+
+    makespanText.textContent = `总跨度 ${simulation.makespan.toFixed(1)} ms`;
+    ffnUtilText.textContent = `FFN 利用率 ${Math.round(simulation.ffnBusy / simulation.makespan * 100)}%`;
+    attnWaitText.textContent = `Attention 等待 ${simulation.totalAttentionWait.toFixed(1)} ms`;
+
+    const measuredWidth = Math.max(320, Math.floor(chartWrap.getBoundingClientRect().width || 736));
+    const width = measuredWidth;
+    const laneStep = 26;
+    const groupGap = 10;
+    const attentionLaneCount = TOPOLOGIES.async.dp * TOPOLOGIES.async.tp;
+    const totalLaneCount = attentionLaneCount + TOPOLOGIES.async.ep;
+    const laneYs = Array.from({ length: totalLaneCount }, (_, index) =&gt; (
+      38
+      + index * laneStep
+      + (index &gt;= TOPOLOGIES.async.tp ? groupGap : 0)
+      + (index &gt;= attentionLaneCount ? groupGap : 0)
+    ));
+    const laneLabels = Array.from({ length: totalLaneCount }, (_, index) =&gt; (
+      index &lt; attentionLaneCount
+        ? [`A-DP${Math.floor(index / TOPOLOGIES.async.tp)}`, `TP${index % TOPOLOGIES.async.tp}`]
+        : [&#x27;FFN&#x27;, `EP${index - attentionLaneCount}`]
+    ));
+    const height = laneYs[laneYs.length - 1] + 64;
+    const margin = { left: width &lt; 430 ? 86 : 106, right: 16, top: 34, bottom: 34 };
+    const plotWidth = Math.max(170, width - margin.left - margin.right);
+    const plotTop = margin.top;
+    const plotBottom = height - margin.bottom;
+    const laneHeight = 26;
+    const barHeight = 18;
+    const zoom = Number(zoomInput.value);
+    const visibleSpan = simulation.makespan / zoom;
+    const panFraction = Number(panInput.value) / 100;
+    const windowStart = (simulation.makespan - visibleSpan) * panFraction;
+    const windowEnd = windowStart + visibleSpan;
+    const x = time =&gt; margin.left + ((time - windowStart) / visibleSpan) * plotWidth;
+    const selectedInWindow = selectedJobKey ? simulation.jobs.get(selectedJobKey) : null;
+    if (
+      !selectedInWindow
+      || (selectedInWindow.combineEnd ?? selectedInWindow.end) &lt;= windowStart
+      || selectedInWindow.dispatchStart &gt;= windowEnd
+    ) {
+      selectedJobKey = jobKeys.find(key =&gt; {
+        const job = simulation.jobs.get(key);
+        return (job.combineEnd ?? job.end) &gt; windowStart &amp;&amp; job.dispatchStart &lt; windowEnd;
+      }) || jobKeys[0] || null;
+    }
+    zoomValue.textContent = `${zoom.toFixed(2).replace(/0$/, &#x27;&#x27;)}×`;
+    panInput.disabled = zoom === 1;
+    panValue.textContent = zoom === 1
+      ? &#x27;全时段&#x27;
+      : `${windowStart.toFixed(1)}–${windowEnd.toFixed(1)} ms`;
+
+    svg.replaceChildren();
+    svg.setAttribute(&#x27;viewBox&#x27;, `0 0 ${width} ${height}`);
+    svg.setAttribute(&#x27;height&#x27;, String(height));
+
+    const title = svgNode(&#x27;title&#x27;, { id: &#x27;apv-svg-title&#x27; }, &#x27;Attention DP2TP4 与 FFN EP8 的异步 CAM 单流时间线&#x27;);
+    const desc = svgNode(&#x27;desc&#x27;, { id: &#x27;apv-svg-desc&#x27; }, `十六条资源泳道展示 ${simulation.requests.length} 个请求在 Attention DP2×TP4 和 FFN EP8 上的 ${layerCount} 层流水。`);
+    svg.append(title, desc);
+
+    const defs = svgNode(&#x27;defs&#x27;);
+    const marker = svgNode(&#x27;marker&#x27;, {
+      id: &#x27;apv-arrow&#x27;, markerWidth: 7, markerHeight: 7, refX: 6, refY: 3.5,
+      orient: &#x27;auto&#x27;, markerUnits: &#x27;strokeWidth&#x27;,
+    });
+    marker.append(svgNode(&#x27;path&#x27;, { d: &#x27;M0,0 L7,3.5 L0,7 Z&#x27;, fill: &#x27;var(--foreground)&#x27; }));
+    defs.append(marker);
+    const clipPath = svgNode(&#x27;clipPath&#x27;, { id: &#x27;apv-plot-clip&#x27; });
+    clipPath.append(svgNode(&#x27;rect&#x27;, {
+      x: margin.left, y: plotTop, width: plotWidth, height: plotBottom - plotTop,
+    }));
+    defs.append(clipPath);
+    svg.append(defs);
+
+    laneYs.forEach((laneY, index) =&gt; {
+      if (index % 2 === 1) {
+        svg.append(svgNode(&#x27;rect&#x27;, {
+          class: &#x27;apv-lane-band&#x27;, x: margin.left, y: laneY - 3,
+          width: plotWidth, height: laneHeight - 2,
+        }));
+      }
+      const label = svgNode(&#x27;text&#x27;, {
+        class: &#x27;apv-lane-label&#x27;, x: margin.left - 8, y: laneY + 9, &#x27;text-anchor&#x27;: &#x27;end&#x27;,
+      });
+      label.append(svgNode(&#x27;tspan&#x27;, {}, laneLabels[index][0]));
+      label.append(svgNode(&#x27;tspan&#x27;, { x: margin.left - 8, dy: 12, class: &#x27;apv-axis-text&#x27; }, laneLabels[index][1]));
+      svg.append(label);
+    });
+
+    [TOPOLOGIES.async.tp, attentionLaneCount].forEach(boundary =&gt; {
+      const separatorY = (laneYs[boundary - 1] + laneYs[boundary]) / 2 + 10;
+      svg.append(svgNode(&#x27;line&#x27;, {
+        class: &#x27;apv-separator&#x27;, x1: margin.left, x2: margin.left + plotWidth,
+        y1: separatorY, y2: separatorY,
+      }));
+    });
+
+    const tickCount = width &lt; 480 ? 4 : 6;
+    for (let tick = 0; tick &lt;= tickCount; tick += 1) {
+      const time = windowStart + visibleSpan * tick / tickCount;
+      const tickX = x(time);
+      svg.append(svgNode(&#x27;line&#x27;, {
+        class: &#x27;apv-grid-line&#x27;, x1: tickX, x2: tickX, y1: plotTop, y2: plotBottom,
+      }));
+      svg.append(svgNode(&#x27;text&#x27;, {
+        class: &#x27;apv-axis-text&#x27;, x: tickX, y: plotBottom + 18,
+        &#x27;text-anchor&#x27;: tick === 0 ? &#x27;start&#x27; : tick === tickCount ? &#x27;end&#x27; : &#x27;middle&#x27;,
+      }, `${time.toFixed(0)} ms`));
+    }
+    svg.append(svgNode(&#x27;rect&#x27;, {
+      class: &#x27;apv-frame&#x27;, &#x27;data-chart-frame&#x27;: &#x27;&#x27;, x: margin.left, y: plotTop,
+      width: plotWidth, height: plotBottom - plotTop,
+    }));
+    svg.append(svgNode(&#x27;text&#x27;, {
+      class: &#x27;apv-axis-title&#x27;, &#x27;data-axis&#x27;: &#x27;x&#x27;, x: margin.left + plotWidth / 2,
+      y: height - 3, &#x27;text-anchor&#x27;: &#x27;middle&#x27;,
+    }, &#x27;相对时间（ms）&#x27;));
+
+    const linkLayer = svgNode(&#x27;g&#x27;, {
+      &#x27;aria-hidden&#x27;: &#x27;true&#x27;, &#x27;clip-path&#x27;: &#x27;url(#apv-plot-clip)&#x27;,
+    });
+    svg.append(linkLayer);
+    const barLayer = svgNode(&#x27;g&#x27;, { &#x27;clip-path&#x27;: &#x27;url(#apv-plot-clip)&#x27; });
+    svg.append(barLayer);
+
+    function drawSegment(segment, laneIndex, resource) {
+      if (segment.end &lt;= windowStart || segment.start &gt;= windowEnd) return;
+      const visibleStart = Math.max(segment.start, windowStart);
+      const visibleEnd = Math.min(segment.end, windowEnd);
+      const startX = x(visibleStart);
+      const endX = x(visibleEnd);
+      const rectWidth = Math.max(1.5, endX - startX);
+      const y = laneYs[laneIndex] + 2;
+      const classes = [
+        &#x27;apv-segment&#x27;, `apv-segment-${segment.type}`, `apv-stage-${segment.stage}`,
+      ];
+      if (segment.type === &#x27;attn&#x27; &amp;&amp; segment.attentionType) {
+        classes.push(`apv-segment-attn-${segment.attentionType.toLowerCase()}`);
+      }
+      if (segment.jobKey === selectedJobKey) classes.push(&#x27;is-selected&#x27;);
+      const fitTooltip = segment.type === &#x27;attn&#x27;
+        ? ` · profiling 拟合输入：${segment.attentionType} / 每请求长度${segment.includeAttentionSetup ? &#x27; / 含首次 Metadata setup&#x27; : &#x27;&#x27;}`
+        : segment.type === &#x27;ffn&#x27;
+          ? ` · profiling 拟合输入：ubatch q ${fmtTokens(segment.stageData.tokens)} / 复用大 EP FFN`
+          : [&#x27;dispatch&#x27;, &#x27;recv&#x27;, &#x27;send&#x27;, &#x27;combine&#x27;].includes(segment.type)
+            ? &#x27; · A↔F 通信原估算&#x27;
+            : &#x27;&#x27;;
+      const rect = svgNode(&#x27;rect&#x27;, {
+        class: classes.join(&#x27; &#x27;), x: startX, y, width: rectWidth, height: barHeight,
+        rx: 2, &#x27;data-tooltip&#x27;: `${tooltipFor(segment, resource)}${fitTooltip}`,
+      });
+      rect.addEventListener(&#x27;mouseenter&#x27;, () =&gt; {
+        if (selectedJobKey !== segment.jobKey) {
+          selectedJobKey = segment.jobKey;
+          render();
+        }
+      });
+      barLayer.append(rect);
+      const label = segmentLabel(segment, rectWidth);
+      if (label) {
+        barLayer.append(svgNode(&#x27;text&#x27;, {
+          class: &#x27;apv-bar-label&#x27;, x: startX + rectWidth / 2, y: y + 13,
+          &#x27;text-anchor&#x27;: &#x27;middle&#x27;,
+        }, label));
+      }
+    }
+
+    simulation.attentionSegments.forEach(segment =&gt; {
+      const laneBase = segment.dp * TOPOLOGIES.async.tp;
+      for (let tp = 0; tp &lt; TOPOLOGIES.async.tp; tp += 1) {
+        drawSegment(segment, laneBase + tp, `A-DP${segment.dp}/TP${tp}`);
+      }
+    });
+    simulation.ffnSegments.forEach(segment =&gt; {
+      for (let ep = 0; ep &lt; TOPOLOGIES.async.ep; ep += 1) {
+        drawSegment(segment, attentionLaneCount + ep, `FFN/EP${ep}`);
+      }
+    });
+
+    const selectedJob = selectedJobKey ? simulation.jobs.get(selectedJobKey) : null;
+    if (selectedJob) {
+      const dpLaneStart = selectedJob.dp * TOPOLOGIES.async.tp;
+      const dpMidY = (
+        laneYs[dpLaneStart] + laneYs[dpLaneStart + TOPOLOGIES.async.tp - 1]
+      ) / 2 + 11;
+      const ffnMidY = (laneYs[attentionLaneCount] + laneYs[totalLaneCount - 1]) / 2 + 11;
+      const dispatchX = x(selectedJob.dispatchEnd);
+      const recvX = x(selectedJob.recvStart);
+      const sendX = x(selectedJob.end);
+      const combineX = x(selectedJob.combineStart ?? selectedJob.end);
+      const selectedEnd = selectedJob.combineEnd ?? selectedJob.end;
+      if (selectedEnd &gt; windowStart &amp;&amp; selectedJob.dispatchStart &lt; windowEnd) {
+        const firstPath = `M${dispatchX},${dpMidY} C${dispatchX + 10},${dpMidY} ${recvX - 10},${ffnMidY} ${recvX},${ffnMidY}`;
+        const secondPath = `M${sendX},${ffnMidY} C${sendX + 10},${ffnMidY} ${combineX - 10},${dpMidY} ${combineX},${dpMidY}`;
+        linkLayer.append(svgNode(&#x27;path&#x27;, { class: &#x27;apv-flow-link&#x27;, d: firstPath, &#x27;marker-end&#x27;: &#x27;url(#apv-arrow)&#x27; }));
+        linkLayer.append(svgNode(&#x27;path&#x27;, { class: &#x27;apv-flow-link&#x27;, d: secondPath, &#x27;marker-end&#x27;: &#x27;url(#apv-arrow)&#x27; }));
+      }
+      detail.textContent = `选中：DP${selectedJob.dp} · U${selectedJob.stage} · L${selectedJob.layer} (${MODEL_ATTENTION_SCHEDULE[selectedJob.layer]}) · ${selectedJob.stageData.requestLabel} · ${fmtTokens(selectedJob.stageData.tokens)} tokens · dispatch ${selectedJob.dispatchStart.toFixed(2)} → FFN ${selectedJob.recvStart.toFixed(2)}–${selectedJob.end.toFixed(2)} → combine ${(selectedJob.combineStart ?? selectedJob.end).toFixed(2)} ms`;
+    } else {
+      detail.textContent = &#x27;当前没有可展示的 FFN 工作项。&#x27;;
+    }
+    const synchronousWidth = Math.max(320, Math.floor(
+      syncChartWrap.getBoundingClientRect().width || measuredWidth,
+    ));
+    renderSynchronous(synchronousSimulation, synchronousWidth, zoom, panFraction);
+  }
+
+  countInput.addEventListener(&#x27;input&#x27;, () =&gt; {
+    buildRequestEditor();
+    render();
+  });
+  splitInput.addEventListener(&#x27;change&#x27;, render);
+  layerInput.addEventListener(&#x27;input&#x27;, render);
+  zoomInput.addEventListener(&#x27;input&#x27;, render);
+  panInput.addEventListener(&#x27;input&#x27;, render);
+
+  buildRequestEditor();
+  render();
+
+  const resizeObserver = new ResizeObserver(() =&gt; render());
+  resizeObserver.observe(chartWrap);
+  resizeObserver.observe(syncChartWrap);
+})();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
