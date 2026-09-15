@@ -12,6 +12,31 @@ from afd_plugin.compat.npu import runtime as ascend_runtime
 from afd_plugin.compat.npu.runtime import fix_all2all_backend_for_afd
 
 
+@pytest.fixture(autouse=True)
+def stub_ascend_namespace_patch(monkeypatch):
+    # Namespace behavior is covered separately with a strict native config stub.
+    patch_module = ModuleType("afd_plugin.compat.patches.npu.ascend_config")
+    calls = []
+    patch_module.apply_afd_ascend_config_patch = lambda: calls.append("namespace")
+    monkeypatch.setitem(sys.modules, patch_module.__name__, patch_module)
+    return calls
+
+
+def test_config_namespace_patch_installed_after_dbo_patch(
+    monkeypatch, stub_ascend_namespace_patch
+):
+    platform_patch = ModuleType("afd_plugin.compat.patches.npu.ascend_platform")
+
+    def install_dbo():
+        stub_ascend_namespace_patch.append("dbo")
+        return True
+
+    platform_patch.apply_afd_ascend_dbo_config_patch = install_dbo
+    monkeypatch.setitem(sys.modules, platform_patch.__name__, platform_patch)
+    ascend_runtime.apply_afd_ascend_config_patch_if_needed()
+    assert stub_ascend_namespace_patch == ["dbo", "namespace"]
+
+
 def _vllm_config(*, enable_sp=False, all2all_backend="allgather_reducescatter"):
     return SimpleNamespace(
         compilation_config=SimpleNamespace(
