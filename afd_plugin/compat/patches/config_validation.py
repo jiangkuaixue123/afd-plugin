@@ -87,11 +87,21 @@ def create_engine_config(
     if worker_cls_was_auto:
         _select_afd_worker_for_auto(config)
     # ### PATCH END: AFD automatic worker selection
+    # ### PATCH START: finalize AFD NPU backend before serialization
+    from vllm.platforms import current_platform
+
+    if (
+        current_platform.device_type == "npu"
+        and parse_optional_afd_config(config) is not None
+    ):
+        from afd_plugin.compat.npu import fix_all2all_backend_for_afd
+
+        fix_all2all_backend_for_afd(config)
+    # ### PATCH END: finalize AFD NPU backend before serialization
     # ### PATCH START: AFD Ascend async-DP patch ordering
     # Ascend platform initialization wraps EngineCoreProc.run_engine_core after
     # general plugins load. Finalize the AFD Attention binding only after the
     # complete config exists and before vLLM captures the subprocess target.
-    from vllm.platforms import current_platform
 
     if current_platform.device_type == "npu":
         from afd_plugin.compat.npu import (

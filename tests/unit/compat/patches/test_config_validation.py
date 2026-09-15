@@ -76,6 +76,12 @@ def _install_fake_vllm_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "vllm.engine", engine_package)
     monkeypatch.setitem(sys.modules, "vllm.engine.arg_utils", arg_utils_module)
     monkeypatch.setitem(sys.modules, "vllm.platforms", platforms_module)
+    native_config = types.ModuleType("vllm_ascend.ascend_config")
+    native_config.validate_additional_config_bool = lambda value, name: (
+        value if isinstance(value, bool) else str(value).lower() in {"1", "true"}
+    )
+    monkeypatch.setitem(sys.modules, native_config.__name__, native_config)
+    monkeypatch.delenv("VLLM_ASCEND_ENABLE_FLASHCOMM1", raising=False)
     return arg_utils_module, config_module
 
 
@@ -303,7 +309,7 @@ def test_config_validation_preserves_npu_dbo_through_auto_worker_normalization(
     assert ("native_dbo_validation", "deepep_low_latency") in events
     assert cfg.post_init_backend == "deepep_low_latency"
     assert args.all2all_backend == "allgather_reducescatter"
-    assert cfg.parallel_config.all2all_backend == "allgather_reducescatter"
+    assert cfg.parallel_config.all2all_backend == "flashinfer_all2allv"
     assert cfg.parallel_config.enable_dbo is True
     assert cfg.parallel_config.ubatch_size == 2
     assert cfg.parallel_config.use_ubatching is True
@@ -324,7 +330,7 @@ def test_config_validation_revalidates_npu_dbo_and_restores_backend(monkeypatch)
 
     assert ("native_dbo_validation", "deepep_low_latency") in events
     assert cfg.post_init_backend == "deepep_low_latency"
-    assert cfg.parallel_config.all2all_backend == "allgather_reducescatter"
+    assert cfg.parallel_config.all2all_backend == "flashinfer_all2allv"
     assert cfg.parallel_config.enable_dbo is True
     assert cfg.parallel_config.ubatch_size == 2
     assert cfg.parallel_config.worker_cls == NPU_ATTENTION_WORKER_FQCN
@@ -367,7 +373,7 @@ def test_config_validation_preserves_explicit_npu_worker(monkeypatch):
     assert cfg.parallel_config.worker_cls == NPU_ATTENTION_WORKER_FQCN
     assert cfg.parallel_config.enable_dbo is True
     assert cfg.parallel_config.ubatch_size == 2
-    assert cfg.parallel_config.all2all_backend == "allgather_reducescatter"
+    assert cfg.parallel_config.all2all_backend == "flashinfer_all2allv"
 
 
 def test_config_validation_preserves_non_afd_npu_upstream_behavior(monkeypatch):
@@ -647,3 +653,46 @@ def test_child_post_init_preserves_other_backends_and_inactive_configs(
     config.__post_init__()
     assert calls == []
     assert config.post_init_backend == "allgather_reducescatter"
+
+
+@pytest.mark.parametrize("role", ["attention", "ffn"])
+@pytest.mark.parametrize("enable_dbo", [False, True])
+@pytest.mark.parametrize("explicit_worker", [False, True])
+def test_parent_backend_is_final_before_serialization(
+    monkeypatch, role, enable_dbo, explicit_worker
+):
+    arg_utils, _, events = _install_fake_npu_config(monkeypatch)
+    _load_patch_module()
+    worker = NPU_ATTENTION_WORKER_FQCN if role == "attention" else NPU_FFN_WORKER_FQCN
+    args = _engine_args(
+        active=True, role=role, worker_cls=worker if explicit_worker else "auto"
+    )
+    args.enable_dbo = enable_dbo
+    args.ubatch_size = 2 if enable_dbo else 0
+    args.enable_sp = False
+    args.fail_update = False
+    config = arg_utils.EngineArgs.create_engine_config(args)
+    assert args.all2all_backend == "allgather_reducescatter"
+    assert config.parallel_config.all2all_backend == "flashinfer_all2allv"
+    assert config.parallel_config.worker_cls == worker
+    # Worker-side normalization and child revalidation must not change the
+    # serialized backend. Native hash-probe coverage runs in the target runtime.
+    from afd_plugin.compat.npu import fix_all2all_backend_for_afd
+
+    fix_all2all_backend_for_afd(config)
+    config.__post_init__()
+    assert config.parallel_config.all2all_backend == "flashinfer_all2allv"
+
+
+def test_parent_keeps_backend_for_raw_dsa_cp(monkeypatch):
+    arg_utils, _ = _install_fake_vllm_config(monkeypatch)
+    _set_fake_platform(is_cuda=False, device_type="npu")
+    monkeypatch.setattr(
+        npu_compat, "apply_afd_ascend_config_patch_if_needed", lambda: None
+    )
+    _load_patch_module()
+    args = _engine_args(active=True, worker_cls=NPU_ATTENTION_WORKER_FQCN)
+    args.additional_config["enable_dsa_cp"] = "true"
+    config = arg_utils.EngineArgs.create_engine_config(args)
+    assert args.all2all_backend == "allgather_reducescatter"
+    assert config.parallel_config.all2all_backend == "allgather_reducescatter"
