@@ -432,6 +432,87 @@ def test_npu_attention_non_live_execution_disables_microbatching(monkeypatch):
     assert result[2] is True
 
 
+@pytest.mark.parametrize(
+    ("connector", "ffn_ranks", "expected_tokens"),
+    [
+        ("CAMP2pAFDConnector", 1, [8, 8]),
+        ("CAMP2pAFDConnector", 2, [8, 1]),
+        ("CAMAsyncAFDConnector", 1, [8, 1]),
+    ],
+)
+def test_npu_eager_camp2p_fanin_pads_unequal_dp_tokens(
+    monkeypatch,
+    connector,
+    ffn_ranks,
+    expected_tokens,
+):
+    _require_npu_runtime()
+    import numpy as np
+    import torch
+    from vllm.config import CUDAGraphMode
+    from vllm.forward_context import BatchDescriptor
+
+    from afd_plugin.v1.worker.npu import attention_model_runner as module
+
+    runner = _new_attention_runner()
+    runner._afd_live_execution = True
+    runner.dcp_size = 1
+    runner.dp_size = 2
+    runner.dp_rank = 1
+    runner.connector = SimpleNamespace(control_plane=object())
+    runner.afd_config = SimpleNamespace(
+        connector=connector,
+        num_attention_ranks=2,
+        num_ffn_ranks=ffn_ranks,
+    )
+    runner.parallel_config = SimpleNamespace(
+        data_parallel_size=2,
+        data_parallel_rank=1,
+        tensor_parallel_size=1,
+        enable_dbo=False,
+        use_ubatching=False,
+    )
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=runner.parallel_config,
+        observability_config=SimpleNamespace(cudagraph_metrics=False),
+    )
+    runner.model_config = SimpleNamespace(is_encoder_decoder=False)
+    runner.uniform_decode_query_len = 1
+    runner.input_batch = SimpleNamespace(
+        num_computed_tokens_cpu=np.ones(1, dtype=np.int32),
+        lora_id_to_lora_request={},
+    )
+    runner._pad_for_sequence_parallelism = lambda n: n
+    runner.cudagraph_dispatcher = SimpleNamespace(
+        dispatch=lambda **kw: (CUDAGraphMode.NONE, BatchDescriptor(kw["num_tokens"])),
+    )
+    for name in (
+        "enable_sp",
+        "oproj_tp_enable",
+        "embedding_tp_enable",
+        "should_skip_allreduce_across_dp_group",
+        "check_enable_ubatch",
+    ):
+        monkeypatch.setattr(module, name, lambda *a, **kw: False)
+    monkeypatch.setattr(module, "get_dp_group", lambda: SimpleNamespace(cpu_group=None))
+
+    def sync(packed, group):
+        packed[:, 0] = torch.tensor([8, 8, CUDAGraphMode.NONE.value])
+
+    monkeypatch.setattr(module.dist, "all_reduce", sync)
+    mode, descriptor, ubatch, tokens, _ = runner._determine_batch_execution_and_padding(
+        num_tokens=1,
+        num_reqs=1,
+        num_scheduled_tokens_np=np.ones(1, dtype=np.int32),
+        max_num_scheduled_tokens=1,
+        use_cascade_attn=False,
+    )
+    assert mode == CUDAGraphMode.NONE
+    assert ubatch is False
+    assert tokens.tolist() == expected_tokens
+    assert descriptor.num_tokens == expected_tokens[1]
+
+
 def _new_ffn_runner():
     _require_npu_runtime()
     from afd_plugin.v1.worker.npu.ffn_model_runner import AFDNPUFFNModelRunner

@@ -1988,7 +1988,14 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     allow_dp_padding=(cudagraph_mode != CUDAGraphMode.NONE)
                     or enable_sp(self.vllm_config)
                     or oproj_tp_enable()
-                    or embedding_tp_enable(),
+                    or embedding_tp_enable()
+                    # CAMP2P fan-in kernels divide the FFN buffer into equal
+                    # per-Attention chunks, including eager prefill.
+                    or (
+                        self.afd_config.connector == "CAMP2pAFDConnector"
+                        and self.afd_config.num_attention_ranks
+                        > self.afd_config.num_ffn_ranks
+                    ),
                 )
             )
             if num_tokens_across_dp is not None:
