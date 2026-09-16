@@ -1074,7 +1074,8 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             self._afd_pending_metadata = None
             self._afd_async_moe_ubatch_metadata = None
 
-    # Upstream source: vLLM v0.26.0 commit 568afb3a1,
+    # Upstream source: vLLM v0.28.0 commit
+    # 2cf0a6915ce544dc493a0990f2ea38d81601128a,
     # GPUModelRunner._warmup_and_capture.
     # Patch reason: AFD needs both single-stage and two-stage Ascend graph keys,
     # because live decode may fall below the DBO threshold.
