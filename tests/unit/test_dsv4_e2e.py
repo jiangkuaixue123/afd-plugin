@@ -3,17 +3,22 @@
 
 from __future__ import annotations
 
-import io
+import asyncio
+import contextlib
 import json
+import os
+import signal
+import subprocess
 import sys
 import threading
-import urllib.error
-from email.message import Message
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from tests.e2e import runner
+from tests.e2e.models.deepseek_v4_flash import completions
 from tests.e2e.models.deepseek_v4_flash import test_async_cam_npu as entrypoint
 
 
@@ -114,7 +119,7 @@ def test_dsv4_main_uses_concurrent_requests_and_longer_cleanup(monkeypatch, tmp_
 def test_dsv4_entrypoint_rejects_wrong_devices(monkeypatch, tmp_path, devices):
     _arguments(monkeypatch, tmp_path)
     monkeypatch.setenv("AFD_E2E_DEVICES", devices)
-    with pytest.raises(RuntimeError, match="16 unique devices"):
+    with pytest.raises(RuntimeError, match="exactly 16 devices|devices must be unique"):
         entrypoint.build_runner_command(tmp_path / "responses.json")
 
 
@@ -156,7 +161,7 @@ def test_dsv4_environment_requires_cam_and_preserves_network(monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "empty", "truncated", "choices", "http", "json"]
+    "failure", [None, "empty", "truncated", "choices", "http", "json", "timeout"]
 )
 def test_ten_requests_overlap_and_validate_every_response(
     monkeypatch,
@@ -165,17 +170,21 @@ def test_ten_requests_overlap_and_validate_every_response(
 ):
     args = _arguments(monkeypatch, tmp_path)
     runner.configure_scenario(args)
-    # Each fake server request blocks until all ten arrive. Sequential clients
-    # cannot pass this test, even if they merely claim concurrency in metadata.
-    arrived = threading.Barrier(10)
+    # All ten must arrive before any response is released. Sequential clients
+    # cannot pass even if they merely claim concurrency in metadata.
+    arrived = asyncio.Event()
+    request_count = 0
 
-    def respond(request, timeout):
-        payload = json.loads(request.data)
-        assert request.full_url.endswith("/v1/chat/completions")
+    async def respond(request):
+        nonlocal request_count
+        payload = json.loads(request.content)
+        assert request.url.path == "/v1/chat/completions"
         assert payload["chat_template_kwargs"] == {"thinking": False}
-        assert timeout == 300
         operand = int(payload["messages"][0]["content"].split()[1])
-        arrived.wait(timeout=5)
+        request_count += 1
+        if request_count == 10:
+            arrived.set()
+        await asyncio.wait_for(arrived.wait(), timeout=5)
         result: dict = {
             "choices": [
                 {
@@ -192,21 +201,117 @@ def test_ten_requests_overlap_and_validate_every_response(
             elif failure == "choices":
                 result["choices"] = []
             elif failure == "http":
-                raise urllib.error.HTTPError(
-                    request.full_url, 500, "failed", Message(), io.BytesIO(b"error")
-                )
+                return httpx.Response(500, text="server error")
             elif failure == "json":
-                return io.BytesIO(b"not-json")
-        return io.BytesIO(json.dumps(result).encode())
+                return httpx.Response(200, text="not-json")
+            elif failure == "timeout":
+                raise httpx.ReadTimeout("server stalled", request=request)
+        return httpx.Response(200, json=result)
 
-    monkeypatch.setattr(runner.urllib.request, "urlopen", respond)
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        completions.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs),
+    )
     if failure:
-        with pytest.raises((RuntimeError, json.JSONDecodeError)):
+        with pytest.raises(RuntimeError, match="Request 9"):
             runner.run_concurrent_completion_evaluation(args)
     else:
         runner.run_concurrent_completion_evaluation(args)
-        results = json.loads((tmp_path / "responses.json").read_text())
-        assert len(results) == 10
-        assert [
-            row["response"]["choices"][0]["message"]["content"] for row in results
-        ] == [str(value) for value in range(19, 29)]
+    results = json.loads((tmp_path / "responses.json").read_text())
+    assert len(results) == 10
+    successful = results[:-1] if failure else results
+    assert all("error" not in row for row in successful)
+    assert [
+        row["response"]["choices"][0]["message"]["content"] for row in successful
+    ] == [str(value) for value in range(19, 19 + len(successful))]
+    assert all(row["finished_at"] >= row["started_at"] for row in results)
+    if failure:
+        assert results[-1]["error"]
+    if failure in ("http", "json"):
+        assert results[-1]["response_body"] == (
+            "server error" if failure == "http" else "not-json"
+        )
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_cancel_blocked_requests_cleans_service_groups(monkeypatch, tmp_path, signum):
+    _arguments(monkeypatch, tmp_path)
+    arrived = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    request_count = 0
+
+    class StalledServer(ThreadingHTTPServer):
+        request_queue_size = 32
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            nonlocal request_count
+            self.rfile.read(int(self.headers["Content-Length"]))
+            with lock:
+                request_count += 1
+                if request_count == 10:
+                    arrived.set()
+            release.wait(timeout=30)
+
+    server = StalledServer(("127.0.0.1", 0), Handler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    script = """
+import json
+import sys
+from pathlib import Path
+from tests.e2e import runner
+
+pid_path = Path(sys.argv.pop(1))
+pids = []
+start = runner.start_process
+
+def start_service(name, command, env):
+    process = start(name, [sys.executable, '-c', 'import time; time.sleep(60)'], env)
+    pids.append(process.pid)
+    pid_path.write_text(json.dumps(pids))
+    return process
+
+runner.start_process = start_service
+runner.wait_for_openai_api = lambda *args: None
+sys.exit(runner.main())
+"""
+    pid_path = tmp_path / "services.json"
+    command = entrypoint.build_runner_command(tmp_path / "responses.json")
+    command.extend(["--api-port-base", str(server.server_port)])
+    with (tmp_path / "cancel.log").open("w+") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(pid_path), *command[3:]],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            assert arrived.wait(timeout=15), "ten requests never reached the server"
+            process.send_signal(signum)
+            # Much shorter than both the HTTP timeout (300s) and the outer
+            # runner cleanup deadline (240s). Exercise real signal unwinding,
+            # socket cancellation and separately launched service groups.
+            process.wait(timeout=10)
+            log.seek(0)
+            assert process.returncode == 128 + signum, log.read()
+            for pid in json.loads(pid_path.read_text()):
+                with pytest.raises(ProcessLookupError):
+                    os.kill(pid, 0)
+            results = json.loads((tmp_path / "responses.json").read_text())
+            assert len(results) == 10
+            assert all("cancelled" in row["error"] for row in results)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            if pid_path.exists():
+                for pid in json.loads(pid_path.read_text()):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(pid, signal.SIGKILL)
+            release.set()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)

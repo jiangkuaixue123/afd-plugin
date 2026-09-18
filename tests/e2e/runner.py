@@ -15,7 +15,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,15 @@ from tests.e2e.accuracy.gsm8k import (
     _extract_gsm8k_accuracy,
     _extract_gsm8k_sample_count,
     _run_lm_eval,
+)
+from tests.e2e.models.deepseek_v4_flash import config as dsv4_config
+from tests.e2e.models.deepseek_v4_flash.completions import evaluate_completions
+from tests.e2e.models.deepseek_v4_flash.config import (
+    DSV4_ASYNC_CAM_SCENARIO,
+    DSV4_ATTENTION_RANKS,
+    DSV4_ATTENTION_TP_SIZE,
+    DSV4_FFN_RANKS,
+    DSV4_PROCESS_TERMINATION_TIMEOUT_S,
 )
 from tests.e2e.process_utils import (
     kill_processes_matching_environment,
@@ -41,19 +49,6 @@ ASYNC_UBATCH_FFN_RANKS = 1
 ASYNC_UBATCH_ATTENTION_TP_SIZE = 2
 ASYNC_UBATCH_NUM_STAGES = 2
 ASYNC_UBATCH_BATCH_SIZE = 2
-DSV4_ASYNC_CAM_SCENARIO = "afd-dsv4-flash-async-cam-dp2tp4-ep8"
-DSV4_ATTENTION_RANKS = 8
-DSV4_FFN_RANKS = 8
-DSV4_ATTENTION_TP_SIZE = 4
-DSV4_CONCURRENT_REQUESTS = 10
-DSV4_REQUEST_TIMEOUT_S = 300
-DSV4_REQUEST_BARRIER_TIMEOUT_S = 30
-DSV4_COMPLETION_MAX_TOKENS = 256
-DSV4_PROMPT_FIRST_OPERAND = 12
-DSV4_PROMPT_SECOND_OPERAND = 7
-# Sixteen NPU workers take longer than the small cases to destroy HCCL
-# resources; the observed launcher shutdown alone exceeded 20 seconds.
-DSV4_PROCESS_TERMINATION_TIMEOUT_S = 60
 V2_SYNC_CONNECTOR = "P2pNcclAFDConnector"
 V2_SCENARIOS = (
     "afd-v2-eager-1a1f",
@@ -512,63 +507,7 @@ def configure_scenario(args: argparse.Namespace) -> None:
         ):
             args.common_vllm_arg.extend(["--gpu-memory-utilization", "0.8"])
     if is_dsv4:
-        if args.completion_output_path is None:
-            raise ValueError("--completion-output-path is required for DSV4")
-        args.afd_connector = ASYNC_AFD_CONNECTOR
-        args.afd_async = True
-        args.compute_gate_on_attention = True
-        args.afd_connector_extra_config = [
-            json.dumps(
-                {
-                    "dynamicQuant": 1,
-                    "attn_ranks_per_dp": DSV4_ATTENTION_TP_SIZE,
-                    "async_moe_ubatching": True,
-                    "async_moe_num_ubatches": ASYNC_UBATCH_NUM_STAGES,
-                    "async_moe_split": "token",
-                }
-            )
-        ]
-        # Keep this local 16-NPU case aligned with the DSV4 prefill scripts.
-        # Reject ad-hoc overrides so its case ID denotes one fixed deployment.
-        if args.common_vllm_arg or args.attention_vllm_arg or args.ffn_vllm_arg:
-            raise ValueError("DSV4 scenario does not accept extra vLLM arguments")
-        if args.use_decode_bench_connector:
-            raise ValueError("DSV4 scenario runs without a KV transfer connector")
-        args.common_vllm_arg = [
-            "--api-server-count",
-            "1",
-            "--seed",
-            "1024",
-            "--max-model-len",
-            "1048576",
-            "--max-num-batched-tokens",
-            "8192",
-            "--max-num-seqs",
-            "16",
-            "--block-size",
-            "128",
-            "--gpu-memory-utilization",
-            "0.7",
-            "--quantization",
-            "ascend",
-            "--tokenizer-mode",
-            "deepseek_v4",
-            "--model-loader-extra-config",
-            json.dumps({"enable_multithread_load": True, "num_threads": 128}),
-            "--trust-remote-code",
-            "--no-enable-prefix-caching",
-            "--enable-chunked-prefill",
-        ]
-        args.attention_vllm_arg = [
-            "--data-parallel-address",
-            args.afd_host,
-            "--no-disable-hybrid-kv-cache-manager",
-            "--tool-call-parser",
-            "deepseek_v4",
-            "--enable-auto-tool-choice",
-            "--reasoning-parser",
-            "deepseek_v4",
-        ]
+        dsv4_config.configure_scenario(args)
     if use_graph:
         args.cudagraph_capture_size = 8
     if enable_dbo:
@@ -718,15 +657,7 @@ def build_vllm_command(
     if connector_extra_config:
         afd_config["afd"]["connector_extra_config"] = connector_extra_config
     if args.scenario == DSV4_ASYNC_CAM_SCENARIO:
-        afd_config.update(
-            {
-                "enable_cpu_binding": True,
-                "enable_force_load_balance": False,
-                "enable_dsa_cp": False,
-                "multistream_dsv4_dsa_overlap": False,
-                "enable_dsv4_shared_compressor_workspace": False,
-            }
-        )
+        afd_config.update(dsv4_config.additional_config())
     cmd = [
         args.vllm_bin,
         "serve",
@@ -949,76 +880,11 @@ def run_completion_evaluation(args: argparse.Namespace) -> None:
 
 
 def run_concurrent_completion_evaluation(args: argparse.Namespace) -> None:
-    """Release ten chat requests together and retain their complete responses."""
-    barrier = threading.Barrier(DSV4_CONCURRENT_REQUESTS)
-
-    def request(index: int) -> dict:
-        operand = DSV4_PROMPT_FIRST_OPERAND + index
-        prompt = (
-            f"Compute {operand} + {DSV4_PROMPT_SECOND_OPERAND}. "
-            "Reply with just the number."
-        )
-        payload = {
-            "model": served_model_name(args, "attention"),
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": COMPLETION_TEMPERATURE,
-            "max_tokens": DSV4_COMPLETION_MAX_TOKENS,
-            "chat_template_kwargs": {"thinking": False},
-        }
-        http_request = urllib.request.Request(
-            f"http://{args.api_host}:{attention_api_port(args)}/v1/chat/completions",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        barrier.wait(timeout=DSV4_REQUEST_BARRIER_TIMEOUT_S)
-        started_at = time.monotonic()
-        try:
-            with urllib.request.urlopen(
-                http_request,
-                timeout=DSV4_REQUEST_TIMEOUT_S,
-            ) as response:
-                result = json.loads(response.read())
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(
-                f"Request {index} failed with HTTP {exc.code}: "
-                f"{exc.read().decode(errors='replace')}",
-            ) from exc
-        return {
-            "index": index,
-            "prompt": prompt,
-            "started_at": started_at,
-            "finished_at": time.monotonic(),
-            "response": result,
-        }
-
-    with ThreadPoolExecutor(max_workers=DSV4_CONCURRENT_REQUESTS) as pool:
-        results = list(pool.map(request, range(DSV4_CONCURRENT_REQUESTS)))
-
-    output_path = Path(args.completion_output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2))
-    # A barrier alone does not prove overlap: require every request to start
-    # before the first finishes, and preserve timings for independent review.
-    if max(item["started_at"] for item in results) >= min(
-        item["finished_at"] for item in results
-    ):
-        raise RuntimeError("The ten completion requests did not overlap")
-    for item in results:
-        result = item["response"]
-        choices = result.get("choices") if isinstance(result, dict) else None
-        if not isinstance(choices, list) or len(choices) != 1:
-            raise RuntimeError(f"Request {item['index']} must return one choice")
-        choice = choices[0]
-        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
-            raise RuntimeError(f"Request {item['index']} returned an invalid message")
-        content = choice["message"].get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError(f"Request {item['index']} returned empty content")
-        if choice.get("finish_reason") != "stop":
-            raise RuntimeError(f"Request {item['index']} did not finish normally")
-        print(f"Request {item['index'] + 1}: {item['prompt']} -> {content}")
-    print(f"Concurrent completions: {len(results)}/{DSV4_CONCURRENT_REQUESTS} passed")
+    evaluate_completions(
+        url=f"http://{args.api_host}:{attention_api_port(args)}/v1/chat/completions",
+        model=served_model_name(args, "attention"),
+        output_path=Path(args.completion_output_path),
+    )
 
 
 def build_env(
@@ -1051,7 +917,7 @@ def build_env(
         env.pop("VLLM_ASCEND_ENABLE_FLASHCOMM1", None)
     env.pop("AFD_PLUGIN_EARLY_ENGINE_PATCH", None)
     if args.scenario == DSV4_ASYNC_CAM_SCENARIO:
-        env["VLLM_ASCEND_ENABLE_FLASHCOMM1"] = "1" if role == "attention" else "0"
+        env.update(dsv4_config.role_environment(role))
     current_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (
         str(REPO_ROOT)

@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import run_runner
-from tests.e2e.runner import (
+from tests.e2e.environment import devices_from_env, prepend_env_paths, required_env
+from tests.e2e.models.deepseek_v4_flash.config import (
     DSV4_ASYNC_CAM_SCENARIO,
     DSV4_ATTENTION_RANKS,
     DSV4_FFN_RANKS,
@@ -20,32 +21,16 @@ from tests.e2e.runner import (
 CAM_VENDOR_PATH = Path("/usr/local/Ascend/cann-9.0.1/opp/vendors/CAM")
 
 
-def _required_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"{name} must be set")
-    return value
-
-
 def build_runner_command(output_path: Path) -> list[str]:
-    if _required_env("AFD_E2E_BACKEND") != "npu":
+    if required_env("AFD_E2E_BACKEND") != "npu":
         raise RuntimeError("DSV4 async CAM E2E requires AFD_E2E_BACKEND=npu")
-    devices = [device.strip() for device in _required_env("AFD_E2E_DEVICES").split(",")]
-    device_count = DSV4_ATTENTION_RANKS + DSV4_FFN_RANKS
-    if (
-        len(devices) != device_count
-        or len(set(devices)) != device_count
-        or "" in devices
-    ):
-        raise RuntimeError(
-            f"AFD_E2E_DEVICES must contain {device_count} unique devices"
-        )
+    devices = devices_from_env("AFD_E2E_DEVICES", DSV4_ATTENTION_RANKS + DSV4_FFN_RANKS)
     return [
         sys.executable,
         "-m",
         "tests.e2e.runner",
         "--model",
-        _required_env("AFD_NPU_E2E_MODEL"),
+        required_env("AFD_NPU_E2E_MODEL"),
         "--vllm-bin",
         os.environ.get("AFD_NPU_E2E_VLLM_BIN", "vllm"),
         "--device-backend",
@@ -59,7 +44,7 @@ def build_runner_command(output_path: Path) -> list[str]:
         "--served-model-name-prefix",
         "dsv4-flash",
         "--afd-host",
-        _required_env("HCCL_IF_IP"),
+        required_env("HCCL_IF_IP"),
         "--api-port-base",
         os.environ.get("AFD_NPU_DSV4_E2E_API_PORT", "19280"),
         "--afd-port",
@@ -73,8 +58,8 @@ def build_runner_command(output_path: Path) -> list[str]:
 
 def build_environment() -> dict[str, str]:
     env = os.environ.copy()
-    interface = _required_env("HCCL_SOCKET_IFNAME")
-    _required_env("HCCL_IF_IP")
+    interface = required_env("HCCL_SOCKET_IFNAME")
+    required_env("HCCL_IF_IP")
     vendor = Path(env.get("CAM_VENDOR", str(CAM_VENDOR_PATH)))
     op_api = vendor / "op_api"
     library = op_api / "lib" / "libopapi.so"
@@ -108,12 +93,7 @@ def build_environment() -> dict[str, str]:
         ("LD_LIBRARY_PATH", (op_api / "lib", op_api)),
         ("LD_PRELOAD", (library,)),
     ):
-        env[name] = os.pathsep.join(
-            [
-                *(str(path) for path in paths),
-                *filter(None, env.get(name, "").split(os.pathsep)),
-            ],
-        )
+        prepend_env_paths(env, name, *paths)
     return env
 
 

@@ -160,13 +160,16 @@ MoE ubatches. FlashComm1 is enabled only on Attention. CPU binding and
 128-thread weight loading follow the reference prefill scripts. Prefix
 caching, native DBO, and KV transfer are not enabled.
 
-After startup, a barrier releases ten independent chat requests together.
+After startup, an async HTTP client schedules ten independent chat requests together.
 They ask for `12 + 7` through `21 + 7`, with temperature=0, thinking=false,
 and max_tokens=256. Every response must contain one nonempty answer and
 finish with `stop`; HTTP errors, truncated answers, missing responses, or
 non-overlapping request timings fail the case. The test prints all outputs
 and saves complete responses and monotonic timestamps in the pytest temporary
-directory. It does **not** run GSM8K or establish general model accuracy.
+directory, including per-request errors and partial results on cancellation.
+SIGTERM/SIGINT cancels pending HTTP operations before service cleanup, without
+waiting for the request timeout. It does **not** run GSM8K or establish general
+model accuracy.
 Service liveness and owned-process cleanup are also required to pass.
 This 16-NPU case allows 60 seconds for service shutdown before escalation;
 Attention SIGKILL escalation remains a failure. FFN uses the existing scoped

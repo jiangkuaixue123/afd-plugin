@@ -27,6 +27,9 @@ validation_paths:
   - "tests/e2e/models/deepseek_v2_lite/test_async_cam_npu.py"
   - "tests/e2e/models/deepseek_v4_flash/test_async_cam_npu.py"
   - "tests/unit/test_dsv4_e2e.py"
+  - "tests/e2e/environment.py"
+  - "tests/e2e/models/deepseek_v4_flash/config.py"
+  - "tests/e2e/models/deepseek_v4_flash/completions.py"
   - "tests/e2e/models/qwen3_moe/test_qwen3_moe.py"
   - "tests/e2e/models/qwen3_6/test_qwen3_6.py"
 upstream_refs:
@@ -130,7 +133,10 @@ W8A8 case using 16 Ascend NPUs: Attention DP2/TP4 and FFN DP8/TP1/EP8.
 It uses eager async CAM with two token-split MoE ubatches, MBT=8192, and
 `enable_dsv4_shared_compressor_workspace=false` on both roles. It validates
 ten simultaneous chat requests, records their outputs and overlapping
-request intervals, and checks service liveness and cleanup. It does not run
+request intervals, and checks service liveness and cleanup. Its cancellable
+async HTTP client saves per-request responses/errors even on failure or
+interruption, before the runner tears down services. Model-specific fixed
+settings live alongside the model entrypoint. It does not run
 GSM8K or claim general accuracy coverage. It uses the same scoped async NPU
 FFN cleanup exception above and is not selected by the four-device PR gate.
 
