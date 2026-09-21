@@ -83,17 +83,9 @@ export PYTHONPATH="/vllm-workspace/vllm-ascend:/vllm-workspace/vllm:${PYTHONPATH
 export VLLM_PLUGINS=ascend,afd
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export AFD_FORCE_SPAWN_MULTIPROCESSING=1
-CAM_VENDOR=/usr/local/Ascend/cann-9.0.1/opp/vendors/CAM
-CAM_OPAPI_DIR="$CAM_VENDOR/op_api/lib"
-CAM_OPAPI="$CAM_OPAPI_DIR/libopapi.so"
 TORCH_NPU_LIB=/usr/local/python3.12.13/lib/python3.12/site-packages/torch_npu/lib
 TORCH_LIB=/usr/local/python3.12.13/lib/python3.12/site-packages/torch/lib
-export ASCEND_CUSTOM_OPP_PATH="$CAM_VENDOR:${ASCEND_CUSTOM_OPP_PATH:-}"
-# umdk_cam_op_lib resolves libopapi.so by name on first request.  Put CAM's
-# vendor implementation before CANN's stock libopapi.so, which lacks CAM ops.
-export LD_LIBRARY_PATH="$TORCH_LIB":"$TORCH_NPU_LIB":/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:"$CAM_OPAPI_DIR":"$CAM_VENDOR/op_api":/usr/local/Ascend/cann-9.0.1/aarch64-linux/lib64:/usr/local/Ascend/cann-9.0.1/runtime/lib64:${LD_LIBRARY_PATH:-}
-export CAM_CUST_OPAPI_LIB_PATH="$CAM_OPAPI"
-export LD_PRELOAD="$CAM_OPAPI${LD_PRELOAD:+:$LD_PRELOAD}"
+export LD_LIBRARY_PATH="$TORCH_LIB":"$TORCH_NPU_LIB":/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/cann-9.0.1/aarch64-linux/lib64:/usr/local/Ascend/cann-9.0.1/runtime/lib64:${LD_LIBRARY_PATH:-}
 export HCCL_IF_IP="$NODE_IP"
 export HCCL_SOCKET_IFNAME="$NIC_NAME"
 export GLOO_SOCKET_IFNAME="$NIC_NAME"

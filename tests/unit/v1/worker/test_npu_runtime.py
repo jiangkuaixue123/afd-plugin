@@ -1531,8 +1531,6 @@ def test_npu_ffn_runner_dp_path_invokes_model_with_hidden_states_and_layer(monke
             states=AFDAsyncTransferState(
                 group_list="groups",
                 dynamic_scales="scales",
-                expand_x_shared="shared-hidden",
-                dynamic_scales_shared="shared-scales",
             ),
         ),
     )
@@ -1569,7 +1567,7 @@ def test_npu_ffn_connector_driven_uses_cam_layer_and_token_metadata(monkeypatch)
     )
     runner = _new_ffn_runner()
     runner.vllm_config = _vllm_config(role="ffn")
-    runner.connector = SimpleNamespace(control_plane=None)
+    runner.connector = SimpleNamespace(control_plane=None, expert_per_rank=2)
     runner.model = _RecordingFakeModel()
     runner.num_layers = 1
     runner.max_num_tokens = 16
@@ -1585,8 +1583,6 @@ def test_npu_ffn_connector_driven_uses_cam_layer_and_token_metadata(monkeypatch)
         layer_idx=7,
         group_list="groups",
         dynamic_scales="scales[:5]",
-        expand_x_shared="shared-hidden[:2]",
-        dynamic_scales_shared="shared-scales[:2]",
     )
     context = AFDTransferContext(metadata=metadata, states=states)
     recv_output = AFDA2FTransferPayload(
@@ -1601,7 +1597,8 @@ def test_npu_ffn_connector_driven_uses_cam_layer_and_token_metadata(monkeypatch)
         stage_idx=0,
         num_tokens=5,
         total_num_tokens=7,
-        shared_num_tokens=2,
+        start_expert=0,
+        end_expert=1,
     )
 
     def recv_ffn_work_item(*, stage_idx, max_num_tokens):
@@ -1625,8 +1622,6 @@ def test_npu_ffn_connector_driven_uses_cam_layer_and_token_metadata(monkeypatch)
             {
                 "group_list": "groups",
                 "dynamic_scales": "scales[:5]",
-                "expand_x_shared": "shared-hidden[:2]",
-                "dynamic_scales_shared": "shared-scales[:2]",
             },
         ),
     ]

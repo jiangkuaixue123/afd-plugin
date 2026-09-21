@@ -59,6 +59,7 @@ def test_get_async_moe_ubatch_metadata_from_additional_kwargs():
     )
 
 
+@pytest.mark.parametrize("schedule_failure", [False, True])
 @pytest.mark.parametrize(
     ("is_first_rank", "is_last_rank"),
     [(True, False), (False, True)],
@@ -67,6 +68,7 @@ def test_async_model_forward_preserves_pp_boundaries(
     monkeypatch,
     is_first_rank,
     is_last_rank,
+    schedule_failure,
 ):
     from afd_plugin.model_executor.models.npu import (
         deepseek_v2_async_cam_forward as async_forward,
@@ -85,7 +87,12 @@ def test_async_model_forward_preserves_pp_boundaries(
         ),
     )
     forward_context = SimpleNamespace()
-    afd_metadata = object()
+    cleared = []
+    afd_metadata = SimpleNamespace(
+        connector=SimpleNamespace(
+            discard_pending_attention_payloads=lambda: cleared.append(True),
+        )
+    )
     monkeypatch.setattr(async_forward, "get_forward_context", lambda: forward_context)
     monkeypatch.setattr(
         async_forward,
@@ -108,6 +115,8 @@ def test_async_model_forward_preserves_pp_boundaries(
         received_metadata,
         llama_4_scaling,
     ):
+        if schedule_failure:
+            raise RuntimeError("cancelled forward")
         schedule_calls.append(
             (
                 model,
@@ -156,6 +165,14 @@ def test_async_model_forward_preserves_pp_boundaries(
                 "residual": expected_residual,
             }
         )
+
+    if schedule_failure:
+        with pytest.raises(RuntimeError, match="cancelled forward"):
+            async_forward.run_model_forward(
+                model, input_ids, positions, intermediate_tensors
+            )
+        assert cleared == [True]
+        return
 
     output = async_forward.run_model_forward(
         model,
@@ -255,6 +272,7 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
         is_moe_layer = True
 
         layer_idx = 0
+        mlp = SimpleNamespace(shared_experts=lambda x: 2 * x)
 
         def compute_attn_output(
             self,
@@ -286,7 +304,7 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
         afd_metadata,
     )
 
-    assert torch.equal(output, hidden_states + 2)
+    assert torch.equal(output, (hidden_states + 1) * 9 + 3)
     assert residual is None
     assert connector_calls == ["send", "recv", "send", "recv"]
     assert restored_layouts == dispatch_layouts
@@ -533,6 +551,9 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
                 SimpleNamespace(
                     is_moe_layer=True,
                     layer_idx=layer_idx,
+                    mlp=SimpleNamespace(
+                        shared_experts=lambda x, offset=layer_idx + 1: x + offset,
+                    ),
                     compute_attn_output=compute_attn_output,
                 )
                 for layer_idx in range(2)
@@ -569,6 +590,8 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
         restored is expected
         for restored, expected in zip(output, stage_hidden_states, strict=True)
     )
+    torch.testing.assert_close(output[0], torch.full((1, 8), 4.0))
+    torch.testing.assert_close(output[1], torch.full((2, 8), 8.0))
     assert residual is None
     assert forward_context.attn_metadata == {"layer": "full"}
     assert forward_context.num_tokens == 4

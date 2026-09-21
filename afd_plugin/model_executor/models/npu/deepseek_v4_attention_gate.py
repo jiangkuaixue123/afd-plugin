@@ -113,7 +113,11 @@ def compute_attention_gate_topk(
     tokens, then hand their IDs and weights to CAM dispatch.
     """
 
-    router_logits, _ = moe.gate(hidden_states)
+    # Match AscendMoERunner's internal router: BF16 GEMM can change expert
+    # selection when correction bias makes non-Hash scores nearly equal.
+    router_logits = torch.nn.functional.linear(
+        hidden_states.float(), moe.gate.weight_fp32
+    )
     if moe.scoring_func == "sqrtsoftplus":
         topk_weights, topk_ids = _compute_sqrtsoftplus_topk(moe, router_logits)
     else:

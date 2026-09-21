@@ -4,18 +4,21 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 
+from afd_plugin import __version__
+
 AFD_ASCEND_OPS_NAMESPACE = "afd_ascend"
 AFD_ASCEND_VENDOR_NAME = "afd-plugin"
 AFD_CUST_OPAPI_ENV = "AFD_CUST_OPAPI_LIB_PATH"
-CAM_OP_NAMESPACE = "umdk_cam_op_lib"
-CAM_DISPATCH_SEND = "async_dispatch_send"
-CAM_DISPATCH_RECV = "async_dispatch_recv"
-CAM_COMBINE_SEND = "async_combine_send"
-CAM_COMBINE_RECV = "async_combine_recv"
+CAM_OP_NAMESPACE = AFD_ASCEND_OPS_NAMESPACE
+CAM_DISPATCH_SEND = "afd_async_dispatch_send"
+CAM_DISPATCH_RECV = "afd_async_dispatch_recv"
+CAM_COMBINE_SEND = "afd_async_combine_send"
+CAM_COMBINE_RECV = "afd_async_combine_recv"
 
 
 def get_afd_cann_vendor_path() -> Path:
@@ -63,10 +66,10 @@ def _assert_afd_namespace_registered(torch: object) -> None:
 def _assert_cam_namespace_registered(torch: object) -> None:
     ops = vars(torch)["ops"]
     _ = (
-        ops.umdk_cam_op_lib.async_dispatch_send,
-        ops.umdk_cam_op_lib.async_dispatch_recv,
-        ops.umdk_cam_op_lib.async_combine_send,
-        ops.umdk_cam_op_lib.async_combine_recv,
+        ops.afd_ascend.afd_async_dispatch_send,
+        ops.afd_ascend.afd_async_dispatch_recv,
+        ops.afd_ascend.afd_async_combine_send,
+        ops.afd_ascend.afd_async_combine_recv,
     )
 
 
@@ -105,28 +108,26 @@ def has_afd_ascend_ops() -> bool:
     return True
 
 
+@lru_cache(maxsize=1)
 def ensure_cam_async_ops_available() -> None:
-    """Ensure the runtime exposes the real CAM async operator namespace."""
-
-    try:
-        import torch
-        import torch_npu  # noqa: F401
-        import umdk_cam_op_lib  # noqa: F401
-    except ImportError as exc:
-        raise RuntimeError(
-            "CAMAsyncAFDConnector requires torch, torch_npu, umdk_cam_op_lib, "
-            "and preloaded real torch.ops.umdk_cam_op_lib CAM ops.",
-        ) from exc
+    """Load the source-built extension and require its routed-only protocol."""
+    ensure_cam_p2p_ops_available()
+    import torch
 
     try:
         _assert_cam_namespace_registered(torch)
     except AttributeError as exc:
         raise RuntimeError(
-            "CAMAsyncAFDConnector requires real torch.ops.umdk_cam_op_lib CAM ops "
-            "(async_dispatch_send, async_dispatch_recv, async_combine_send, "
-            "async_combine_recv). Install or preload the CAM operator binaries "
-            "before initializing the connector.",
+            "Async CAM requires all four torch.ops.afd_ascend.afd_async_* "
+            "operators. Rebuild AFD with AFD_BUILD_ASCEND_OPS=1."
         ) from exc
+    # Inherit the worker's configured vLLM handler instead of root WARNING.
+    logging.getLogger("vllm.afd_plugin.compat.npu.ops").info(
+        "Async CAM namespace=%s plugin=%s vendor_library=%s",
+        AFD_ASCEND_OPS_NAMESPACE,
+        __version__,
+        get_afd_cust_opapi_path(),
+    )
 
 
 __all__ = [

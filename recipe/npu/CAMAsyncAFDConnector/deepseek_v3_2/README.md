@@ -46,8 +46,7 @@ docker pull quay.io/ascend/vllm-ascend:v0.19.1rc1-a3-openeuler
 Run the following commands from the repository root inside the container:
 
 ```bash
-bash afd_plugin/connectors/npu/bin/CAM_ascend910_93_openEuler_aarch64.run
-pip install afd_plugin/connectors/npu/bin/umdk_cam_op_lib-208.1.0b1-cp311-cp311-linux_aarch64.whl
+SOC_VERSION=910c AFD_BUILD_ASCEND_OPS=1 pip install -e . -v --no-build-isolation
 ```
 
 ## AFD Config Explanation
@@ -266,7 +265,6 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
-export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -330,7 +328,6 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
-export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -395,7 +392,6 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
-export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
