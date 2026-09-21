@@ -5,10 +5,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 
-torch = pytest.importorskip("torch")
+if TYPE_CHECKING:
+    import torch
+else:
+    torch = pytest.importorskip("torch")
+
 pytest.importorskip("vllm")
 
 from vllm.model_executor.models import deepseek_v2 as native  # noqa: E402

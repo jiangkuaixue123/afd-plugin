@@ -60,7 +60,7 @@ same value on the Attention (A) and FFN (F) sides. This recipe uses `140000`
 for both sides.
 
 | Field | Meaning |
-|-------|---------|
+| ------- | --------- |
 | `connector` | Selects the AFD connector implementation. Use `CAMAsyncAFDConnector` for CAM async. |
 | `async` | Enables async-DP execution, which is required by `CAMAsyncAFDConnector`. |
 | `role` | Worker role in the AFD split. Use `attention` for prefill attention workers and `ffn` for expert workers. |
@@ -72,7 +72,7 @@ for both sides.
 `connector_extra_config` carries CAM async-specific knobs:
 
 | Field | Meaning |
-|-------|---------|
+| ------- | --------- |
 | `dynamicQuant` | Enables dynamic quantization metadata for CAM dispatch/combine. |
 | `async_moe_ubatching` | Enables AFD-managed MoE ubatching instead of vLLM native DBO. |
 | `async_moe_num_ubatches` | Number of async MoE stages. The current CAM async setup uses `2`. |
@@ -242,6 +242,7 @@ vllm serve /path/to/DeepSeek-V3.2 \
     "enable_force_load_balance": true
   }'
 ```
+
 </details>
 
 ### AFD CAM async

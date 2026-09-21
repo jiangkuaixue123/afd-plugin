@@ -76,7 +76,6 @@ DSV2 E2E 必须分别以四卡运行普通 completion、三卡运行 ubatch；
 分别取 `TP=1,2,4`、`DTYPE=float16,bfloat16`、`QUANT=0,1`。
 该 oracle 独立构造输入、路由和量化参考，不从接收的 payload/counts 反推预期。
 
-
 DSV2 实际检查点 layer 1 数值误差（每格为最大绝对误差 / 相对 L2）：
 
 | 比较项 | BF16 | FP16 |

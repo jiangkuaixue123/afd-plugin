@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from copy import copy
 from itertools import islice
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 from vllm.distributed import (
@@ -38,6 +38,7 @@ from afd_plugin.model_executor.models.npu.async_cam_layout import (
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 if TYPE_CHECKING:
+    from afd_plugin.connectors.npu.async_cam import CAMAsyncAFDConnector
     from afd_plugin.model_executor.models.deepseek_v2 import (
         AFDDeepseekV2DecoderLayer,
         AFDDeepseekV2Model,
@@ -102,7 +103,9 @@ def run_model_forward(
                 llama_4_scaling,
             )
     except BaseException:
-        afd_metadata.connector.discard_pending_attention_payloads()
+        cast(
+            "CAMAsyncAFDConnector", afd_metadata.connector
+        ).discard_pending_attention_payloads()
         raise
 
     if not get_pp_group().is_last_rank:
