@@ -55,8 +55,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Ascend custom-op run package build output (csrc/npu/output)
+# Ascend custom-op generated build output
 csrc/npu/output/
+/afd_plugin/_cann_ops_custom/
+/kernel_meta/
 cover/
 
 # Translations
