@@ -46,7 +46,8 @@ docker pull quay.io/ascend/vllm-ascend:v0.19.1rc1-a3-openeuler
 Run the following commands from the repository root inside the container:
 
 ```bash
-SOC_VERSION=910c AFD_BUILD_ASCEND_OPS=1 pip install -e . -v --no-build-isolation
+bash afd_plugin/connectors/npu/bin/CAM_ascend910_93_openEuler_aarch64.run
+pip install afd_plugin/connectors/npu/bin/umdk_cam_op_lib-208.1.0b1-cp311-cp311-linux_aarch64.whl
 ```
 
 ## AFD Config Explanation
@@ -60,7 +61,7 @@ same value on the Attention (A) and FFN (F) sides. This recipe uses `140000`
 for both sides.
 
 | Field | Meaning |
-| ------- | --------- |
+|-------|---------|
 | `connector` | Selects the AFD connector implementation. Use `CAMAsyncAFDConnector` for CAM async. |
 | `async` | Enables async-DP execution, which is required by `CAMAsyncAFDConnector`. |
 | `role` | Worker role in the AFD split. Use `attention` for prefill attention workers and `ffn` for expert workers. |
@@ -72,7 +73,7 @@ for both sides.
 `connector_extra_config` carries CAM async-specific knobs:
 
 | Field | Meaning |
-| ------- | --------- |
+|-------|---------|
 | `dynamicQuant` | Enables dynamic quantization metadata for CAM dispatch/combine. |
 | `async_moe_ubatching` | Enables AFD-managed MoE ubatching instead of vLLM native DBO. |
 | `async_moe_num_ubatches` | Number of async MoE stages. The current CAM async setup uses `2`. |
@@ -242,7 +243,6 @@ vllm serve /path/to/DeepSeek-V3.2 \
     "enable_force_load_balance": true
   }'
 ```
-
 </details>
 
 ### AFD CAM async
@@ -266,6 +266,7 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
+export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -329,6 +330,7 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
+export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
@@ -393,6 +395,7 @@ export ASCEND_A3_ENABLE=1
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export HCCL_OP_EXPANSION_MODE=AIV
 
+export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.1/opp/vendors/CAM/op_api/lib:${LD_LIBRARY_PATH:-}
 export HCCL_BUFFSIZE=4096
 export VLLM_ASCEND_ENABLE_CONTEXT_PARALLEL=1
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True

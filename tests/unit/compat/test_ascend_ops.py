@@ -117,15 +117,6 @@ def test_async_loader_requires_all_source_ops(monkeypatch, missing):
     monkeypatch.setattr(
         ops, "ensure_cam_p2p_ops_available", lambda: loaded.append(True)
     )
-    monkeypatch.setattr(ops, "__version__", "source-test")
-    logger_names = []
-    records = []
-
-    def get_logger(name):
-        logger_names.append(name)
-        return SimpleNamespace(info=lambda *args: records.append(args))
-
-    monkeypatch.setattr(ops, "logging", SimpleNamespace(getLogger=get_logger))
     ensure_cam_async_ops_available.cache_clear()
     try:
         if missing:
@@ -134,17 +125,5 @@ def test_async_loader_requires_all_source_ops(monkeypatch, missing):
         else:
             ensure_cam_async_ops_available()
         assert loaded == [True]
-        if missing:
-            assert not records
-        else:
-            assert logger_names == ["vllm.afd_plugin.compat.npu.ops"]
-            assert records == [
-                (
-                    "Async CAM namespace=%s plugin=%s vendor_library=%s",
-                    "afd_ascend",
-                    "source-test",
-                    get_afd_cust_opapi_path(),
-                )
-            ]
     finally:
         ensure_cam_async_ops_available.cache_clear()

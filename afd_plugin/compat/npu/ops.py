@@ -4,12 +4,9 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-
-from afd_plugin import __version__
 
 AFD_ASCEND_OPS_NAMESPACE = "afd_ascend"
 AFD_ASCEND_VENDOR_NAME = "afd-plugin"
@@ -121,13 +118,6 @@ def ensure_cam_async_ops_available() -> None:
             "Async CAM requires all four torch.ops.afd_ascend.afd_async_* "
             "operators. Rebuild AFD with AFD_BUILD_ASCEND_OPS=1."
         ) from exc
-    # Inherit the worker's configured vLLM handler instead of root WARNING.
-    logging.getLogger("vllm.afd_plugin.compat.npu.ops").info(
-        "Async CAM namespace=%s plugin=%s vendor_library=%s",
-        AFD_ASCEND_OPS_NAMESPACE,
-        __version__,
-        get_afd_cust_opapi_path(),
-    )
 
 
 __all__ = [
