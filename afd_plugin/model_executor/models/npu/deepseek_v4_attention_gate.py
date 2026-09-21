@@ -115,6 +115,8 @@ def compute_attention_gate_topk(
 
     # Match AscendMoERunner's internal router: BF16 GEMM can change expert
     # selection when correction bias makes non-Hash scores nearly equal.
+    # TODO: Recheck the native internal router FP32 input/weight_fp32 contract
+    # when upgrading vLLM or vLLM-Ascend.
     router_logits = torch.nn.functional.linear(
         hidden_states.float(), moe.gate.weight_fp32
     )
