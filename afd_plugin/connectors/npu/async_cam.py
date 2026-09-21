@@ -190,8 +190,6 @@ class AFDAsyncFFNWorkItem:
     stage_idx: int
     num_tokens: int
     total_num_tokens: int
-    start_expert: int
-    end_expert: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +254,9 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
         self.dynamic_quant = extra_info.dynamic_quant
         self.hccl_buffer_size_mb = extra_info.hccl_buffer_size
         self.group_name = ""
-        self.max_seq_len = vllm_config.scheduler_config.max_num_batched_tokens
+        self.max_num_batched_tokens = (
+            vllm_config.scheduler_config.max_num_batched_tokens
+        )
         self.comm_id = CAM_COMM_ID
         self.tp_size = extra_info.attn_ranks_per_dp
         self.cam_pg: ProcessGroup | None = None
@@ -326,14 +326,6 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
         self._pending_attention_payloads.clear()
         self._initialized = False
 
-    def discard_pending_attention_payloads(self) -> None:
-        """Release routing tensors after a failed or cancelled model forward.
-
-        An interrupted communication window is not reusable; the worker must
-        still tear down its process group through close().
-        """
-        self._pending_attention_payloads.clear()
-
     def select_experts(self, **kwargs: Any) -> tuple[Tensor, Tensor]:
         """Run the pinned vLLM-Ascend expert selector on Attention."""
         from vllm_ascend.ops.fused_moe.experts_selector import select_experts
@@ -354,7 +346,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
         recv_output = self.recv_attn_output(
             stage_idx=stage_idx,
             layer_idx=0,
-            batch_size=max(1, self.max_seq_len or max_num_tokens),
+            batch_size=max(1, self.max_num_batched_tokens or max_num_tokens),
             ubatch_idx=stage_idx,
         )
         context = recv_output.context
@@ -374,14 +366,10 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             (
                 token_nums_rankid_layeridx[0],
                 token_nums_rankid_layeridx[2],
-                token_nums_rankid_layeridx[3],
-                token_nums_rankid_layeridx[4],
                 expert_token_nums.sum(dtype=torch.int64),
             )
         )
-        total_num_tokens, layer_idx, start_expert, end_expert, num_tokens = (
-            control.cpu().tolist()
-        )
+        total_num_tokens, layer_idx, num_tokens = control.cpu().tolist()
 
         metadata.layer_idx = layer_idx
         metadata.stage_idx = stage_idx
@@ -399,8 +387,6 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             stage_idx=stage_idx,
             num_tokens=num_tokens,
             total_num_tokens=total_num_tokens,
-            start_expert=start_expert,
-            end_expert=end_expert,
         )
 
     def _send_ffn_output_payload(
@@ -505,8 +491,10 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             batch_size=states.batch_size,
             topk=states.topk,
         )
-        if states.batch_size > self.max_seq_len // self.tp_size:
-            raise ValueError("Async CAM batch exceeds max_seq_len / TP capacity")
+        if states.batch_size > self.max_num_batched_tokens // self.tp_size:
+            raise ValueError(
+                "Async CAM batch exceeds max_num_batched_tokens / TP capacity"
+            )
         hidden_states = hidden_states.contiguous()
 
         _log_cam_op_values(
@@ -516,7 +504,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             topk_ids=topk_ids,
             comm_args=self.comm_args,
             comm_id=self.comm_id,
-            max_seq_len=self.max_seq_len,
+            max_seq_len=self.max_num_batched_tokens,
             batch_size=states.batch_size,
             hidden_size=states.hidden_size,
             topk=states.topk,
@@ -535,7 +523,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             topk_ids,
             self.comm_args,
             self.comm_id,
-            self.max_seq_len,
+            self.max_num_batched_tokens,
             states.batch_size,
             states.hidden_size,
             states.topk,
@@ -662,7 +650,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
     ) -> AFDA2FTransferPayload:
         """Receive routed activations and preserve their compact metadata."""
         self._require_initialized()
-        batch_size = int(kwargs.get("batch_size", self.max_seq_len) or 1)
+        batch_size = int(kwargs.get("batch_size", self.max_num_batched_tokens) or 1)
         layer_idx = int(kwargs.get("layer_idx", 0) or 0)
         metadata = AFDTransferMetadata.create_ffn_metadata(
             layer_idx=layer_idx,
@@ -686,6 +674,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             placeholder=placeholder,
             comm_args=self.comm_args,
             comm_id=self.comm_id,
+            max_seq_len=self.max_num_batched_tokens,
             batch_size=states.batch_size,
             hidden_size=states.hidden_size,
             topk=states.topk,
@@ -702,7 +691,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             placeholder,
             self.comm_args,
             self.comm_id,
-            self.max_seq_len,
+            self.max_num_batched_tokens,
             states.hidden_size,
             states.topk,
             self.ffn_size,
@@ -715,6 +704,14 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             self.group_name,
         )
         hidden_states, dynamic_scales, batch_info, expert_token_nums = outputs
+        _log_cam_op_values(
+            "async_dispatch_recv",
+            "outputs",
+            hidden_states=hidden_states,
+            dynamic_scales=dynamic_scales,
+            batch_info=batch_info,
+            expert_token_nums=expert_token_nums,
+        )
         states.token_nums_rankid_layeridx = batch_info
         states.group_list = expert_token_nums
         states.dynamic_scales = dynamic_scales
@@ -751,6 +748,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             comm_args=self.comm_args,
             token_nums_rankid_layeridx=token_nums_rankid_layeridx,
             comm_id=self.comm_id,
+            max_seq_len=self.max_num_batched_tokens,
             batch_size=states.batch_size,
             hidden_size=states.hidden_size,
             topk=states.topk,
@@ -767,7 +765,7 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
             self.comm_args,
             token_nums_rankid_layeridx,
             self.comm_id,
-            self.max_seq_len,
+            self.max_num_batched_tokens,
             states.hidden_size,
             states.topk,
             self.ffn_size,

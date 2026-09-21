@@ -59,7 +59,6 @@ def test_get_async_moe_ubatch_metadata_from_additional_kwargs():
     )
 
 
-@pytest.mark.parametrize("schedule_failure", [False, True])
 @pytest.mark.parametrize(
     ("is_first_rank", "is_last_rank"),
     [(True, False), (False, True)],
@@ -68,7 +67,6 @@ def test_async_model_forward_preserves_pp_boundaries(
     monkeypatch,
     is_first_rank,
     is_last_rank,
-    schedule_failure,
 ):
     from afd_plugin.model_executor.models.npu import (
         deepseek_v2_async_cam_forward as async_forward,
@@ -87,12 +85,7 @@ def test_async_model_forward_preserves_pp_boundaries(
         ),
     )
     forward_context = SimpleNamespace()
-    cleared = []
-    afd_metadata = SimpleNamespace(
-        connector=SimpleNamespace(
-            discard_pending_attention_payloads=lambda: cleared.append(True),
-        )
-    )
+    afd_metadata = SimpleNamespace()
     monkeypatch.setattr(async_forward, "get_forward_context", lambda: forward_context)
     monkeypatch.setattr(
         async_forward,
@@ -115,8 +108,6 @@ def test_async_model_forward_preserves_pp_boundaries(
         received_metadata,
         llama_4_scaling,
     ):
-        if schedule_failure:
-            raise RuntimeError("cancelled forward")
         schedule_calls.append(
             (
                 model,
@@ -165,14 +156,6 @@ def test_async_model_forward_preserves_pp_boundaries(
                 "residual": expected_residual,
             }
         )
-
-    if schedule_failure:
-        with pytest.raises(RuntimeError, match="cancelled forward"):
-            async_forward.run_model_forward(
-                model, input_ids, positions, intermediate_tensors
-            )
-        assert cleared == [True]
-        return
 
     output = async_forward.run_model_forward(
         model,

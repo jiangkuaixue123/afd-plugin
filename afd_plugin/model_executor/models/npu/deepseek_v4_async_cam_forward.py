@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from copy import copy
 from itertools import islice
-from typing import TYPE_CHECKING, Final, cast
+from typing import Final
 
 import torch
 from vllm.distributed import get_pp_group
@@ -36,9 +36,6 @@ from afd_plugin.model_executor.models.npu.deepseek_v4 import (
     AFDDeepseekV4Model,
     _run_two_stage_async_moe_schedule,
 )
-
-if TYPE_CHECKING:
-    from afd_plugin.connectors.npu.async_cam import CAMAsyncAFDConnector
 
 _ASYNC_MOE_STAGE_COUNT: Final[int] = 2
 _PAD_INPUT_ID: Final[int] = -1
@@ -277,19 +274,13 @@ def run_async_moe_ubatch_forward(
         stage_ffn_state[stage_idx] = None
 
     layers = list(islice(model.layers, model.start_layer, model.end_layer))
-    try:
-        if layers:
-            _run_two_stage_async_moe_schedule(
-                layers,
-                compute_stage_attention,
-                send_stage_attention,
-                receive_and_complete,
-            )
-    except BaseException:
-        cast(
-            "CAMAsyncAFDConnector", afd_metadata.connector
-        ).discard_pending_attention_payloads()
-        raise
+    if layers:
+        _run_two_stage_async_moe_schedule(
+            layers,
+            compute_stage_attention,
+            send_stage_attention,
+            receive_and_complete,
+        )
 
     restored_hidden_states = restore_async_moe_stage_outputs(
         stage_hidden_states,

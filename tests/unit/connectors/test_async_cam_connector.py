@@ -461,6 +461,12 @@ def test_async_connector_calls_cam_shaped_ops(monkeypatch):
 
 
 def test_async_ffn_side_dispatch_recv_and_combine_send(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        async_cam_module,
+        "_log_cam_op_values",
+        lambda op, label, **values: logs.append((op, label, values)),
+    )
     fake_torch = _FakeTorch()
     monkeypatch.setattr(async_cam_module, "torch", fake_torch)
     connector = CAMAsyncAFDConnector(
@@ -481,14 +487,28 @@ def test_async_ffn_side_dispatch_recv_and_combine_send(monkeypatch):
     connector.send_ffn_output(recv_output.hidden_states, recv_output.context)
 
     states = recv_output.context.states
-    assert recv_output.hidden_states.shape == (connector.max_seq_len, 16)
-    assert states.dynamic_scales.shape == (connector.max_seq_len,)
+    assert recv_output.hidden_states.shape == (connector.max_num_batched_tokens, 16)
+    assert states.dynamic_scales.shape == (connector.max_num_batched_tokens,)
     assert states.group_list.shape == (connector.topology.expert_per_rank,)
     assert fake_torch.ops.afd_ascend.calls[0][0] == "dispatch_recv"
     assert fake_torch.ops.afd_ascend.calls[1][0] == "combine_send"
     assert fake_torch.ops.afd_ascend.calls[0][1][11] == 2
     assert fake_torch.ops.afd_ascend.calls[1][1][12] == 2
     assert fake_torch.ops.afd_ascend.calls[1][1][2] is states.token_nums_rankid_layeridx
+
+    assert [(op, label) for op, label, _ in logs] == [
+        ("async_dispatch_recv", "inputs"),
+        ("async_dispatch_recv", "outputs"),
+        ("async_combine_send", "inputs"),
+    ]
+    assert logs[1][2] == {
+        "hidden_states": recv_output.hidden_states,
+        "dynamic_scales": states.dynamic_scales,
+        "batch_info": states.token_nums_rankid_layeridx,
+        "expert_token_nums": states.group_list,
+    }
+    for index in (0, 2):
+        assert logs[index][2]["max_seq_len"] == connector.max_num_batched_tokens
 
 
 def test_async_combine_send_requires_dispatch_recv_token_metadata(monkeypatch):
@@ -807,7 +827,7 @@ def test_dispatch_failure_does_not_leave_pending_routing(monkeypatch):
     assert connector._pending_attention_payloads == {}
 
 
-def test_cancelled_forward_releases_every_stage_routing(monkeypatch):
+def test_close_releases_every_stage_routing(monkeypatch):
     fake_torch = _FakeTorch()
     monkeypatch.setattr(async_cam_module, "torch", fake_torch)
     connector = CAMAsyncAFDConnector(
@@ -829,5 +849,5 @@ def test_cancelled_forward_releases_every_stage_routing(monkeypatch):
         )
         connector.send_attn_output(_FakeTensor((3, 16)), context, **_topk_payload(3))
     assert set(connector._pending_attention_payloads) == {0, 1}
-    connector.discard_pending_attention_payloads()
+    connector.close()
     assert connector._pending_attention_payloads == {}

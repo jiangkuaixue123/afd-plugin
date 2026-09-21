@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from copy import copy
 from itertools import islice
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import torch
 from vllm.distributed import (
@@ -38,7 +38,6 @@ from afd_plugin.model_executor.models.npu.async_cam_layout import (
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
 
 if TYPE_CHECKING:
-    from afd_plugin.connectors.npu.async_cam import CAMAsyncAFDConnector
     from afd_plugin.model_executor.models.deepseek_v2 import (
         AFDDeepseekV2DecoderLayer,
         AFDDeepseekV2Model,
@@ -82,31 +81,25 @@ def run_model_forward(
     async_moe_ubatch_metadata = get_async_moe_ubatch_metadata_from_forward_context(
         forward_context
     )
-    try:
-        if async_moe_ubatch_metadata is None:
-            hidden_states, residual = run_attention_gate_afd_forward(
-                model,
-                hidden_states,
-                residual,
-                positions,
-                afd_metadata,
-                llama_4_scaling,
-            )
-        else:
-            hidden_states, residual = run_async_moe_ubatch_afd_forward(
-                model,
-                hidden_states,
-                residual,
-                positions,
-                afd_metadata,
-                async_moe_ubatch_metadata,
-                llama_4_scaling,
-            )
-    except BaseException:
-        cast(
-            "CAMAsyncAFDConnector", afd_metadata.connector
-        ).discard_pending_attention_payloads()
-        raise
+    if async_moe_ubatch_metadata is None:
+        hidden_states, residual = run_attention_gate_afd_forward(
+            model,
+            hidden_states,
+            residual,
+            positions,
+            afd_metadata,
+            llama_4_scaling,
+        )
+    else:
+        hidden_states, residual = run_async_moe_ubatch_afd_forward(
+            model,
+            hidden_states,
+            residual,
+            positions,
+            afd_metadata,
+            async_moe_ubatch_metadata,
+            llama_4_scaling,
+        )
 
     if not get_pp_group().is_last_rank:
         return IntermediateTensors(

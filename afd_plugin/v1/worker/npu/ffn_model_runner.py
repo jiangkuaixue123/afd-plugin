@@ -320,8 +320,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         rank_ffn_output = None
         connector = cast(CAMAsyncAFDConnector, self.connector)
 
-        completed_layers = 0
-        while completed_layers < len(_ffn_layer_indices(self)):
+        for _ in _ffn_layer_indices(self):
             work_item = connector.recv_ffn_work_item(
                 stage_idx=stage_idx,
                 max_num_tokens=self.max_num_tokens,
@@ -366,10 +365,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                     work_item,
                     rank_ffn_output,
                 )
-            # Receive chunks can split one layer across expert intervals.
-            # Only the final interval completes this layer's routed work.
-            if work_item.end_expert == connector.expert_per_rank - 1:
-                completed_layers += 1
         return rank_ffn_output
 
     def capture_model(
