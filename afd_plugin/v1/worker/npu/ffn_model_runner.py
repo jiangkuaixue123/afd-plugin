@@ -12,6 +12,7 @@ from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.forward_context import DPMetadata
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
+from vllm_ascend import ascend_forward_context as ascend_context
 from vllm_ascend.worker.model_runner_v1 import NPUModelRunner, graph_capture
 
 from afd_plugin.compat.npu import (
@@ -79,6 +80,14 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
             vllm_config,
             self.afd_config,
         )
+        if (
+            isinstance(self.connector, CAMAsyncAFDConnector)
+            and self.afd_config.compute_gate_on_attention
+            and not vllm_config.use_v2_model_runner
+        ):
+            # This dedicated CAM FFN process never consumes the native MC2 mask.
+            # Clear it after super().__init__ so upstream skips per-step fills.
+            ascend_context._reserved_mc2_mask = None
         self.num_layers = int(self.model_config.hf_config.num_hidden_layers)
         self.use_aclgraph = _use_npu_aclgraph(vllm_config, self)
         self._acl_graphs: dict[tuple, dict[str, Any]] = {}
@@ -235,6 +244,10 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
         )
         stage_ids = sorted(int(stage_idx) for stage_idx in dp_metadata_list) or [0]
         rank_ffn_output = None
+        # A model whose router is keyed by token identity declares that the FFN
+        # role needs the tokens' ids. Resolve it once per forward, outside the
+        # layer loop, so a per-layer re-read cannot drift within a step.
+        recv_input_ids = getattr(self.model, "afd_requires_input_ids", False)
 
         for layer_idx in _ffn_layer_indices(self):
             for stage_idx in stage_ids:
@@ -255,6 +268,22 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                     num_tokens_across_dp,
                     dp_size=int(self.vllm_config.parallel_config.data_parallel_size),
                 )
+                # A model whose router is keyed by token identity needs the ids
+                # of the tokens this rank computes on installed in the forward
+                # context before the FFN compute runs. They arrive on the
+                # transfer payload, so the receive must happen before the
+                # context is built rather than inside it.
+                payload = self.connector.recv_attn_output(
+                    ubatch_idx=stage_idx,
+                    layer_idx=layer_idx,
+                    max_num_tokens=self.max_num_tokens,
+                    recv_input_ids=recv_input_ids,
+                )
+                context = payload.context
+                metadata = context.metadata
+                states = context.states
+                hidden_states = payload.hidden_states
+                received_input_ids = payload.input_ids
                 with ascend_forward_context(
                     vllm_config=self.vllm_config,
                     afd_metadata=afd_metadata,
@@ -263,16 +292,8 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                     num_tokens_across_dp=dp_num_tokens_across_dp,
                     in_profile_run=is_profile,
                     aclgraph_runtime_mode=aclgraph_runtime_mode,
+                    input_ids=received_input_ids,
                 ) as forward_context:
-                    payload = self.connector.recv_attn_output(
-                        ubatch_idx=stage_idx,
-                        layer_idx=layer_idx,
-                        max_num_tokens=self.max_num_tokens,
-                    )
-                    context = payload.context
-                    metadata = context.metadata
-                    states = context.states
-                    hidden_states = payload.hidden_states
                     metadata.layer_idx = layer_idx
                     metadata.stage_idx = stage_idx
                     forward_context.dp_metadata = dp_metadata_list.get(stage_idx)
@@ -328,6 +349,7 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                 afd_metadata=afd_metadata,
                 model_instance=self.model,
                 num_tokens=num_tokens,
+                skip_mc2_mask=self.afd_config.compute_gate_on_attention,
             ) as forward_context:
                 forward_context.dp_metadata = None
                 forward_context.additional_kwargs["afd_metadata"] = metadata
@@ -338,8 +360,6 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                     layer_idx=layer_idx,
                     group_list=states.group_list,
                     dynamic_scales=states.dynamic_scales,
-                    expand_x_shared=states.expand_x_shared,
-                    dynamic_scales_shared=states.dynamic_scales_shared,
                 )
                 rank_ffn_output = connector.send_ffn_work_item_output(
                     work_item,
