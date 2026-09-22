@@ -20,9 +20,7 @@
 #include "opdev/op_log.h"
 #include "opdev/op_dfx.h"
 #include "opdev/make_op_executor.h"
-// ### PATCH START: Explicit kernel config registration
 #include "opdev/op_def.h"
-// ### PATCH END: Explicit kernel config registration
 #include "util/math_util.h"
 #include "grouped_matmul_swiglu_quant_utils.h"
 #include "grouped_matmul_swiglu_quant_v2_layered.h"
@@ -65,10 +63,6 @@ void AllocOutTensorsV2(aclOpExecutor *executor, const aclTensorList *weightScale
     }
 }
 
-// Patch reason: CANN 9.0.1 derives v_2_layered/v2layered config names from
-// V2Layered, while opbuild emits v2_layered (AFD issue #372).
-// Patch functionality: register the emitted filename once before kernel lookup.
-// Signature: unchanged. Remove when supported CANN naming rules agree.
 const std::tuple<aclTensor *, aclTensor *> GroupedMatmulSwigluQuantV2Layered(
     const aclTensor *x, const aclTensorList *weight, const aclTensorList *weightScale,
     const aclTensor *xScale, const aclTensorList *weightAssistanceMatrix,
@@ -77,14 +71,12 @@ const std::tuple<aclTensor *, aclTensor *> GroupedMatmulSwigluQuantV2Layered(
     int64_t quantMode, int64_t quantDtype, bool transposeWeight, int64_t groupListType,
     const aclIntArray *tuningConfigOptional, aclOpExecutor *executor)
 {
-    // ### PATCH START: Explicit kernel config registration
     [[maybe_unused]] static const bool configRegistered = []() {
         op::BinConfigJsonDict::UpdateConfigJsonPath(
             GroupedMatmulSwigluQuantV2LayeredOpTypeId(),
             "grouped_matmul_swiglu_quant_v2_layered.json");
         return true;
     }();
-    // ### PATCH END: Explicit kernel config registration
     L0_DFX(GroupedMatmulSwigluQuantV2Layered, x, weight, weightScale, xScale, weightAssistanceMatrix, smoothScale,
            groupList, layerIndex, dequantMode, dequantDtype, quantMode, quantDtype, transposeWeight,
            tuningConfigOptional);
