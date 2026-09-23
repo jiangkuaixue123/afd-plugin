@@ -60,5 +60,5 @@ and measure the retained worker group synchronization separately. No
 performance improvement has been measured for this change.
 
 The device Tensor `group_list` interface for the second GMM was merged in
-#384. This change uses it directly and does not modify the operator source or
+PR #384. This change uses it directly and does not modify the operator source or
 binding.

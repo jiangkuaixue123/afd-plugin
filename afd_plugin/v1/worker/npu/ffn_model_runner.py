@@ -387,8 +387,8 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
             )
             hidden_states = work_item.hidden_states
             metadata = work_item.context.metadata
-            states = work_item.context.states
-            if not isinstance(states, AFDAsyncTransferState):
+            legacy_states = work_item.context.states
+            if not isinstance(legacy_states, AFDAsyncTransferState):
                 raise RuntimeError(
                     "CAM async FFN work item requires AFDAsyncTransferState",
                 )
@@ -418,8 +418,8 @@ class AFDNPUFFNModelRunner(NPUModelRunner):
                 rank_ffn_output = self.model.compute_ffn_output(
                     hidden_states=hidden_states,
                     layer_idx=layer_idx,
-                    group_list=states.group_list,
-                    dynamic_scales=states.dynamic_scales,
+                    group_list=legacy_states.group_list,
+                    dynamic_scales=legacy_states.dynamic_scales,
                 )
                 rank_ffn_output = connector.send_ffn_work_item_output(
                     work_item,

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """Opt-in numerical checks; requires a 910C and the compiled AFD extension.
 
 Run with AFD_RUN_ASCEND_OP_RUNTIME=1 SOC_VERSION=910c via pytest.

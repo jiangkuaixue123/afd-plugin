@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """CPU contracts for device-controlled layered W4A8 execution."""
 
 from __future__ import annotations
@@ -6,6 +7,7 @@ from __future__ import annotations
 import ast
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -252,14 +254,14 @@ def test_layered_switch_rejects_other_roles_connectors_and_models(
     )
     afd_config = SimpleNamespace(role=role, connector=connector)
     with pytest.raises(RuntimeError, match=message):
-        namespace["fail_if_unsupported_npu_afd_features"](
+        cast(Callable[..., None], namespace["fail_if_unsupported_npu_afd_features"])(
             SimpleNamespace(), afd_config=afd_config
         )
 
 
 @pytest.mark.parametrize("eligible", [False, True])
 def test_runner_initializes_ops_before_executor(eligible):
-    events = []
+    events: list[str] = []
 
     class Connector:
         dynamic_quant = 1
@@ -363,7 +365,7 @@ def model_weights_method(monkeypatch):
         ],
         type_ignores=[],
     )
-    namespace = {}
+    namespace: dict[str, object] = {}
     exec(
         compile(ast.fix_missing_locations(module), "<model-weights>", "exec"), namespace
     )
