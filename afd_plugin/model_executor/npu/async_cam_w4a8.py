@@ -88,10 +88,6 @@ class AsyncCAMW4A8Executor:
     @staticmethod
     def _validate_layer(layer: W4A8LayerWeights) -> None:
         prefix = f"layered GMM layer {layer.layer_idx}: "
-        if layer.swiglu_limit != 0.0:
-            raise ValueError(
-                prefix + "swiglu_limit must be 0; existing layered kernel has no clamp"
-            )
         if layer.w13.dim() != 3 or layer.w2.dim() != 3:
             raise ValueError(prefix + "weights must be packed [E, K, N/8] tensors")
         experts, hidden, packed_intermediate = layer.w13.shape

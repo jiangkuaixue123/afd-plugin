@@ -112,7 +112,6 @@ def test_device_layer_selection_capacity_and_scaling(
 @pytest.mark.parametrize(
     "change, message",
     [
-        ({"swiglu_limit": 7.0}, "swiglu_limit"),
         ({"w13_bias": torch.empty(2, 32, dtype=torch.int64)}, "compensation"),
         ({"w13_scale": torch.empty(2, 32)}, "encoded INT64"),
         ({"w2_scale": torch.empty(2, 32, dtype=torch.int64)}, "w2_scale"),
@@ -122,6 +121,18 @@ def test_reject_incompatible_parameters_before_receive(operators, change, messag
     with pytest.raises(ValueError, match=message):
         AsyncCAMW4A8Executor([replace(weights(), **change)])
     assert operators == []
+
+
+def test_nonzero_swiglu_limit_starts_without_passing_a_clamp(operators):
+    executor = AsyncCAMW4A8Executor([replace(weights(), swiglu_limit=10.0)])
+    executor(
+        torch.ones(1, 32, dtype=torch.int8),
+        torch.ones(1),
+        torch.ones(2, dtype=torch.int64),
+        torch.tensor([2, 0, 0, 1]),
+    )
+    assert len(operators) == 2
+    assert "clamp_value" not in operators[0][2]
 
 
 def test_repeated_interleaved_layer_ids(operators):

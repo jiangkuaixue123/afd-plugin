@@ -44,7 +44,9 @@ The NPU test uses two layers with different nonzero INT4 weights, nonzero
 compensation, per-channel and per-group scales, interleaved nonconsecutive
 layer IDs, and zero, single-row, uneven, and full-capacity expert counts. It
 compares valid rows with an FP32 reference and perturbs the capacity tail. It
-exercises only the `swiglu_limit=0` operator chain; it does not check
+exercises only the `swiglu_limit=0` operator chain; nonzero limits are
+temporarily ignored by the layered path and are not precision-equivalent to
+the model. It does not check
 distributed CAM completion or compare actual checkpoint results against the
 legacy path. This test has not run on NPU yet. Calibrate its tolerance and
 supported configurations against the project's precision standard on the

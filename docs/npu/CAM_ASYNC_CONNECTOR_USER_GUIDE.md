@@ -329,8 +329,11 @@ and per-group parameters can be extracted, but neither mode has been validated
 with a target checkpoint. Shared experts remain on Attention. DSV4 already
 applies routed scaling in top-k, so FFN does not apply it again.
 
-The existing fused operator supports only **`swiglu_limit=0`** here. A nonzero
-limit, missing `w13_scale_bias` or `w2_scale_bias`, dynamic EPLB, non-SiLU
+The existing fused operator does not apply a nonzero `swiglu_limit`. The
+layered path temporarily ignores the model's limit and logs
+`swiglu_limit=<value> ignored=True`; its output must not be treated as a
+precision-equivalent replacement until the fused operator implements the
+clamp. Missing `w13_scale_bias` or `w2_scale_bias`, dynamic EPLB, non-SiLU
 activation, or incompatible parameters fail before receiving work. Non-W4A8,
 mixed-quantization, and heterogeneous layers stay on the legacy path with a
 startup reason. Do not fill absent compensation parameters with zeros merely
