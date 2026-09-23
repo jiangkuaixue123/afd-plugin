@@ -214,6 +214,49 @@ def test_runner_switch_off_does_not_touch_model_or_ops():
     method(runner)
 
 
+@pytest.mark.parametrize(
+    ("role", "connector", "is_dsv4", "message"),
+    [
+        ("attention", "CAMAsyncAFDConnector", True, "FFN role"),
+        ("ffn", "CAMP2pAFDConnector", True, "async CAM"),
+        ("ffn", "CAMAsyncAFDConnector", False, "only DeepSeek V4"),
+    ],
+)
+def test_layered_switch_rejects_other_roles_connectors_and_models(
+    role, connector, is_dsv4, message
+):
+    source = Path("afd_plugin/compat/npu/feature_validation.py").read_text()
+    function = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "fail_if_unsupported_npu_afd_features"
+    )
+    namespace = {
+        "AFD_ASYNC_CONNECTOR": "CAMAsyncAFDConnector",
+        "async_cam_layered_gmm_enabled": lambda: True,
+        "_is_dsv4_target": lambda config: is_dsv4,
+    }
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(
+                module="__future__", names=[ast.alias(name="annotations")], level=0
+            ),
+            function,
+        ],
+        type_ignores=[],
+    )
+    exec(
+        compile(ast.fix_missing_locations(module), "<feature-validation>", "exec"),
+        namespace,
+    )
+    afd_config = SimpleNamespace(role=role, connector=connector)
+    with pytest.raises(RuntimeError, match=message):
+        namespace["fail_if_unsupported_npu_afd_features"](
+            SimpleNamespace(), afd_config=afd_config
+        )
+
+
 @pytest.mark.parametrize("eligible", [False, True])
 def test_runner_initializes_ops_before_executor(eligible):
     events = []
@@ -294,14 +337,12 @@ def test_layered_debug_logging_does_not_read_metadata(monkeypatch):
 
 
 def model_weights_method(monkeypatch):
-    source = Path(
-        "afd_plugin/model_executor/models/npu/deepseek_v2_attention_gate.py"
-    ).read_text()
+    source = Path("afd_plugin/model_executor/models/npu/deepseek_v4.py").read_text()
     function = next(
         node
         for node in ast.parse(source).body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "get_async_cam_w4a8_layers"
+        and node.name == "_extract_async_cam_w4a8_layers"
     )
     monkeypatch.setitem(
         sys.modules,
@@ -326,7 +367,7 @@ def model_weights_method(monkeypatch):
     exec(
         compile(ast.fix_missing_locations(module), "<model-weights>", "exec"), namespace
     )
-    return namespace["get_async_cam_w4a8_layers"]
+    return namespace["_extract_async_cam_w4a8_layers"]
 
 
 def model_layer(idx):
@@ -362,15 +403,14 @@ def model_layer(idx):
     )
 
 
-@pytest.mark.parametrize("topk_scaled", [True, False])
-def test_model_extraction_preserves_weights_and_scaling(monkeypatch, topk_scaled):
+def test_model_extraction_preserves_weights_and_topk_scaling(monkeypatch):
     method = model_weights_method(monkeypatch)
     layer = model_layer(3)
-    specs, reason = method([layer], routed_scale_applied_in_topk=topk_scaled)
+    specs, reason = method([layer])
     assert reason == ""
     assert specs[0].layer_idx == 3
     assert specs[0].w13 is layer.mlp.experts.routed_experts.w13_weight
-    assert specs[0].routed_scaling_factor == (1.0 if topk_scaled else 2.5)
+    assert specs[0].routed_scaling_factor == 1.0
 
 
 @pytest.mark.parametrize("mixed", [False, True])
@@ -380,7 +420,7 @@ def test_model_extraction_skips_other_quantization(monkeypatch, mixed):
     layers[0].mlp.experts.quant_type = "w8a8"
     if not mixed:
         layers[1].mlp.experts.quant_type = "w8a8"
-    specs, reason = method(layers, routed_scale_applied_in_topk=False)
+    specs, reason = method(layers)
     assert specs == []
     assert "non-W4A8 or mixed" in reason
 
@@ -390,13 +430,14 @@ def test_model_extraction_rejects_missing_compensation(monkeypatch):
     layer = model_layer(5)
     del layer.mlp.experts.routed_experts._parameters["w13_scale_bias"]
     with pytest.raises(ValueError, match="layer 5: missing loaded w13_scale_bias"):
-        method([layer], routed_scale_applied_in_topk=False)
+        method([layer])
 
 
 def test_model_extraction_skips_heterogeneous_semantics(monkeypatch):
     method = model_weights_method(monkeypatch)
     layers = [model_layer(2), model_layer(5)]
-    layers[1].mlp.routed_scaling_factor = 3.0
-    specs, reason = method(layers, routed_scale_applied_in_topk=False)
+    owner = layers[1].mlp.experts.routed_experts
+    owner.quant_method.quant_method.is_per_channel_weight = False
+    specs, reason = method(layers)
     assert specs == []
     assert "heterogeneous" in reason

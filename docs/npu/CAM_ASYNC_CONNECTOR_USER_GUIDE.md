@@ -307,44 +307,54 @@ actual vendor library path. Missing source operators fail startup.
 For startup, HCCL, CAM operator, and shutdown failures, see the
 [NPU troubleshooting guide](TROUBLESHOOTING.md).
 
-## W4A8 layered GMM（实验性，默认关闭）
+## W4A8 layered GMM (experimental, disabled by default)
 
-FFN 进程可设置 `AFD_ASYNC_CAM_LAYERED_GMM=1`，让兼容的 W4A8 routed
-experts 直接使用两个 layered GMM。所有 FFN rank 使用相同开关；Attention
-进程无需改变协议或开启开关。初始化日志中的 `actual=layered` 才表示新路径生效。
+Set `AFD_ASYNC_CAM_LAYERED_GMM=1` on every FFN rank to use the two layered GMM
+operators for compatible W4A8 routed experts. Leave it unset on Attention
+ranks; enabling it on another role or connector fails at startup. The startup
+log must show `actual=layered` to confirm that the new path is active.
 
 ```bash
-# A/B 使用同一个 checkpoint、拓扑、容量和请求集合。
-AFD_ASYNC_CAM_LAYERED_GMM=0 bash <W4A8-FFN启动脚本>
-AFD_ASYNC_CAM_LAYERED_GMM=1 bash <W4A8-FFN启动脚本>
+# Use the same checkpoint, topology, capacity, and requests for both runs.
+AFD_ASYNC_CAM_LAYERED_GMM=0 bash <W4A8-FFN-launch-script>
+AFD_ASYNC_CAM_LAYERED_GMM=1 bash <W4A8-FFN-launch-script>
 ```
 
-适用范围为 Ascend 910C / `ascend910_93`、async CAM FFN、Attention-side
-gate、`dynamicQuant=1`、eager ModelRunnerV1 和静态专家布局。DeepSeek V2/V3
-适配器以及 Ascend DeepSeek V4 适配器提供模型参数入口。各远端 MoE 层需要
-相同几何、SiLU、量化布局和 scaling 语义；支持提取 per-channel/per-group
-参数，但两种模式均仍需目标 checkpoint 上板验收。Shared experts 保持在
-Attention 侧。DSV4 的 routed scaling 已在 topk 中，FFN 不重复应用。
+The intended configuration is Ascend 910C / `ascend910_93`, async CAM FFN,
+Attention-side gate, `dynamicQuant=1`, eager ModelRunnerV1, and static expert
+placement. This path applies only to Ascend DeepSeek V4; enabling the switch
+for another model fails at startup. All remote MoE layers must share geometry,
+SiLU activation, quantization layout, and scaling semantics. Both per-channel
+and per-group parameters can be extracted, but neither mode has been validated
+with a target checkpoint. Shared experts remain on Attention. DSV4 already
+applies routed scaling in top-k, so FFN does not apply it again.
 
-本实现不修改算子源码，因此仅接入 **`swiglu_limit=0`**。非零 limit、缺失
-`w13_scale_bias` / `w2_scale_bias`、动态 EPLB、非 SiLU 或不兼容参数在启动时
-报错，不会在收到请求后静默回退。非 W4A8、混合量化或异构层保留旧路径并记录
-原因；其他角色和 connector 也保留旧路径。旧版或不同格式 checkpoint 若没有
-已验证的补偿项，不能仅填零以启用本路径。
+The existing fused operator supports only **`swiglu_limit=0`** here. A nonzero
+limit, missing `w13_scale_bias` or `w2_scale_bias`, dynamic EPLB, non-SiLU
+activation, or incompatible parameters fail before receiving work. Non-W4A8,
+mixed-quantization, and heterogeneous layers stay on the legacy path with a
+startup reason. Do not fill absent compensation parameters with zeros merely
+to enable this path.
 
-新路径使用 dispatch-recv 的完整容量 Tensor 和 device 上的专家 count；层号
-通过原始 metadata 的切片或 device 映射选择权重，combine-send 收到未修改的
-metadata。空 rank、chunk 和 ubatch 沿用此协议。开启 `AFD_CAM_OP_IO_LOG` 时
-新路径只打印 Tensor shape/dtype/device，不读取 metadata 数值。每组 work item
-结束后的原有全设备同步保持不变。容量会增加中间输出占用，需测量峰值内存，
-并确保 `BATCH_SIZE_FACTOR` 足以容纳一个完整专家的 token。
+The new path uses the full dispatch-recv capacity and device expert counts. A
+slice of the original metadata, or a device mapping, selects the layer; the
+original metadata goes to combine-send. Empty ranks, chunks, and ubatches use
+the existing communication protocol. With `AFD_CAM_OP_IO_LOG` enabled, the new
+path logs only Tensor shape, dtype, and device without reading metadata values.
+The existing synchronization after each work-item group remains. Measure peak
+memory for the capacity-sized intermediates, and set `BATCH_SIZE_FACTOR` high
+enough for every whole-expert chunk.
 
-当前验证边界：CPU 调度和契约测试已覆盖层号映射、重复层号、容量、零计数、
-参数拒绝、启动选择和日志无显式 D2H；这些测试不能证明 NPU 数值、空工作协议、
-隐藏同步或性能收益。编译后的 Meta 测试和 NPU 数值测试可按
-[测试说明](TESTING.md#layered-w4a8-验证)执行；多卡 CAM 完整通信、checkpoint
-精度、profiler 和 A/B 性能仍需在目标设备完成，不宣称已通过。
+CPU contract tests cover layer mapping, repeated layer IDs, capacity, zero
+counts, parameter rejection, startup selection, and the absence of explicit
+metadata D2H in the new Python path. They do not establish NPU numerical
+accuracy, empty-work completion, hidden synchronization, or a performance gain.
+Run the compiled Meta and NPU numerical tests described in the
+[testing guide](TESTING.md#layered-w4a8-validation). Multi-rank CAM completion,
+checkpoint accuracy, profiling, and A/B performance still need target-device
+validation.
 
-回退：设置 `AFD_ASYNC_CAM_LAYERED_GMM=0` 后重启 FFN 进程。该开关在启动时
-固定，不支持进程内切换。性能采集统一关闭 `AFD_CAM_OP_IO_LOG` 和
-`AFD_FORCE_BALANCED_TOPK_IDS`，保存实际路径日志并单独记录组间同步耗时。
+To revert, set `AFD_ASYNC_CAM_LAYERED_GMM=0` and restart the FFN processes.
+For performance runs, disable `AFD_CAM_OP_IO_LOG` and
+`AFD_FORCE_BALANCED_TOPK_IDS`, retain the actual-path startup log, and measure
+the existing group synchronization separately.
