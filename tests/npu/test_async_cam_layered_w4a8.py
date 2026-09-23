@@ -17,7 +17,8 @@ pytestmark = pytest.mark.npu
 
 @pytest.mark.parametrize("per_channel", [True, False])
 @pytest.mark.parametrize("counts", [(0, 0), (1, 0), (0, 7), (16, 16)])
-def test_layered_w4a8_valid_rows_and_capacity_tail(per_channel, counts):
+@pytest.mark.parametrize("layer_ids", [(0, 1), (2, 5)])
+def test_layered_w4a8_valid_rows_and_capacity_tail(per_channel, counts, layer_ids):
     if os.environ.get("AFD_RUN_ASCEND_OP_RUNTIME") != "1":
         pytest.skip("requires opt-in 910C runtime")
     torch = pytest.importorskip("torch")
@@ -63,7 +64,7 @@ def test_layered_w4a8_valid_rows_and_capacity_tail(per_channel, counts):
             encoded_scale = encoded_scale.squeeze(1)
         return weight, encoded_scale.npu(), compensation.npu(), dequant
 
-    for idx, factor in ((2, 0.01), (5, 0.02)):
+    for idx, factor in zip(layer_ids, (0.01, 0.02), strict=True):
         w13, s13, b13, ref13 = make_weight(hidden, 2 * intermediate, factor, True)
         w2, s2, b2, ref2 = make_weight(intermediate, hidden, factor, False)
         layers.append(

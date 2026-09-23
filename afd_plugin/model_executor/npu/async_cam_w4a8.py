@@ -149,6 +149,10 @@ class AsyncCAMW4A8Executor:
         layer_index = batch_info[CAM_LAYER_INDEX : CAM_LAYER_INDEX + 1]
         if self.layer_id_to_slot is not None:
             layer_index = self.layer_id_to_slot.index_select(0, layer_index)
+        else:
+            # The CANN tiling path checks the storage shape. A slice still
+            # carries batch_info's larger storage, so materialize one element.
+            layer_index = layer_index.clone()
         activation, scale = self.w13_op(
             hidden_states,
             self.w13,

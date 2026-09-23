@@ -106,7 +106,8 @@ def test_device_layer_selection_capacity_and_scaling(
     assert first[2]["group_list_type"] == second[2]["group_list_type"] == 1
     assert first[1][1][0] is layers[-1].w13
     if layer_ids == (0, 1):
-        assert first[1][6].storage_offset() == 2
+        assert first[1][6].storage_offset() == 0
+        assert first[1][6].untyped_storage().nbytes() == first[1][6].element_size()
 
 
 @pytest.mark.parametrize(
