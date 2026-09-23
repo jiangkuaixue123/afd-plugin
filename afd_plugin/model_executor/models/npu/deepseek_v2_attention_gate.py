@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
         AFDDeepseekV2DecoderLayer,
         _DeepseekAdapterConfig,
     )
+    from afd_plugin.model_executor.models.npu.deepseek_v4 import (
+        AFDDeepseekV4DecoderLayer,
+    )
+    from afd_plugin.model_executor.npu.async_cam_w4a8 import W4A8LayerWeights
 
 
 def compute_attention_gate_topk(
@@ -396,3 +401,71 @@ __all__ = [
     "compute_attention_gate_moe_ffn",
     "compute_attention_gate_topk",
 ]
+
+
+def get_async_cam_w4a8_layers(
+    layers: Iterable[AFDDeepseekV2DecoderLayer | AFDDeepseekV4DecoderLayer],
+    *,
+    routed_scale_applied_in_topk: bool,
+) -> tuple[list[W4A8LayerWeights], str]:
+    """Expose loaded model semantics without putting model layout in the runner."""
+    # NPU backend imports stay lazy: the DeepSeek adapter also serves GPU workers.
+    from vllm.model_executor.layers.fused_moe.activation import MoEActivation
+    from vllm_ascend.quantization.quant_type import QuantType
+
+    from afd_plugin.model_executor.npu.async_cam_w4a8 import W4A8LayerWeights
+
+    layers = [layer for layer in layers if layer.is_moe_layer]
+    quant_types = {layer.mlp.experts.quant_type for layer in layers}
+    if quant_types != {QuantType.W4A8}:
+        return [], f"non-W4A8 or mixed quantization: {quant_types}"
+    weights = []
+    for layer in layers:
+        experts = layer.mlp.experts
+        if experts.dynamic_eplb:
+            raise ValueError(
+                f"layered GMM layer {layer.layer_idx}: dynamic EPLB is unsupported"
+            )
+        if experts.activation != MoEActivation.SILU:
+            raise ValueError(
+                f"layered GMM layer {layer.layer_idx}: requires SiLU activation"
+            )
+        if experts._shared_experts is not None:
+            raise ValueError(
+                f"layered GMM layer {layer.layer_idx}: "
+                "shared experts must run on Attention"
+            )
+        owner = experts.routed_experts
+        for name in (
+            "w13_weight",
+            "w2_weight",
+            "w13_weight_scale",
+            "w2_weight_scale",
+            "w13_scale_bias",
+            "w2_scale_bias",
+        ):
+            if owner._parameters.get(name) is None:
+                raise ValueError(
+                    f"layered GMM layer {layer.layer_idx}: missing loaded {name}"
+                )
+        weights.append(
+            W4A8LayerWeights(
+                layer_idx=layer.layer_idx,
+                w13=owner.w13_weight,
+                w2=owner.w2_weight,
+                w13_scale=owner.w13_weight_scale,
+                w2_scale=owner.w2_weight_scale,
+                w13_bias=owner.w13_scale_bias,
+                w2_bias=owner.w2_scale_bias,
+                per_channel=owner.quant_method.quant_method.is_per_channel_weight,
+                swiglu_limit=float(layer.mlp.swiglu_limit or 0.0),
+                routed_scaling_factor=(
+                    1.0
+                    if routed_scale_applied_in_topk
+                    else layer.mlp.routed_scaling_factor
+                ),
+            )
+        )
+    if any(weight.signature() != weights[0].signature() for weight in weights):
+        return [], "heterogeneous W4A8 geometry, quantization or model semantics"
+    return weights, ""

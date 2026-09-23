@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from afd_plugin.config import (
@@ -13,6 +14,7 @@ from afd_plugin.config import (
     is_afd_async_dp,
     parse_afd_config,
 )
+from afd_plugin.envs import async_cam_layered_gmm_enabled
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
@@ -28,6 +30,15 @@ def fail_if_unsupported_npu_afd_features(
     """Fail fast for NPU AFD settings that are not currently supported."""
 
     afd_config = afd_config or parse_afd_config(vllm_config)
+    if async_cam_layered_gmm_enabled() and (
+        afd_config.role != "ffn" or afd_config.connector != AFD_ASYNC_CONNECTOR
+    ):
+        logging.getLogger(__name__).info(
+            "AFD_ASYNC_CAM_LAYERED_GMM requested=1 actual=legacy "
+            "reason=requires async CAM FFN role (role=%s connector=%s)",
+            afd_config.role,
+            afd_config.connector,
+        )
     from afd_plugin.connectors.factory import AFDConnectorFactory
 
     extra_info = AFDConnectorFactory.parse_connector_extra_info(

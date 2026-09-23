@@ -10,7 +10,7 @@ hidden states between the Attention and FFN roles through the AFD connector.
 
 from collections.abc import Iterable, Iterator
 from copy import copy
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import torch
 import torch.nn as nn
@@ -31,6 +31,9 @@ from afd_plugin.connectors import (
 )
 from afd_plugin.model_executor.models import get_afd_metadata_from_forward_context
 from afd_plugin.v1.worker.dbo import maybe_apply_dbo_yield
+
+if TYPE_CHECKING:
+    from afd_plugin.model_executor.npu.async_cam_w4a8 import W4A8LayerWeights
 
 logger = init_logger(__name__)
 
@@ -825,6 +828,17 @@ class AFDDeepseekV2ForCausalLM(native.DeepseekV2ForCausalLM):
         self.afd_config = parse_afd_config(vllm_config, validate=False)
         self.afd_role = self.afd_config.role
         super().__init__(vllm_config=vllm_config, prefix=prefix)
+
+    def get_async_cam_w4a8_layers(self) -> "tuple[list[W4A8LayerWeights], str]":
+        # Lazy NPU import keeps the shared DeepSeek adapter usable on GPU.
+        from afd_plugin.model_executor.models.npu.deepseek_v2_attention_gate import (
+            get_async_cam_w4a8_layers,
+        )
+
+        return get_async_cam_w4a8_layers(
+            self.model.layers,
+            routed_scale_applied_in_topk=False,
+        )
 
     def compute_ffn_output(
         self,

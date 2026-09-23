@@ -13,7 +13,7 @@ constructs the native MoE module and exposes it through the runner-facing
 
 from collections.abc import Callable, Iterable, Iterator
 from copy import copy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -44,6 +44,9 @@ except ImportError as exc:  # pragma: no cover - only reachable off Ascend.
     raise ImportError(
         "DSV4 AFD support requires the vLLM-Ascend native DSV4 model"
     ) from exc
+
+if TYPE_CHECKING:
+    from afd_plugin.model_executor.npu.async_cam_w4a8 import W4A8LayerWeights
 
 
 _ATTENTION_ROLE = "attention"
@@ -640,6 +643,17 @@ class AFDDeepseekV4ForCausalLM(native.AscendDeepseekV4ForCausalLM):
         self.afd_config = parse_afd_config(vllm_config, validate=False)
         self.afd_role = self.afd_config.role
         super().__init__(vllm_config=vllm_config, prefix=prefix)
+
+    def get_async_cam_w4a8_layers(self) -> "tuple[list[W4A8LayerWeights], str]":
+        # Lazy NPU import keeps the shared DeepSeek adapter usable on GPU.
+        from afd_plugin.model_executor.models.npu.deepseek_v2_attention_gate import (
+            get_async_cam_w4a8_layers,
+        )
+
+        return get_async_cam_w4a8_layers(
+            self.model.layers,
+            routed_scale_applied_in_topk=True,
+        )
 
     def compute_ffn_output(
         self,
