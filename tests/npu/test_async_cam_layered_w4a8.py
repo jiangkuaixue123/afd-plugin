@@ -44,16 +44,19 @@ def test_layered_w4a8_valid_rows_and_capacity_tail(per_channel, counts):
         scale = scale.half().float()
         dequant = values.float() * scale.repeat_interleave(k // groups, dim=1)
         compensation = 8 * dequant.sum(dim=1)
-        # Quantize after NZ conversion, as in the upstream W4A8 loader.
-        weight_nz = torch_npu.npu_format_cast(values.float().npu(), 29)
-        weight = torch_npu.npu_quantize(
-            weight_nz,
-            torch.tensor([1.0], device="npu"),
-            None,
-            torch.quint4x2,
-            -1,
-            False,
+        # Match the current upstream W4A8 loader: two signed INT4 values per
+        # INT8, followed by NZ conversion and an INT32 view.
+        pairs = values.to(torch.int8).reshape(-1, 2)
+        packed8 = (
+            torch.bitwise_or(
+                torch.bitwise_left_shift(pairs[:, 1], 4),
+                torch.bitwise_and(pairs[:, 0], 0x0F),
+            )
+            .reshape(experts, k, n // 2)
+            .clone()
         )
+        weight_nz = torch_npu.npu_format_cast(packed8.npu(), 29)
+        weight = weight_nz.view(torch.int32).contiguous()
         # Preserve FP32 scale bits in the INT64 operator encoding.
         encoded_scale = scale.view(torch.int32).to(torch.int64)
         if per_channel and squeeze:
