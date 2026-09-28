@@ -369,6 +369,63 @@ def test_npu_target_dummy_metadata_is_forwarded_to_native_builder(monkeypatch):
     assert runner._afd_pending_metadata == "afd"
 
 
+@pytest.mark.parametrize("model_raises", [False, True])
+def test_npu_model_forward_releases_device_metadata(monkeypatch, model_raises):
+    _require_npu_runtime()
+    from vllm.config import CUDAGraphMode
+
+    from afd_plugin.v1.worker.npu import attention_model_runner
+
+    events = []
+
+    class FakeModel:
+        def set_attn_backend(self, backend):
+            events.append(("backend", backend))
+
+        def __call__(self, **kwargs):
+            events.append(("model", kwargs))
+            if model_raises:
+                raise RuntimeError("model failed")
+            return "hidden_states"
+
+    executor = SimpleNamespace(
+        submission_in_flight=True,
+        release=lambda: events.append(("release", None)),
+    )
+    forward_context = SimpleNamespace(
+        cudagraph_runtime_mode=CUDAGraphMode.FULL,
+        device_metadata_executor=executor,
+    )
+    monkeypatch.setattr(
+        attention_model_runner,
+        "get_forward_context",
+        lambda: forward_context,
+    )
+    runner = _new_attention_runner()
+    runner.model = FakeModel()
+    runner.attn_backend = "target"
+    runner.enable_enpu = False
+    runner.ubatch_slices = None
+    runner._install_afd_metadata_on_forward_context = lambda _context: None
+    runner._install_async_moe_ubatch_metadata_on_forward_context = lambda _context: None
+    runner._update_full_graph_params_if_needed = lambda *_args: events.append(
+        ("graph", None)
+    )
+
+    if model_raises:
+        with pytest.raises(RuntimeError, match="model failed"):
+            runner._model_forward(2)
+        assert [event[0] for event in events] == ["backend", "model", "release"]
+    else:
+        assert runner._model_forward(2) == "hidden_states"
+        assert [event[0] for event in events] == [
+            "backend",
+            "model",
+            "graph",
+            "release",
+        ]
+
+
 def _new_attention_runner():
     _require_npu_runtime()
     from afd_plugin.v1.worker.npu.attention_model_runner import (
@@ -528,6 +585,8 @@ def test_npu_attention_runner_skips_outer_update_only_for_owned_graph(
     expected_updates,
 ):
     _require_npu_runtime()
+    from vllm.config import CUDAGraphMode
+
     from afd_plugin.v1.worker.npu import attention_model_runner
 
     class FakeUBatchWrapper:
@@ -540,6 +599,8 @@ def test_npu_attention_runner_skips_outer_update_only_for_owned_graph(
     forward_context = SimpleNamespace(
         dbo_enabled=False,
         flash_comm_v1_enabled=False,
+        cudagraph_runtime_mode=CUDAGraphMode.NONE,
+        device_metadata_executor=None,
     )
     monkeypatch.setattr(
         attention_model_runner,
@@ -1451,6 +1512,7 @@ def test_npu_create_ascend_forward_context_marks_current_ubatch(monkeypatch):
         eplb_heat_collection_status=False,
         is_padding=None,
         mc2_mask=None,
+        device_metadata_executor=object(),
     )
     ubatch_slices = [
         SimpleNamespace(
@@ -1481,6 +1543,10 @@ def test_npu_create_ascend_forward_context_marks_current_ubatch(monkeypatch):
     assert new_forward_context.num_ubatches == 2
     assert new_forward_context.num_tokens == 3
     assert child_metadata.stage_idx == 1
+    assert (
+        new_forward_context.device_metadata_executor
+        is cur_forward_context.device_metadata_executor
+    )
 
 
 def test_npu_ffn_runner_executes_eager_ffn_step(monkeypatch):

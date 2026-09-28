@@ -96,6 +96,9 @@ def create_ascend_forward_context(
         cur_forward_context.prefetch_mlp_down_proj
     )
     new_forward_context.model_instance = cur_forward_context.model_instance
+    new_forward_context.device_metadata_executor = (
+        cur_forward_context.device_metadata_executor
+    )
     new_forward_context.is_draft_model = cur_forward_context.is_draft_model
     new_forward_context.is_draft_model_prefill = (
         cur_forward_context.is_draft_model_prefill

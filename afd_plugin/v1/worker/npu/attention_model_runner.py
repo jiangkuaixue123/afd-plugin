@@ -198,12 +198,13 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         # ### PATCH END: AFD live execution scope
         return result
 
-    # Upstream source: vllm-ascend commit 80d8c194f,
+    # Upstream source: vllm-ascend commit 8d4409d,
     # NPUModelRunner._model_forward.
     # Patch reason: the upstream forward path does not install AFD stage metadata
     # or expose Ascend ubatch slices to the model wrapper.
     # Patch functionality: inject AFD forward-context state while retaining the
-    # upstream model invocation and ENPU ordering. Models own SP output gathering.
+    # upstream model invocation, Engram preparation, ENPU ordering and device
+    # metadata executor cleanup. Models own SP output gathering.
     # Signature: matches upstream; no added parameters.
     def _model_forward(
         self,
@@ -214,7 +215,9 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         inputs_embeds: torch.Tensor | None = None,
         **model_kwargs: dict[str, Any],
     ):
+        assert self.model is not None
         forward_context = get_forward_context()
+        assert forward_context is not None
         # ### PATCH START: AFD forward-context metadata
         forward_context.input_ids = input_ids
         if self.ubatch_slices is not None:
@@ -224,7 +227,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self._install_async_moe_ubatch_metadata_on_forward_context(forward_context)
         # ### PATCH END: AFD forward-context metadata
 
-        assert self.model is not None
+        if forward_context.cudagraph_runtime_mode == CUDAGraphMode.FULL and hasattr(
+            self.model, "set_attn_backend"
+        ):
+            self.model.set_attn_backend(self.attn_backend)
+
         model_inputs: dict[str, Any] = {
             "input_ids": input_ids,
             "positions": positions,
@@ -232,22 +239,56 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             "inputs_embeds": inputs_embeds,
             **model_kwargs,
         }
+        prepare_engram = getattr(self.model, "prepare_engram_inputs", None)
+        if prepare_engram is not None:
+            if (
+                getattr(self, "_engram_capture_active", False)
+                or getattr(forward_context, "capturing", False)
+                or torch.npu.is_current_stream_capturing()
+            ):
+                model_inputs.update(
+                    self.model.prepare_engram_graph_inputs(num_tokens_padded)
+                )
+            else:
+                model_inputs.update(
+                    prepare_engram(
+                        input_ids,
+                        positions,
+                        num_tokens_padded,
+                        model_kwargs.get("lookback_token_ids"),
+                        **self._get_engram_device_inputs(),
+                    )
+                )
         run_model = partial(self.model, **model_inputs)
+        # ### PATCH START: AFD wrapper owns its full-graph update
         wrapper_owns_full_graph_update = isinstance(
             self.model, AscendUBatchWrapper
         ) and self.model.owns_full_graph_update(forward_context)
+        # ### PATCH END: AFD wrapper owns its full-graph update
 
-        if self.enable_enpu and not wrapper_owns_full_graph_update:
-            self._update_full_graph_params_if_needed(
-                forward_context,
-                num_tokens_padded,
-            )
-        hidden_states = run_model()
-        if not self.enable_enpu and not wrapper_owns_full_graph_update:
-            self._update_full_graph_params_if_needed(
-                forward_context,
-                num_tokens_padded,
-            )
+        try:
+            if self.enable_enpu:
+                # ### PATCH START: AFD wrapper owns its full-graph update
+                if not wrapper_owns_full_graph_update:
+                    self._update_full_graph_params_if_needed(
+                        forward_context,
+                        num_tokens_padded,
+                    )
+                # ### PATCH END: AFD wrapper owns its full-graph update
+                hidden_states = run_model()
+            else:
+                hidden_states = run_model()
+                # ### PATCH START: AFD wrapper owns its full-graph update
+                if not wrapper_owns_full_graph_update:
+                    self._update_full_graph_params_if_needed(
+                        forward_context,
+                        num_tokens_padded,
+                    )
+                # ### PATCH END: AFD wrapper owns its full-graph update
+        finally:
+            executor = getattr(forward_context, "device_metadata_executor", None)
+            if executor is not None and executor.submission_in_flight:
+                executor.release()
 
         return hidden_states
 
