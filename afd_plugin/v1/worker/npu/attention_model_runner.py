@@ -1784,7 +1784,13 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             is_draft_model,
         )
         may_ubatch = bool(parallel_config.enable_dbo and parallel_config.use_ubatching)
-        if can_skip_dp_sync and not may_ubatch:
+        # CAMP2P still needs peer token counts when Ascend would otherwise
+        # skip its model-side DP synchronization.
+        if (
+            can_skip_dp_sync
+            and not may_ubatch
+            and self.afd_config.connector != "CAMP2pAFDConnector"
+        ):
             num_tokens_after_padding = torch.tensor(
                 [num_tokens_padded] * self.dp_size,
                 device="cpu",
@@ -1926,7 +1932,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     allow_dp_padding=(cudagraph_mode != CUDAGraphMode.NONE)
                     or enable_sp(self.vllm_config)
                     or oproj_tp_enable()
-                    or embedding_tp_enable(),
+                    or embedding_tp_enable()
+                    # CAMP2P transports one fixed-size chunk per Attention
+                    # rank. Keep eager DP peers aligned when one rank has less
+                    # work or is running the scheduler's dummy batch.
+                    or self.afd_config.connector == "CAMP2pAFDConnector",
                 )
             )
             if num_tokens_across_dp is not None:
