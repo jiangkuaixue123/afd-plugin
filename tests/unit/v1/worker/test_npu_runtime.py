@@ -1245,7 +1245,7 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
     assert len(materialized_stage_metadata) == 4
 
 
-def test_npu_attention_runner_uses_runtime_flashcomm_stage_layout():
+def test_npu_attention_runner_uses_configured_model_sp_stage_layout():
     _require_npu_runtime()
 
     from afd_plugin.model_executor.models.npu.async_cam_layout import (
@@ -1266,8 +1266,10 @@ def test_npu_attention_runner_uses_runtime_flashcomm_stage_layout():
     )
     runner._afd_async_moe_ubatch_metadata = planned_metadata
 
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=SimpleNamespace(use_sequence_parallel_moe=True),
+    )
     sp_context = SimpleNamespace(
-        flash_comm_v1_enabled=True,
         additional_kwargs={},
     )
     runner._install_async_moe_ubatch_metadata_on_forward_context(sp_context)
@@ -1275,20 +1277,11 @@ def test_npu_attention_runner_uses_runtime_flashcomm_stage_layout():
         sp_context.additional_kwargs[ASYNC_MOE_UBATCH_METADATA_KEY] is planned_metadata
     )
 
-    replicated_context = SimpleNamespace(
-        flash_comm_v1_enabled=False,
-        additional_kwargs={},
-    )
-    runner._install_async_moe_ubatch_metadata_on_forward_context(
-        replicated_context,
-    )
-    runtime_metadata = replicated_context.additional_kwargs[
-        ASYNC_MOE_UBATCH_METADATA_KEY
-    ]
-    assert runtime_metadata.use_sequence_parallel is False
-    assert tuple(stage.actual_tokens for stage in runtime_metadata.stages) == (2, 6)
-    assert tuple(stage.input_tokens for stage in runtime_metadata.stages) == (2, 6)
-    assert runtime_metadata.attn_metadata is planned_metadata.attn_metadata
+    runner.vllm_config.parallel_config.use_sequence_parallel_moe = False
+    with pytest.raises(RuntimeError, match="configured sequence parallelism"):
+        runner._install_async_moe_ubatch_metadata_on_forward_context(
+            SimpleNamespace(additional_kwargs={}),
+        )
 
 
 def test_npu_attention_runner_async_moe_allocates_three_metadata_builders(
@@ -2320,43 +2313,25 @@ def test_npu_ubatch_output_merge_preserves_aux_hidden_states():
     assert merged[1][0].tolist() == [[2.0], [4.0]]
 
 
-def test_npu_ubatch_all_gather_preserves_aux_outputs_and_trims_padding(
-    monkeypatch,
-):
+def test_npu_ubatch_merge_keeps_model_gathered_outputs(monkeypatch):
     _require_npu_runtime()
     import torch
 
     from afd_plugin.v1.worker.npu import npu_ubatch_wrapper
 
-    gathered_inputs = []
-
-    def fake_all_gather(output, dim):
-        assert dim == 0
-        gathered_inputs.append(output.clone())
-        return torch.cat((output, output + 10), dim=0)
-
     monkeypatch.setattr(
         npu_ubatch_wrapper,
-        "tensor_model_parallel_all_gather",
-        fake_all_gather,
+        "get_pp_group",
+        lambda: SimpleNamespace(is_last_rank=True),
     )
-    output = (
-        torch.tensor([[1.0], [2.0]]),
-        [
-            torch.tensor([[3.0], [4.0]]),
-            torch.tensor([[5.0], [6.0]]),
-        ],
+    wrapper = object.__new__(npu_ubatch_wrapper.AscendUBatchWrapper)
+    output = (torch.tensor([[1.0], [2.0]]), [torch.tensor([[3.0], [4.0]])])
+    # Context intentionally has no removed FlashComm fields. Results are global.
+    merged = wrapper._merge_outputs(
+        [output, output], [SimpleNamespace(), SimpleNamespace()]
     )
-
-    gathered = npu_ubatch_wrapper._all_gather_ubatch_output(output, pad_size=1)
-
-    assert isinstance(gathered, tuple)
-    assert gathered[0].tolist() == [[1.0], [2.0], [11.0]]
-    assert [tensor.tolist() for tensor in gathered[1]] == [
-        [[3.0], [4.0], [13.0]],
-        [[5.0], [6.0], [15.0]],
-    ]
-    assert len(gathered_inputs) == 3
+    assert merged[0].tolist() == [[1.0], [2.0], [1.0], [2.0]]
+    assert merged[1][0].tolist() == [[3.0], [4.0], [3.0], [4.0]]
 
 
 @pytest.mark.parametrize("cudagraph_mode", ["FULL", "FULL_AND_PIECEWISE"])

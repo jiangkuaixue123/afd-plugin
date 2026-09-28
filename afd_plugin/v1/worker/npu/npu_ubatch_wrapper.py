@@ -16,8 +16,6 @@ import torch_npu  # noqa: F401
 from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.distributed import (
     get_pp_group,
-    get_tensor_model_parallel_world_size,
-    tensor_model_parallel_all_gather,
 )
 from vllm.forward_context import (
     DPMetadata,
@@ -32,8 +30,8 @@ from vllm_ascend.compilation.acl_graph import (
     GraphParams,
     get_graph_params,
 )
-from vllm_ascend.utils import enable_sp
 
+from afd_plugin.compat.npu.runtime_config import npu_model_uses_sharded_pp_tensors
 from afd_plugin.v1.worker.npu.forward_context import (
     create_ascend_forward_context,
 )
@@ -85,30 +83,6 @@ def _cat_ubatch_outputs(
         )
     # ### PATCH END: Ascend auxiliary hidden-state output
     return torch.cat(cast(list[torch.Tensor], sorted_results), dim=0)
-
-
-def _all_gather_ubatch_output(
-    output: AscendLastRankOutput,
-    pad_size: int,
-) -> AscendLastRankOutput:
-    if isinstance(output, tuple):
-        hidden_states, aux_hidden_states = output
-        gathered_hidden_states = _all_gather_ubatch_output(hidden_states, pad_size)
-        assert isinstance(gathered_hidden_states, torch.Tensor)
-        gathered_aux_hidden_states = [
-            _all_gather_ubatch_output(aux_hidden_state, pad_size)
-            for aux_hidden_state in aux_hidden_states
-        ]
-        assert all(
-            isinstance(aux_hidden_state, torch.Tensor)
-            for aux_hidden_state in gathered_aux_hidden_states
-        )
-        return gathered_hidden_states, cast(
-            list[torch.Tensor],
-            gathered_aux_hidden_states,
-        )
-    output = tensor_model_parallel_all_gather(output, 0)
-    return output[:-pad_size, :] if pad_size > 0 else output
 
 
 @dataclass
@@ -474,17 +448,15 @@ class AscendUBatchWrapper(UBatchWrapper):
             inputs_embeds[tokens_slice] if inputs_embeds is not None else None
         )
 
-        if intermediate_tensors is not None and enable_sp():
-            tp_size = get_tensor_model_parallel_world_size()
+        if intermediate_tensors is not None and npu_model_uses_sharded_pp_tensors(
+            self.vllm_config
+        ):
+            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
             start = (tokens_slice.start + tp_size - 1) // tp_size
-            if start != 0:
-                stop = (
-                    start
-                    + (tokens_slice.stop - tokens_slice.start + tp_size - 1) // tp_size
-                )
-            else:
-                stop = (tokens_slice.stop + tp_size - 1) // tp_size
-            tokens_slice = slice(start, stop)
+            local_tokens = (
+                tokens_slice.stop - tokens_slice.start + tp_size - 1
+            ) // tp_size
+            tokens_slice = slice(start, start + local_tokens)
         sliced_intermediate_tensors = (
             intermediate_tensors[tokens_slice]
             if intermediate_tensors is not None
@@ -521,11 +493,6 @@ class AscendUBatchWrapper(UBatchWrapper):
             )
 
         last_rank_results = cast(list[AscendLastRankOutput], sorted_results)
-        ubatch_forward_context = ubatch_metadata[0].context.forward_context
-        if ubatch_forward_context.flash_comm_v1_enabled:
-            for i, result in enumerate(last_rank_results):
-                pad_size = ubatch_metadata[i].context.forward_context.pad_size
-                last_rank_results[i] = _all_gather_ubatch_output(result, pad_size)
         return _cat_ubatch_outputs(last_rank_results)
 
     @torch.inference_mode()

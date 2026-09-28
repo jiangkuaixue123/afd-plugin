@@ -74,6 +74,7 @@ from afd_plugin.compat.npu.profiler import (
     step_afd_npu_profiler,
     stop_afd_npu_profiler,
 )
+from afd_plugin.compat.npu.runtime_config import npu_model_uses_sharded_pp_tensors
 from afd_plugin.config import (
     AFD_ASYNC_CONNECTOR,
     AFDConfig,
@@ -96,7 +97,6 @@ from afd_plugin.model_executor.models.npu.deepseek_attention_metadata import (
     materialize_deepseek_attention_metadata_by_layer,
 )
 from afd_plugin.model_executor.npu.async_cam_ubatching import (
-    AsyncMoeStage,
     plan_async_moe_stages,
 )
 from afd_plugin.v1.worker.attention_metadata import (
@@ -199,7 +199,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     # Patch reason: the upstream forward path does not install AFD stage metadata
     # or expose Ascend ubatch slices to the model wrapper.
     # Patch functionality: inject AFD forward-context state while retaining the
-    # upstream model invocation, ENPU ordering, and FlashComm output handling.
+    # upstream model invocation and ENPU ordering. Models own SP output gathering.
     # Signature: matches upstream; no added parameters.
     def _model_forward(
         self,
@@ -245,14 +245,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 num_tokens_padded,
             )
 
-        # ### PATCH START: AFD defers FlashComm gather to model execution
-        if (
-            forward_context.flash_comm_v1_enabled
-            and not forward_context.dbo_enabled
-            and not isinstance(hidden_states, IntermediateTensors)
-        ):
-            hidden_states = self._all_gather_hidden_states_and_aux(hidden_states)
-        # ### PATCH END: AFD defers FlashComm gather to model execution
         return hidden_states
 
     # Upstream source: vllm-ascend commit 80d8c194f,
@@ -1313,7 +1305,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 if self.intermediate_tensors is None:
                     tp_size = get_tensor_model_parallel_world_size()
                     max_actual_tokens = self.max_num_tokens
-                    if enable_sp():
+                    if npu_model_uses_sharded_pp_tensors(self.vllm_config):
                         max_actual_tokens = (
                             self.max_num_tokens + tp_size - 1
                         ) // tp_size
@@ -1462,29 +1454,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         if self._afd_async_moe_ubatch_metadata is None:
             return
         metadata = self._afd_async_moe_ubatch_metadata
-        runtime_sequence_parallel = bool(forward_context.flash_comm_v1_enabled)
-        if runtime_sequence_parallel and not metadata.use_sequence_parallel:
+        runtime_sequence_parallel = (
+            self.vllm_config.parallel_config.use_sequence_parallel_moe
+        )
+        if runtime_sequence_parallel != metadata.use_sequence_parallel:
             raise RuntimeError(
-                "Async CAM runtime enabled FlashComm1 for a stage plan that "
-                "was not TP-aligned",
-            )
-        if not runtime_sequence_parallel and metadata.use_sequence_parallel:
-            # vLLM-Ascend decides whether FlashComm1 is active for each model
-            # forward. When it disables FlashComm1, Attention keeps a
-            # replicated token dimension and stage-local TP padding must not
-            # leak into the non-SP model inputs or attention metadata.
-            metadata = AsyncMoeUbatchMetadata(
-                attn_metadata=metadata.attn_metadata,
-                stages=tuple(
-                    AsyncMoeStage(
-                        request_slice=stage.request_slice,
-                        token_slice=stage.token_slice,
-                        input_tokens=stage.actual_tokens,
-                    )
-                    for stage in metadata.stages
-                ),
-                parent_input_tokens=metadata.parent_input_tokens,
-                use_sequence_parallel=False,
+                "Async CAM stage layout does not match configured sequence parallelism",
             )
         if forward_context.additional_kwargs is None:
             forward_context.additional_kwargs = {}
@@ -1868,12 +1843,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             cudagraph_stats,
         )
 
-    # Upstream source: vllm-ascend commit 80d8c194f,
+    # Upstream source: vllm-ascend commit 8d4409d,
     # NPUModelRunner.sync_and_slice_intermediate_tensors.
-    # Patch reason: upstream sizes PP intermediate tensors from the combined
-    # token count, which is too small when SP rounds each AFD ubatch separately.
-    # Patch functionality: compute the sum of per-ubatch SP slices and grow the
-    # reusable intermediate buffer before copying or returning that slice.
+    # Patch reason: DSV4 exchanges global PP tokens and AFD ubatches can pad
+    # independently; the native runner assumes TP-local PP tensors for all SP.
+    # Patch functionality: retain each model's PP layout, sum physical ubatch
+    # extents, and grow the reusable buffer before copying all transported rows.
     # Signature: matches upstream; no added parameters.
     def sync_and_slice_intermediate_tensors(
         self,
@@ -1884,7 +1859,10 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         assert self.intermediate_tensors is not None
         tp = self.vllm_config.parallel_config.tensor_parallel_size
 
-        slice_len = (num_tokens + tp - 1) // tp if enable_sp() else num_tokens
+        # ### PATCH START: model-specific PP token layout
+        sharded_pp = npu_model_uses_sharded_pp_tensors(self.vllm_config)
+        slice_len = (num_tokens + tp - 1) // tp if sharded_pp else num_tokens
+        # ### PATCH END: model-specific PP token layout
         if self.ubatch_slices is not None:
             # ### PATCH START: AFD per-ubatch intermediate slice and buffer
             slice_len = (
@@ -1892,19 +1870,21 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     (ubatch_slice.num_tokens + tp - 1) // tp
                     for ubatch_slice in self.ubatch_slices
                 )
-                if enable_sp()
+                if sharded_pp
                 else sum(ubatch_slice.num_tokens for ubatch_slice in self.ubatch_slices)
             )
-            intermediate_tensor_size = next(
-                iter(self.intermediate_tensors.tensors.values()),
-            ).size(0)
-            if intermediate_tensor_size < slice_len:
-                self.intermediate_tensors = self.model.make_empty_intermediate_tensors(
-                    batch_size=slice_len,
-                    dtype=self.dtype,
-                    device=self.device,
-                )
-            # ### PATCH END: AFD per-ubatch intermediate slice and buffer
+        # ### PATCH END: AFD per-ubatch intermediate slice and buffer
+        # ### PATCH START: grow PP buffer for transported tokens
+        intermediate_tensor_size = next(
+            iter(self.intermediate_tensors.tensors.values()),
+        ).size(0)
+        if intermediate_tensor_size < slice_len:
+            self.intermediate_tensors = self.model.make_empty_intermediate_tensors(
+                batch_size=slice_len,
+                dtype=self.dtype,
+                device=self.device,
+            )
+        # ### PATCH END: grow PP buffer for transported tokens
 
         if sync_self:
             assert intermediate_tensors is not None

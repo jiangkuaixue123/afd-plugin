@@ -273,6 +273,9 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
             )
 
     model = SimpleNamespace(
+        vllm_config=SimpleNamespace(
+            parallel_config=SimpleNamespace(use_sequence_parallel_moe=True),
+        ),
         layers=[_ProfileMoELayer(), _ProfileMoELayer()],
         start_layer=0,
         end_layer=2,
@@ -476,7 +479,6 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
                 stage_context.ubatch_idx,
                 stage_context.attn_metadata,
                 stage_context.num_tokens,
-                stage_context.pad_size,
             ),
         )
         topk = hidden_states[:, :1]
@@ -528,6 +530,9 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
 
     output, residual = deepseek_v2_async_cam_forward.run_async_moe_ubatch_afd_forward(
         model=SimpleNamespace(
+            vllm_config=SimpleNamespace(
+                parallel_config=SimpleNamespace(use_sequence_parallel_moe=True),
+            ),
             start_layer=0,
             end_layer=2,
             layers=[
@@ -568,7 +573,6 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
         stage_idx = event[1]
         assert event[2] == {"layer": f"stage-{stage_idx}"}
         assert event[3] == 2
-        assert event[4] == (0, 2)[stage_idx]
     assert all(
         restored is expected
         for restored, expected in zip(output, stage_hidden_states, strict=True)

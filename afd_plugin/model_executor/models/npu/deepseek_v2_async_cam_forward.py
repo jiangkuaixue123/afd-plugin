@@ -120,7 +120,6 @@ def run_attention_gate_afd_forward(
     """Run the Attention-side gate AFD path used by async CAM."""
 
     afd_connector = afd_metadata.connector
-    forward_context = get_forward_context()
     stage_idx = afd_metadata.stage_idx
     pending_shared_output: torch.Tensor | None = None
     pending_ffn_recv = False
@@ -177,7 +176,7 @@ def run_attention_gate_afd_forward(
             topk_weights,
             topk_ids,
             router_logits,
-            use_sequence_parallel=forward_context.flash_comm_v1_enabled,
+            use_sequence_parallel=model.vllm_config.parallel_config.use_sequence_parallel_moe,
         )
         metadata = AFDTransferMetadata.create_attention_metadata(
             layer_idx=layer.layer_idx,
@@ -229,14 +228,16 @@ def run_async_moe_ubatch_afd_forward(
     """Run the two-stage async MoE ubatch pipeline used by async CAM."""
 
     forward_context = get_forward_context()
-    runtime_sequence_parallel = bool(forward_context.flash_comm_v1_enabled)
+    runtime_sequence_parallel = bool(
+        model.vllm_config.parallel_config.use_sequence_parallel_moe
+    )
     if runtime_sequence_parallel != async_moe_ubatch_metadata.use_sequence_parallel:
         raise RuntimeError(
-            "Async CAM stage layout does not match the current FlashComm1 "
+            "Async CAM stage layout does not match the configured sequence-parallel "
             "mode: "
             f"layout_sequence_parallel="
             f"{async_moe_ubatch_metadata.use_sequence_parallel}, "
-            f"flash_comm_v1_enabled={runtime_sequence_parallel}",
+            f"use_sequence_parallel_moe={runtime_sequence_parallel}",
         )
     afd_connector = afd_metadata.connector
     model_layers = list(islice(model.layers, model.start_layer, model.end_layer))
@@ -326,17 +327,7 @@ def run_async_moe_ubatch_afd_forward(
             async_moe_ubatch_metadata.stages,
         )
         stage_forward_context.dbo_enabled = False
-        if async_moe_ubatch_metadata.use_sequence_parallel:
-            # FlashComm gathers the physical TP-local stage, removes its
-            # trailing pad before attention, then restores that pad before
-            # reduce-scatter.
-            stage_forward_context.num_tokens = stage.actual_tokens
-            stage_forward_context.pad_size = (
-                int(stage.input_tokens) - stage.actual_tokens
-            )
-        else:
-            stage_forward_context.num_tokens = int(stage.input_tokens)
-            stage_forward_context.pad_size = 0
+        stage_forward_context.num_tokens = stage.actual_tokens
         expected_tokens = int(stage_hidden_states[stage_idx].shape[0])
         log_async_moe_stage_attention(
             stage_idx,

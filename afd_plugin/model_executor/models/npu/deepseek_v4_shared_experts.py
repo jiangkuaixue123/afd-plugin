@@ -5,9 +5,9 @@
 import torch
 import torch_npu
 from vllm.model_executor.layers.activation import SiluAndMulWithClamp
-from vllm_ascend.models.deepseek_v4 import DeepseekV2MLP
+from vllm_ascend.models.deepseek_v4.model import DeepseekV2MLP
 from vllm_ascend.quantization.method_adapters import AscendLinearMethod
-from vllm_ascend.quantization.methods.w8a8_dynamic import (
+from vllm_ascend.quantization.methods.w8a8.w8a8_dynamic import (
     AscendW8A8DynamicLinearMethod,
 )
 

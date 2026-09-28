@@ -76,6 +76,11 @@ def test_dsv4_fixed_deployment_and_cleanup(monkeypatch, tmp_path):
         assert env["VLLM_ASCEND_ENABLE_FLASHCOMM1"] == (
             "1" if role == "attention" else "0"
         )
+        assert env["VLLM_USE_V2_MODEL_RUNNER"] == "0"
+        expected_backend = (
+            "allgather_reducescatter" if role == "attention" else "flashinfer_all2allv"
+        )
+        assert command[command.index("--all2all-backend") + 1] == expected_backend
         assert env[runner.E2E_RUN_ID_ENV] == "test"
 
 

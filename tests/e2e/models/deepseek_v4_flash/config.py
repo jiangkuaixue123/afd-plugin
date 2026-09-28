@@ -69,7 +69,10 @@ def configure_scenario(args: argparse.Namespace) -> None:
         "--no-enable-prefix-caching",
         "--enable-chunked-prefill",
     ]
+    args.ffn_vllm_arg = ["--all2all-backend", "flashinfer_all2allv"]
     args.attention_vllm_arg = [
+        "--all2all-backend",
+        "allgather_reducescatter",
         "--data-parallel-address",
         args.afd_host,
         "--no-disable-hybrid-kv-cache-manager",
@@ -92,4 +95,7 @@ def additional_config() -> dict[str, bool]:
 
 
 def role_environment(role: str | None) -> dict[str, str]:
-    return {"VLLM_ASCEND_ENABLE_FLASHCOMM1": "1" if role == "attention" else "0"}
+    return {
+        "VLLM_USE_V2_MODEL_RUNNER": "0",
+        "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1" if role == "attention" else "0",
+    }
