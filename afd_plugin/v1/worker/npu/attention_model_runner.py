@@ -2083,8 +2083,10 @@ def _normalize_metadata_ubatch_slices(
     if num_tokens_padded is None or num_reqs_padded is None:
         return ubatch_slices
 
+    # Eager DP can pad token storage without adding requests. The final stage
+    # must cover that storage so AFD control and DP counts match model input.
     last_slice = ubatch_slices[-1]
-    if int(last_slice.token_slice.stop) != int(num_tokens_padded) or int(
+    if int(last_slice.token_slice.stop) == int(num_tokens_padded) and int(
         last_slice.request_slice.stop
     ) == int(num_reqs_padded):
         return ubatch_slices
