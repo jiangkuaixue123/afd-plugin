@@ -211,8 +211,7 @@ class GateOnlyRemoteMoE(RemoteFFNProxy):
         self.config = config
         self.top_k = int(config.num_experts_per_tok)
         # Use the native SP contract: shared weights are replicated and each
-        # rank computes its model-local tokens without TP collectives. This
-        # also supports FlashComm1 switching token layouts at runtime.
+        # rank computes its model-local tokens without TP collectives.
         self.shared_experts = (
             native.DeepseekV2MLP(
                 hidden_size=config.hidden_size,
@@ -561,12 +560,19 @@ class AFDDeepseekV2DecoderLayer(native.DeepseekV2DecoderLayer):
         )
         self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
 
+    # Target: vLLM ced6857, DeepseekV2DecoderLayer.forward attention fragment.
+    # AFD splits execution before the remote FFN and computes routing locally.
+    # This AFD-owned method adds already_sequence_parallel because a one-token
+    # stage can have equal global/local row counts; shape alone is ambiguous.
+    # Keep collective ownership here until upstream exposes the split boundary.
     def compute_attn_output(
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
         llama_4_scaling: torch.Tensor | None = None,
+        *,
+        already_sequence_parallel: bool = False,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -579,6 +585,10 @@ class AFDDeepseekV2DecoderLayer(native.DeepseekV2DecoderLayer):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        if self.use_sequence_parallel_moe and already_sequence_parallel:
+            hidden_states = native.tensor_model_parallel_all_gather(hidden_states, 0)
+            hidden_states = hidden_states[: positions.shape[0]]
 
         attn_kwargs: dict[str, torch.Tensor | None] = {
             "positions": positions,
@@ -595,6 +605,16 @@ class AFDDeepseekV2DecoderLayer(native.DeepseekV2DecoderLayer):
             hidden_states *= 1.0 / self.routed_scaling_factor
             if self.layer_idx == 0:
                 residual *= 1.0 / self.routed_scaling_factor
+
+        if self.use_sequence_parallel_moe:
+            tp_size = native.get_tensor_model_parallel_world_size()
+            sp_pad = (-hidden_states.shape[0]) % tp_size
+            hidden_states = torch.nn.functional.pad(hidden_states, (0, 0, 0, sp_pad))
+            hidden_states = native.tensor_model_parallel_reduce_scatter(
+                hidden_states, 0
+            )
+            if not already_sequence_parallel:
+                residual = native.sequence_parallel_chunk(residual)
 
         hidden_states, residual = self.post_attention_layernorm(
             hidden_states,
@@ -706,12 +726,11 @@ class AFDDeepseekV2Model(native.DeepseekV2Model):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         # ### PATCH START: require AFD activation and avoid native allocation.
         afd_config = parse_afd_config(vllm_config, validate=False)
-        if bool(
-            getattr(
-                vllm_config.parallel_config,
-                "use_sequence_parallel_moe",
-                False,
-            ),
+        if vllm_config.parallel_config.use_sequence_parallel_moe and not (
+            native.current_platform.device_type == "npu"
+            and afd_config.role == "attention"
+            and afd_config.connector == AFD_ASYNC_CONNECTOR
+            and afd_config.compute_gate_on_attention
         ):
             raise RuntimeError(
                 "AFD DeepSeek does not support sequence-parallel MoE",

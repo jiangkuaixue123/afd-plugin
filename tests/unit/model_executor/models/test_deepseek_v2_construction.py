@@ -800,6 +800,70 @@ def test_model_constructor_rejects_sequence_parallel_moe_before_allocation(
     assert all(not calls for calls in construction_env.values())
 
 
+@pytest.mark.parametrize("pp_size", [1, 2])
+def test_npu_async_attention_allows_model_owned_sp(
+    monkeypatch,
+    construction_env,
+    pp_size,
+):
+    vllm_config = _vllm_config()
+    vllm_config.parallel_config.use_sequence_parallel_moe = True
+    vllm_config.parallel_config.pipeline_parallel_size = pp_size
+    monkeypatch.setattr(
+        adapter.native,
+        "current_platform",
+        SimpleNamespace(device_type="npu"),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "parse_afd_config",
+        lambda *_args, **_kwargs: AFDConfig(
+            role="attention",
+            connector="CAMAsyncAFDConnector",
+            compute_gate_on_attention=True,
+        ),
+    )
+    _patch_model_constructor_dependencies(monkeypatch, construction_env)
+    model = adapter.AFDDeepseekV2Model(vllm_config=vllm_config, prefix="model")
+    assert not model.layers[0].use_sequence_parallel_moe
+    assert model.layers[1].use_sequence_parallel_moe is (pp_size == 1)
+    assert construction_env["moe"] == []
+
+
+@pytest.mark.parametrize(
+    "device_type,connector",
+    [
+        ("cuda", "CAMAsyncAFDConnector"),
+        ("npu", "CAMP2pConnector"),
+    ],
+)
+def test_sp_remains_rejected_outside_npu_async_attention(
+    monkeypatch,
+    construction_env,
+    device_type,
+    connector,
+):
+    vllm_config = _vllm_config()
+    vllm_config.parallel_config.use_sequence_parallel_moe = True
+    monkeypatch.setattr(
+        adapter.native,
+        "current_platform",
+        SimpleNamespace(device_type=device_type),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "parse_afd_config",
+        lambda *_args, **_kwargs: AFDConfig(
+            role="attention",
+            connector=connector,
+            compute_gate_on_attention=True,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="sequence-parallel MoE"):
+        adapter.AFDDeepseekV2Model(vllm_config=vllm_config, prefix="model")
+    assert all(not calls for calls in construction_env.values())
+
+
 def test_async_ffn_omits_shared_with_real_hf_config(monkeypatch, construction_env):
     from transformers import DeepseekV2Config
 

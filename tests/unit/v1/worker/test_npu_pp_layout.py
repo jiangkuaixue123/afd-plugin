@@ -23,11 +23,11 @@ from afd_plugin.v1.worker.npu.npu_ubatch_wrapper import (  # noqa: E402
 )
 
 
-def _config(model_type, use_sp):
+def _config(model_type, use_sp, pipeline_parallel_size=2):
     return SimpleNamespace(
         parallel_config=SimpleNamespace(
             tensor_parallel_size=4,
-            pipeline_parallel_size=2,
+            pipeline_parallel_size=pipeline_parallel_size,
             use_sequence_parallel_moe=use_sp,
         ),
         model_config=SimpleNamespace(
@@ -44,9 +44,12 @@ def _allocate(*, batch_size, dtype, device):
 
 @pytest.mark.parametrize("model_type", ["deepseek_v4", "deepseek_v2"])
 @pytest.mark.parametrize("use_sp", [False, True])
-def test_pp_dummy_allocation_uses_model_wire_layout(model_type, use_sp):
+@pytest.mark.parametrize("pipeline_parallel_size", [1, 2])
+def test_pp_dummy_allocation_uses_model_wire_layout(
+    model_type, use_sp, pipeline_parallel_size
+):
     runner = SimpleNamespace(
-        vllm_config=_config(model_type, use_sp),
+        vllm_config=_config(model_type, use_sp, pipeline_parallel_size),
         max_num_tokens=13,
         intermediate_tensors=None,
         model=SimpleNamespace(make_empty_intermediate_tensors=_allocate),
@@ -80,20 +83,25 @@ def test_pp_dummy_allocation_uses_model_wire_layout(model_type, use_sp):
         ),
         namespace,
     )
-    expected = 4 if use_sp and model_type != "deepseek_v4" else 13
+    expected = (
+        4
+        if use_sp and model_type == "deepseek_v2" and pipeline_parallel_size == 1
+        else 13
+    )
     assert runner.intermediate_tensors["hidden_states"].shape[0] == expected
 
 
 @pytest.mark.parametrize("model_type", ["deepseek_v4", "deepseek_v2"])
 @pytest.mark.parametrize("use_sp", [False, True])
 @pytest.mark.parametrize("ubatching", [False, True])
+@pytest.mark.parametrize("pipeline_parallel_size", [1, 2])
 def test_pp_copy_and_slice_preserves_every_transported_token(
-    model_type, use_sp, ubatching
+    model_type, use_sp, ubatching, pipeline_parallel_size
 ):
-    sharded = use_sp and model_type != "deepseek_v4"
+    sharded = use_sp and model_type == "deepseek_v2" and pipeline_parallel_size == 1
     expected_rows = (4 if ubatching else 3) if sharded else 12
     runner = SimpleNamespace(
-        vllm_config=_config(model_type, use_sp),
+        vllm_config=_config(model_type, use_sp, pipeline_parallel_size),
         ubatch_slices=[SimpleNamespace(num_tokens=5), SimpleNamespace(num_tokens=7)]
         if ubatching
         else None,
@@ -124,9 +132,12 @@ def test_pp_copy_and_slice_preserves_every_transported_token(
 
 @pytest.mark.parametrize("model_type", ["deepseek_v4", "deepseek_v2"])
 @pytest.mark.parametrize("use_sp", [False, True])
-def test_pp_ubatch_slices_and_merge_retain_model_layout(model_type, use_sp):
-    config = _config(model_type, use_sp)
-    sharded = use_sp and model_type != "deepseek_v4"
+@pytest.mark.parametrize("pipeline_parallel_size", [1, 2])
+def test_pp_ubatch_slices_and_merge_retain_model_layout(
+    model_type, use_sp, pipeline_parallel_size
+):
+    config = _config(model_type, use_sp, pipeline_parallel_size)
+    sharded = use_sp and model_type == "deepseek_v2" and pipeline_parallel_size == 1
     rows = 4 if sharded else 12
     tensors = IntermediateTensors(
         {"hidden_states": torch.arange(rows * 6).reshape(rows, 2, 3).float()}

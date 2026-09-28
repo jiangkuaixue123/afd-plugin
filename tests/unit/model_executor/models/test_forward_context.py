@@ -212,7 +212,7 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
         *,
         use_sequence_parallel,
     ):
-        assert use_sequence_parallel is True
+        assert use_sequence_parallel is False
         layout = object()
         dispatch_layouts.append(layout)
         return SimpleNamespace(
@@ -253,6 +253,7 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
 
     class _ProfileMoELayer:
         is_moe_layer = True
+        use_sequence_parallel_moe = False
 
         layer_idx = 0
         mlp = SimpleNamespace(shared_experts=lambda x: 2 * x)
@@ -263,6 +264,8 @@ def test_async_cam_profile_forward_runs_matched_connector_io(monkeypatch):
             hidden_states,
             residual,
             llama_4_scaling,
+            *,
+            already_sequence_parallel=False,
         ):
             return (
                 hidden_states + 1,
@@ -464,13 +467,15 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
         parent_input_tokens=4,
         use_sequence_parallel=True,
     )
-    stage_hidden_states = [torch.zeros((1, 8)), torch.ones((2, 8))]
+    stage_hidden_states = [torch.zeros((2, 8)), torch.ones((2, 8))]
 
     def compute_attn_output(
         _positions,
         hidden_states,
         residual,
         _llama_4_scaling,
+        *,
+        already_sequence_parallel=False,
     ):
         stage_context = get_current_forward_context()
         events.append(
@@ -481,6 +486,11 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
                 stage_context.num_tokens,
             ),
         )
+        if not already_sequence_parallel:
+            local_tokens = (
+                execution_plan.stages[stage_context.ubatch_idx].input_tokens // 2
+            )
+            hidden_states = hidden_states[:local_tokens]
         topk = hidden_states[:, :1]
         return hidden_states, residual, topk, topk.to(torch.int32), None
 
@@ -531,7 +541,10 @@ def test_async_moe_pipeline_preserves_stage_order(monkeypatch):
     output, residual = deepseek_v2_async_cam_forward.run_async_moe_ubatch_afd_forward(
         model=SimpleNamespace(
             vllm_config=SimpleNamespace(
-                parallel_config=SimpleNamespace(use_sequence_parallel_moe=True),
+                parallel_config=SimpleNamespace(
+                    use_sequence_parallel_moe=True,
+                    pipeline_parallel_size=1,
+                ),
             ),
             start_layer=0,
             end_layer=2,

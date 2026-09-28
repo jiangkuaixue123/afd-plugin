@@ -74,7 +74,10 @@ from afd_plugin.compat.npu.profiler import (
     step_afd_npu_profiler,
     stop_afd_npu_profiler,
 )
-from afd_plugin.compat.npu.runtime_config import npu_model_uses_sharded_pp_tensors
+from afd_plugin.compat.npu.runtime_config import (
+    npu_model_uses_sequence_parallel_moe,
+    npu_model_uses_sharded_pp_tensors,
+)
 from afd_plugin.config import (
     AFD_ASYNC_CONNECTOR,
     AFDConfig,
@@ -368,7 +371,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
 
         num_tokens_padded = int(num_tokens_padded or num_tokens)
         num_reqs_padded = int(num_reqs_padded or len(num_scheduled_tokens_np))
-        use_sequence_parallel = bool(enable_sp(self.vllm_config))
+        use_sequence_parallel = npu_model_uses_sequence_parallel_moe(self.vllm_config)
         stages = plan_async_moe_stages(
             num_scheduled_tokens_np,
             split=self.afd_async_extra_info.async_moe_split,

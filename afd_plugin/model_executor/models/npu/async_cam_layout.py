@@ -93,7 +93,7 @@ def get_async_moe_ubatch_metadata_from_forward_context(
 
 @dataclass
 class AsyncMoeStageInputs:
-    """TP-local tensors for the two global MoE stages."""
+    """Per-stage hidden states and full attention positions/scaling."""
 
     hidden_states: list[torch.Tensor]
     residuals: list[torch.Tensor | None]
@@ -241,8 +241,14 @@ def build_async_moe_stage_inputs(
     positions: torch.Tensor,
     llama_4_scaling: torch.Tensor | None,
     metadata: AsyncMoeUbatchMetadata,
+    *,
+    shard_hidden_states: bool = True,
 ) -> AsyncMoeStageInputs:
-    """Convert the full model layout into per-stage Attention layouts."""
+    """Split full model inputs, optionally sharding before the first attention.
+
+    DSV2 sets ``shard_hidden_states=False``: its first MoE attention owns the
+    transition to SP. Stage positions/scaling always match the attention input.
+    """
 
     # Model inputs and PP boundaries carry global tokens on the target runtime.
     # Split stages before sharding; no full-batch gather/shard round trip.
@@ -264,9 +270,14 @@ def build_async_moe_stage_inputs(
             raise ValueError("Async CAM stage extent must be TP divisible")
         local_tokens = int(stage.input_tokens) // tp_size
         local_slice = slice(tp_rank * local_tokens, (tp_rank + 1) * local_tokens)
-        inputs.hidden_states[index] = inputs.hidden_states[index][local_slice]
+        # DSV4 shards before its first attention; DSV2 enters SP only after
+        # its first MoE attention. Both keep full real-token positions.
+        input_slice = (
+            local_slice if shard_hidden_states else slice(0, stage.actual_tokens)
+        )
+        inputs.hidden_states[index] = inputs.hidden_states[index][input_slice]
         if inputs.residuals[index] is not None:
-            inputs.residuals[index] = inputs.residuals[index][local_slice]
+            inputs.residuals[index] = inputs.residuals[index][input_slice]
         # Attention sees all real tokens after its model-owned all-gather.
         # Positions therefore stay global and exclude stage-only SP padding.
         position_dim = _require_global_token_dim(

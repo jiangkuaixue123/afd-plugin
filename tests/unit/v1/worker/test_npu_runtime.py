@@ -213,6 +213,8 @@ def _parallel_config(**overrides):
         "num_ubatches": 1,
         "ubatch_size": 0,
         "tensor_parallel_size": 1,
+        "pipeline_parallel_size": 1,
+        "use_sequence_parallel_moe": False,
         "prefill_context_parallel_size": 1,
         "decode_context_parallel_size": 1,
         "dbo_decode_token_threshold": 1,
@@ -254,7 +256,7 @@ def _vllm_config(
         parallel_config=_parallel_config(**parallel_overrides),
         model_config=SimpleNamespace(
             enforce_eager=True,
-            hf_text_config=SimpleNamespace(),
+            hf_text_config=SimpleNamespace(model_type="deepseek_v2"),
             use_mla=use_mla,
         ),
         compilation_config=SimpleNamespace(
@@ -938,7 +940,10 @@ def test_npu_request_boundary_ubatch_slices_balance_tokens(monkeypatch):
         )
 
 
-def test_npu_attention_runner_builds_stage_metadata(monkeypatch):
+@pytest.mark.parametrize("pipeline_parallel_size", [1, 2])
+def test_npu_attention_runner_builds_stage_metadata(
+    monkeypatch, pipeline_parallel_size
+):
     _require_npu_runtime()
     import numpy as np
     import torch
@@ -959,6 +964,8 @@ def test_npu_attention_runner_builds_stage_metadata(monkeypatch):
         connector="CAMAsyncAFDConnector",
         async_dp=True,
         tensor_parallel_size=2,
+        pipeline_parallel_size=pipeline_parallel_size,
+        use_sequence_parallel_moe=True,
         extra_config={
             "async_moe_ubatching": True,
             "async_moe_split": "token",
@@ -1004,11 +1011,6 @@ def test_npu_attention_runner_builds_stage_metadata(monkeypatch):
     )
     monkeypatch.setattr(
         attention_model_runner,
-        "enable_sp",
-        lambda _config: True,
-    )
-    monkeypatch.setattr(
-        attention_model_runner,
         "get_tensor_model_parallel_world_size",
         lambda: 2,
     )
@@ -1033,10 +1035,12 @@ def test_npu_attention_runner_builds_stage_metadata(monkeypatch):
     metadata = runner._afd_async_moe_ubatch_metadata
     assert isinstance(metadata, AsyncMoeUbatchMetadata)
     assert metadata.attn_metadata is stage_attn_metadata
-    assert metadata.use_sequence_parallel is True
+    assert metadata.use_sequence_parallel is (pipeline_parallel_size == 1)
     assert metadata.parent_input_tokens == 1100
     assert tuple(stage.actual_tokens for stage in metadata.stages) == (550, 549)
-    assert tuple(stage.input_tokens for stage in metadata.stages) == (550, 550)
+    assert tuple(stage.input_tokens for stage in metadata.stages) == (
+        (550, 550) if pipeline_parallel_size == 1 else (550, 549)
+    )
     assert [stage.request_slice for stage in metadata.stages] == [
         slice(0, 1),
         slice(0, 1),
