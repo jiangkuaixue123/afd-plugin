@@ -1723,6 +1723,27 @@ def test_stream_output_records_attention_split_steps(monkeypatch):
     assert split_steps == [101.0]
 
 
+def test_stream_output_records_live_npu_split_control_metadata(monkeypatch):
+    split_steps: list[float] = []
+    control_entry = (
+        "AFD NPU Attention send_dp_metadata decision; "
+        "world_rank=2 key=((0, (2, 2)), (1, (3, 2))) "
+    )
+    process: Any = argparse.Namespace(
+        stdout=io.StringIO(
+            control_entry + "is_graph_capturing=False is_warmup=True\n"
+            + control_entry + "is_graph_capturing=True is_warmup=False\n"
+            + control_entry + "is_graph_capturing=False is_warmup=False\n"
+        ),
+    )
+    monkeypatch.setattr(runner.time, "time", lambda: 101.0)
+
+    thread = runner.stream_output("attention", process, split_steps)
+    thread.join(timeout=5)
+
+    assert split_steps == [101.0]
+
+
 def test_assert_dbo_live_split_coverage_passes_when_steps_in_window(monkeypatch):
     args = _args()
     args.device_backend = "gpu"

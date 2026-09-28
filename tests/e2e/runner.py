@@ -91,6 +91,7 @@ DBO_EVAL_NUM_UBATCHES = 2
 # The engine logs one DEBUG line per executed step carrying its ubatch slice
 # list; a step line containing UBatchSlice entries is a live two-ubatch run.
 DBO_SPLIT_EVIDENCE_ENTRY = "UBatchSlice("
+NPU_DBO_CONTROL_ENTRY = "AFD NPU Attention send_dp_metadata decision;"
 ACCOUNTING_PROMPT = (
     "<|im_start|>system\n"
     "You are a professional accountant. Answer questions using accounting "
@@ -1017,7 +1018,16 @@ def stream_output(
             if (
                 dbo_split_steps is not None
                 and name == "attention"
-                and DBO_SPLIT_EVIDENCE_ENTRY in line
+                and (
+                    DBO_SPLIT_EVIDENCE_ENTRY in line
+                    or (
+                        NPU_DBO_CONTROL_ENTRY in line
+                        and "key=((0," in line
+                        and ", (1, (" in line
+                        and "is_graph_capturing=False" in line
+                        and "is_warmup=False" in line
+                    )
+                )
             ):
                 dbo_split_steps.append(time.time())
 
