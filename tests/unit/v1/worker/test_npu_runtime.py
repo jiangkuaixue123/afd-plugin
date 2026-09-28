@@ -1365,9 +1365,12 @@ def test_npu_attention_runner_builds_stage_metadata(
     assert runner._afd_transaction_counter == 1
 
 
-@pytest.mark.parametrize("async_stage", [True, False])
+@pytest.mark.parametrize(
+    ("async_stage", "full_graph"),
+    [(True, False), (False, False), (False, True)],
+)
 def test_npu_attention_runner_isolates_dsa_caches_per_stage(
-    monkeypatch, async_stage
+    monkeypatch, async_stage, full_graph
 ):
     _require_npu_runtime()
     torch = pytest.importorskip("torch")
@@ -1385,7 +1388,7 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(
 
         def build(self, *, common_attn_metadata, **kwargs):
             common_cache = kwargs["common_ratio_to_sas_metadata"]
-            assert kwargs["full_graph_mode"] is False
+            assert kwargs["full_graph_mode"] is full_graph
             assert "prefill_ratio_to_sas_metadata" not in kwargs
             assert "decode_ratio_to_sas_metadata" not in kwargs
             token_layout = (
@@ -1526,6 +1529,8 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(
         SimpleNamespace(request_slice=slice(0, 1)),
         SimpleNamespace(request_slice=slice(0 if async_stage else 1, num_reqs)),
     ]
+    from vllm.config import CUDAGraphMode
+
     metadata, _ = runner._build_attention_metadata_with_ubatches(
         num_tokens=105,
         num_reqs=num_reqs,
@@ -1534,6 +1539,9 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(
         num_reqs_padded=num_reqs,
         ubatch_slices=ubatch_slices,
         is_async_moe_stage_build=async_stage,
+        cudagraph_runtime_mode=(
+            CUDAGraphMode.FULL if full_graph else CUDAGraphMode.NONE
+        ),
     )
 
     assert [stage["layer-0"].token_layout for stage in metadata] == [
@@ -1551,7 +1559,7 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(
     assert len(stage_1_cache_ids) == 1
     assert stage_0_cache_ids.isdisjoint(stage_1_cache_ids)
     assert len(isolated_builder_inputs) == (4 if async_stage else 0)
-    assert len(materialized_stage_metadata) == (4 if async_stage else 0)
+    assert len(materialized_stage_metadata) == (0 if full_graph else 4)
 
 
 def test_npu_attention_runner_uses_configured_model_sp_stage_layout():

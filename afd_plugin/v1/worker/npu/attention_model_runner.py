@@ -531,13 +531,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     # once. Some DeepSeek Ascend builders mutate common inputs or return
     # reusable runtime buffers, so each live stage needs explicit ownership.
     # Patch functionality: copy the pinned upstream builders, reserve isolated
-    # builder indices and DSA metadata caches for CAMAsync, isolate mutable
-    # DeepSeek builder inputs and outputs, pass each stage's actual request
-    # count. Native DBO keeps the original builder indices, shared caches, and
-    # request count.
+    # builder indices for CAMAsync, isolate mutable DeepSeek builder inputs and
+    # outputs, and give every stage its own DSA cache and request count. Native
+    # DBO keeps the original builder indices.
     # Signature: adds plugin-owned ``is_async_moe_stage_build`` and
     # ``cudagraph_runtime_mode`` parameters. Native DBO keeps the default
-    # builder range and cache behavior.
+    # builder range.
     def _build_attention_metadata_with_ubatches(
         self,
         num_tokens: int,
@@ -559,9 +558,9 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         """Build isolated per-stage Ascend attention metadata.
 
-        Async CAM stage builds reserve builder zero for full-batch metadata
-        and isolate mutable metadata state. Native DBO keeps the default and
-        retains upstream behavior.
+        Async CAM stage builds reserve builder zero for full-batch metadata.
+        Every staged build isolates DSA metadata; eager builds also detach
+        reusable backend output buffers before the next stage is built.
         """
 
         if len(self.kv_cache_config.kv_cache_groups) == 0:
@@ -770,14 +769,20 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     attn_metadata_i.spec_state_indices_tensor[
                         attn_metadata_i.num_spec_decodes :
                     ].fill_(0)
-            # ### PATCH START: Materialize Async CAM backend metadata
-            if is_async_moe_stage_build:
+            # ### PATCH START: Materialize staged DeepSeek backend metadata
+            # Native FULL graphs retain captured storage addresses on replay.
+            # Eager stages must own buffers before another builder overwrites
+            # the process-wide RoPE workspace.
+            if is_async_moe_stage_build or (
+                len(ubatch_slices) > 1
+                and cudagraph_runtime_mode != CUDAGraphMode.FULL
+            ):
                 materialize_deepseek_attention_metadata(
                     attn_metadata_i,
                     common_attn_metadata.positions,
                     common_attn_metadata.num_input_tokens,
                 )
-            # ### PATCH END: Materialize Async CAM backend metadata
+            # ### PATCH END: Materialize staged DeepSeek backend metadata
             # ### PATCH START: AFD per-ubatch metadata assignment
             assert ubid is not None
             attn_metadata_dict = attn_metadata[ubid]

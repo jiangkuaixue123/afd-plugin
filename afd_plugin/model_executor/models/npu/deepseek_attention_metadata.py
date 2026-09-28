@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
-"""DeepSeek attention metadata ownership for staged Async CAM execution."""
+"""DeepSeek attention metadata ownership for staged NPU execution."""
 
 from __future__ import annotations
 
@@ -57,9 +57,9 @@ def materialize_deepseek_attention_metadata(
     """Detach mutable backend workspaces from one metadata object.
 
     vLLM-Ascend metadata builders may return views into process-global RoPE
-    runtime buffers.  That is safe when one metadata object is live, but Async
-    CAM builds full-batch, stage-0, and stage-1 metadata before executing any
-    of them.  A later build must not change an earlier metadata object.
+    runtime buffers. That is safe when one metadata object is live, but eager
+    DBO and Async CAM build multiple metadata objects before executing all of
+    them. A later build must not change an earlier metadata object.
 
     Only mutable runtime storage is materialized here.  Immutable RoPE tables,
     KV-cache tensors, masks, block tables, and other read-only inputs continue
