@@ -1593,15 +1593,17 @@ def test_main_defers_a_first_signal_until_cleanup_failure_is_reported(monkeypatc
     assert installed_handlers == previous_handlers
 
 
-def test_runner_drops_flashcomm_for_npu_role_without_tp(monkeypatch):
+@pytest.mark.parametrize("ffn_tp_size", [1, 2])
+def test_runner_drops_flashcomm_for_npu_role(monkeypatch, ffn_tp_size):
     args = _args()
     args.device_backend = "npu"
-    args.ffn_tp_size = 1
+    args.ffn_tp_size = ffn_tp_size
     monkeypatch.setenv("VLLM_ASCEND_ENABLE_FLASHCOMM1", "1")
 
     env = runner.build_env("2,3", args, role="ffn")
 
     assert "VLLM_ASCEND_ENABLE_FLASHCOMM1" not in env
+    assert env["VLLM_USE_V2_MODEL_RUNNER"] == "0"
 
 
 def test_build_env_marks_managed_process_trees_by_role():

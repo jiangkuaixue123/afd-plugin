@@ -55,6 +55,7 @@ def test_dsv4_fixed_deployment_and_cleanup(monkeypatch, tmp_path):
         config = json.loads(command[command.index("--additional-config") + 1])
         assert config["enable_dsv4_shared_compressor_workspace"] is False
         assert config["enable_cpu_binding"] is True
+        assert config["enable_flashcomm1"] is (role == "attention")
         assert config["afd"] == {
             "role": role,
             "connector": "CAMAsyncAFDConnector",
@@ -73,9 +74,7 @@ def test_dsv4_fixed_deployment_and_cleanup(monkeypatch, tmp_path):
             },
         }
         env = runner.build_env("0", args, role=role, e2e_run_id="test")
-        assert env["VLLM_ASCEND_ENABLE_FLASHCOMM1"] == (
-            "1" if role == "attention" else "0"
-        )
+        assert "VLLM_ASCEND_ENABLE_FLASHCOMM1" not in env
         assert env["VLLM_USE_V2_MODEL_RUNNER"] == "0"
         expected_backend = (
             "allgather_reducescatter" if role == "attention" else "flashinfer_all2allv"

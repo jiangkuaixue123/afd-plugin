@@ -84,18 +84,12 @@ def configure_scenario(args: argparse.Namespace) -> None:
     ]
 
 
-def additional_config() -> dict[str, bool]:
+def additional_config(role: str) -> dict[str, bool]:
     return {
+        "enable_flashcomm1": role == "attention",
         "enable_cpu_binding": True,
         "enable_force_load_balance": False,
         "enable_dsa_cp": False,
         "multistream_dsv4_dsa_overlap": False,
         "enable_dsv4_shared_compressor_workspace": False,
-    }
-
-
-def role_environment(role: str | None) -> dict[str, str]:
-    return {
-        "VLLM_USE_V2_MODEL_RUNNER": "0",
-        "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1" if role == "attention" else "0",
     }
