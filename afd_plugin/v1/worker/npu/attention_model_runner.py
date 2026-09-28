@@ -1457,8 +1457,8 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         if self._afd_async_moe_ubatch_metadata is None:
             return
         metadata = self._afd_async_moe_ubatch_metadata
-        runtime_sequence_parallel = (
-            self.vllm_config.parallel_config.use_sequence_parallel_moe
+        runtime_sequence_parallel = npu_model_uses_sequence_parallel_moe(
+            self.vllm_config
         )
         if runtime_sequence_parallel != metadata.use_sequence_parallel:
             raise RuntimeError(

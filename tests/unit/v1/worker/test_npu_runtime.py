@@ -1270,8 +1270,9 @@ def test_npu_attention_runner_uses_configured_model_sp_stage_layout():
     )
     runner._afd_async_moe_ubatch_metadata = planned_metadata
 
-    runner.vllm_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(use_sequence_parallel_moe=True),
+    runner.vllm_config = _vllm_config(
+        use_sequence_parallel_moe=True,
+        pipeline_parallel_size=1,
     )
     sp_context = SimpleNamespace(
         additional_kwargs={},
@@ -1281,6 +1282,22 @@ def test_npu_attention_runner_uses_configured_model_sp_stage_layout():
         sp_context.additional_kwargs[ASYNC_MOE_UBATCH_METADATA_KEY] is planned_metadata
     )
 
+    runner.vllm_config.parallel_config.pipeline_parallel_size = 2
+    with pytest.raises(RuntimeError, match="configured sequence parallelism"):
+        runner._install_async_moe_ubatch_metadata_on_forward_context(
+            SimpleNamespace(additional_kwargs={}),
+        )
+    global_metadata = replace(planned_metadata, use_sequence_parallel=False)
+    runner._afd_async_moe_ubatch_metadata = global_metadata
+    global_context = SimpleNamespace(additional_kwargs={})
+    runner._install_async_moe_ubatch_metadata_on_forward_context(global_context)
+    assert (
+        global_context.additional_kwargs[ASYNC_MOE_UBATCH_METADATA_KEY]
+        is global_metadata
+    )
+
+    runner._afd_async_moe_ubatch_metadata = planned_metadata
+    runner.vllm_config.parallel_config.pipeline_parallel_size = 1
     runner.vllm_config.parallel_config.use_sequence_parallel_moe = False
     with pytest.raises(RuntimeError, match="configured sequence parallelism"):
         runner._install_async_moe_ubatch_metadata_on_forward_context(
