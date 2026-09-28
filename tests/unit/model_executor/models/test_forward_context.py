@@ -617,11 +617,13 @@ def test_deepseek_afd_ffn_path_reuses_ascend_moe_mlp_after_attention_gate():
     assert "deepseek_v2_attention_gate," in compute_ffn_output
     assert "AFDF2ATransferPayload(" in compute_moe
     assert "MoEMlpComputeInput(" in compute_moe
-    assert "unified_apply_mlp(" in compute_moe
-    assert "routed_output, _ = unified_apply_mlp(" in compute_moe
+    assert "apply_moe_mlp(" in compute_moe
+    assert "routed_output, _ = apply_moe_mlp(" in compute_moe
+    assert "layer=routed_experts" in compute_moe
+    assert "quant_method=quant_method" in compute_moe
     assert "quant_type == QuantType.W8A8" in compute_moe
-    assert 'experts.get_eplb_parameter("w13_weight")' in compute_moe
-    assert 'experts.get_eplb_parameter("w2_weight")' in compute_moe
+    assert 'routed_experts.get_eplb_parameter("w13_weight")' in compute_moe
+    assert 'routed_experts.get_eplb_parameter("w2_weight")' in compute_moe
     assert "experts.w13_weight" not in compute_moe
     assert "experts.w2_weight" not in compute_moe
     assert "w13_weight_scale_fp32" in compute_moe
@@ -687,9 +689,11 @@ def test_deepseek_afd_ffn_skips_empty_rank_local_moe_work(
 
     routed_calls = []
 
-    def fake_unified_apply_mlp(*, mlp_compute_input):
+    def fake_apply_moe_mlp(*, mlp_compute_input, quant_method):
         assert mlp_compute_input.quant.quant_type == FakeQuantType.W8A8
         assert mlp_compute_input.quant.is_per_channel_weight is False
+        assert quant_method == "scheme"
+        assert mlp_compute_input.layer is routed_experts
         routed_calls.append(mlp_compute_input.hidden_states)
         return (
             torch.ones_like(
@@ -700,16 +704,19 @@ def test_deepseek_afd_ffn_skips_empty_rank_local_moe_work(
         )
 
     fake_moe_mlp: Any = ModuleType("vllm_ascend.ops.fused_moe.moe_mlp")
-    fake_moe_mlp.unified_apply_mlp = fake_unified_apply_mlp
-    fake_stage_contracts: Any = ModuleType(
-        "vllm_ascend.ops.fused_moe.moe_stage_contracts",
+    fake_moe_mlp.apply_moe_mlp = fake_apply_moe_mlp
+    fake_mlp_contracts: Any = ModuleType(
+        "vllm_ascend.ops.fused_moe.dataclass.moe_mlp",
     )
-    fake_stage_contracts.MoEMlpComputeInput = KeywordArguments
-    fake_stage_contracts.MoEWeights = KeywordArguments
-    fake_stage_params: Any = ModuleType(
-        "vllm_ascend.ops.fused_moe.moe_stage_params",
+    fake_mlp_contracts.MoEMlpComputeInput = KeywordArguments
+    fake_experts_contracts: Any = ModuleType(
+        "vllm_ascend.ops.fused_moe.dataclass.fused_experts",
     )
-    fake_stage_params.MoEQuantParams = KeywordArguments
+    fake_experts_contracts.MoEWeights = KeywordArguments
+    fake_quant_contracts: Any = ModuleType(
+        "vllm_ascend.ops.fused_moe.dataclass.moe_quant",
+    )
+    fake_quant_contracts.MoEQuantParams = KeywordArguments
     fake_quant_type: Any = ModuleType("vllm_ascend.quantization.quant_type")
     fake_quant_type.QuantType = FakeQuantType
     monkeypatch.setitem(
@@ -719,13 +726,18 @@ def test_deepseek_afd_ffn_skips_empty_rank_local_moe_work(
     )
     monkeypatch.setitem(
         sys.modules,
-        "vllm_ascend.ops.fused_moe.moe_stage_contracts",
-        fake_stage_contracts,
+        "vllm_ascend.ops.fused_moe.dataclass.moe_mlp",
+        fake_mlp_contracts,
     )
     monkeypatch.setitem(
         sys.modules,
-        "vllm_ascend.ops.fused_moe.moe_stage_params",
-        fake_stage_params,
+        "vllm_ascend.ops.fused_moe.dataclass.fused_experts",
+        fake_experts_contracts,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm_ascend.ops.fused_moe.dataclass.moe_quant",
+        fake_quant_contracts,
     )
     monkeypatch.setitem(
         sys.modules,
@@ -760,12 +772,16 @@ def test_deepseek_afd_ffn_skips_empty_rank_local_moe_work(
     )
 
     shared_experts = object()
-    experts = SimpleNamespace(
-        quant_type=FakeQuantType.W8A8,
+    routed_experts = SimpleNamespace(
         dynamic_eplb=False,
         get_eplb_parameter=lambda name: name,
         activation="silu",
-        _shared_experts=shared_experts,
+        quant_method=SimpleNamespace(quant_method="scheme"),
+    )
+    experts = SimpleNamespace(
+        quant_type=FakeQuantType.W8A8,
+        shared_experts=SimpleNamespace(_layer=shared_experts),
+        routed_experts=routed_experts,
     )
     layer = SimpleNamespace(
         mlp=SimpleNamespace(

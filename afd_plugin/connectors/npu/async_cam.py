@@ -87,6 +87,63 @@ _AFD_ASYNC_EXTRA_CONFIG_FIELDS: Final[frozenset[str]] = frozenset(
 logger = init_logger(__name__)
 
 
+def select_cam_experts(
+    *,
+    hidden_states: Tensor,
+    router_logits: Tensor,
+    top_k: int,
+    use_grouped_topk: bool,
+    renormalize: bool,
+    scoring_func: str,
+    num_expert_group: int,
+    topk_group: int,
+    routed_scaling_factor: float,
+    e_score_correction_bias: Tensor | None,
+    mix_placement: bool,
+    num_logical_experts: int,
+    num_shared_experts: int,
+    num_experts: int,
+) -> tuple[Tensor, Tensor]:
+    """Route CAM tokens through the target Ascend grouped-topk contract."""
+    from vllm_ascend.ops.fused_moe.router.grouped_topk_router import (
+        AscendGroupedTopKRouter,
+    )
+
+    router = AscendGroupedTopKRouter(
+        top_k=top_k,
+        global_num_experts=router_logits.shape[-1],
+        num_expert_group=num_expert_group,
+        topk_group=topk_group,
+        use_grouped_topk=use_grouped_topk,
+        renormalize=renormalize,
+        scoring_func=scoring_func,
+        routed_scaling_factor=routed_scaling_factor,
+        e_score_correction_bias=e_score_correction_bias,
+    )
+    topk_weights, topk_ids = router.select_experts(
+        hidden_states,
+        router_logits,
+        topk_indices_dtype=torch.int32,
+    )
+    if mix_placement:
+        shared_ids = torch.arange(
+            num_logical_experts,
+            num_logical_experts + num_shared_experts,
+            dtype=topk_ids.dtype,
+            device=topk_ids.device,
+        ).expand(topk_ids.shape[0], -1)
+        if num_experts < num_logical_experts + num_shared_experts:
+            raise ValueError("CAM shared expert IDs exceed the expert world")
+        shared_weights = torch.ones(
+            (topk_weights.shape[0], num_shared_experts),
+            dtype=topk_weights.dtype,
+            device=topk_weights.device,
+        )
+        topk_ids = torch.cat((topk_ids, shared_ids), dim=1)
+        topk_weights = torch.cat((topk_weights, shared_weights), dim=1)
+    return topk_weights, topk_ids
+
+
 @dataclass(frozen=True)
 class AFDAsyncExtraInfo(ConnectorExtraInfo):
     """Typed async CAM connector configuration.
@@ -327,10 +384,8 @@ class CAMAsyncAFDConnector(AFDConnectorBase):
         self._initialized = False
 
     def select_experts(self, **kwargs: Any) -> tuple[Tensor, Tensor]:
-        """Run the pinned vLLM-Ascend expert selector on Attention."""
-        from vllm_ascend.ops.fused_moe.experts_selector import select_experts
-
-        return select_experts(**kwargs)
+        """Run the target vLLM-Ascend router on Attention."""
+        return select_cam_experts(**kwargs)
 
     def recv_ffn_work_item(
         self,
@@ -911,4 +966,5 @@ __all__ = [
     "ASYNC_MOE_TOKEN_SPLIT",
     "CAM_COMM_ID",
     "build_async_topology",
+    "select_cam_experts",
 ]

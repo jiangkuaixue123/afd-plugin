@@ -48,18 +48,20 @@ def test_w4a8_cam_mlp_contract(monkeypatch, dynamic_eplb, per_channel, with_bias
     quant_type = SimpleNamespace(NONE="none", W8A8="w8a8", W4A8="w4a8")
     calls = []
 
-    def apply_mlp(*, mlp_compute_input):
+    def apply_mlp(*, mlp_compute_input, quant_method):
+        assert quant_method is owner.quant_method.quant_method
         calls.append(mlp_compute_input)
         return torch.ones((rows, 4), dtype=torch.bfloat16), None
 
     modules = {
-        "vllm_ascend.ops.fused_moe.moe_mlp": SimpleNamespace(
-            unified_apply_mlp=apply_mlp
+        "vllm_ascend.ops.fused_moe.moe_mlp": SimpleNamespace(apply_moe_mlp=apply_mlp),
+        "vllm_ascend.ops.fused_moe.dataclass.moe_mlp": SimpleNamespace(
+            MoEMlpComputeInput=SimpleNamespace
         ),
-        "vllm_ascend.ops.fused_moe.moe_stage_contracts": SimpleNamespace(
-            MoEMlpComputeInput=SimpleNamespace, MoEWeights=SimpleNamespace
+        "vllm_ascend.ops.fused_moe.dataclass.fused_experts": SimpleNamespace(
+            MoEWeights=SimpleNamespace
         ),
-        "vllm_ascend.ops.fused_moe.moe_stage_params": SimpleNamespace(
+        "vllm_ascend.ops.fused_moe.dataclass.moe_quant": SimpleNamespace(
             MoEQuantParams=SimpleNamespace
         ),
         "vllm_ascend.quantization.quant_type": SimpleNamespace(QuantType=quant_type),
@@ -94,14 +96,14 @@ def test_w4a8_cam_mlp_contract(monkeypatch, dynamic_eplb, per_channel, with_bias
     owner.quant_method = SimpleNamespace(
         quant_method=SimpleNamespace(is_per_channel_weight=per_channel)
     )
+    owner.dynamic_eplb = dynamic_eplb
+    owner.activation = "silu"
     # The wrapper owns the clamp; do not accidentally read it from the owner.
     owner.swiglu_limit = None
     experts = SimpleNamespace(
         quant_type=quant_type.W4A8,
-        dynamic_eplb=dynamic_eplb,
         routed_experts=owner,
-        _shared_experts=None,
-        activation="silu",
+        shared_experts=None,
     )
     layer = SimpleNamespace(
         mlp=SimpleNamespace(
@@ -127,6 +129,7 @@ def test_w4a8_cam_mlp_contract(monkeypatch, dynamic_eplb, per_channel, with_bias
         return
     contract = calls[0]
     assert contract.hidden_states is hidden_states
+    assert contract.layer is owner
     assert contract.dynamic_scale is scales
     assert contract.quant.quant_type == quant_type.W4A8
     assert contract.quant.is_per_channel_weight == per_channel
