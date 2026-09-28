@@ -38,7 +38,9 @@ _original_vllm_config_post_init: Callable[..., Any] | None = None
 # Patch reason: vLLM validates native ubatching by requiring a DeepEP all2all
 # backend, while AFD ubatching is implemented by plugin connectors.
 # Patch functionality: temporarily uses a supported backend only during
-# upstream EngineArgs-to-VllmConfig validation for AFD configs.
+# upstream EngineArgs-to-VllmConfig validation for AFD configs. NPU keeps the
+# real EngineArgs backend and scopes the bypass to VllmConfig validation.
+# Removal plan: remove when vLLM accepts connector-owned ubatching.
 # Expansion exception: upstream create_engine_config is a large config builder;
 # keep a narrow original-function delegation so this patch only owns the AFD
 # validation bypass.
@@ -55,17 +57,14 @@ def create_engine_config(
     worker_cls_was_auto = _uses_auto_worker_value(self.worker_cls)
     # ### PATCH END: AFD automatic worker selection
     # ### PATCH START: AFD Ascend config patch ordering
-    if parse_optional_afd_config(self.additional_config) is not None:
-        from vllm.platforms import current_platform
-
-        if current_platform.device_type == "npu":
-            from afd_plugin.compat.npu import (
-                apply_afd_ascend_config_patch_if_needed,
-            )
-
-            apply_afd_ascend_config_patch_if_needed()
+    is_afd_npu = _apply_afd_npu_config_patches(self)
     # ### PATCH END: AFD Ascend config patch ordering
-    if not _should_relax_engine_args_backend(self):
+    # ### PATCH START: NPU validates with its actual platform backend
+    needs_engine_args_bypass = not is_afd_npu and _should_relax_engine_args_backend(
+        self
+    )
+    # ### PATCH END: NPU validates with its actual platform backend
+    if not needs_engine_args_bypass:
         config = _original_create_engine_config(
             self,
             usage_context,
@@ -75,8 +74,8 @@ def create_engine_config(
         # ### PATCH START: AFD ubatching all2all backend validation
         # vLLM validates native ubatching against DeepEP backends. AFD ubatching
         # uses plugin connectors, so temporarily present a supported backend while
-        # upstream builds and validates VllmConfig. The Ascend platform wrapper
-        # preserves this temporary value across its default-worker normalization.
+        # upstream builds and validates VllmConfig on GPU. Ascend scopes this
+        # bypass inside __post_init__ to retain its native SP derivation.
         original_backend = self.all2all_backend
         self.all2all_backend = _AFD_TEMP_BACKEND
         try:
@@ -94,6 +93,12 @@ def create_engine_config(
     if worker_cls_was_auto:
         _select_afd_worker_for_auto(config)
     # ### PATCH END: AFD automatic worker selection
+    # ### PATCH START: finalize AFD NPU backend before serialization
+    if is_afd_npu:
+        from afd_plugin.compat.npu import fix_all2all_backend_for_afd
+
+        fix_all2all_backend_for_afd(config)
+    # ### PATCH END: finalize AFD NPU backend before serialization
     # ### PATCH START: AFD Ascend async-DP patch ordering
     # Ascend platform initialization wraps EngineCoreProc.run_engine_core after
     # general plugins load. Finalize the AFD Attention binding only after the
@@ -114,27 +119,59 @@ def create_engine_config(
 # after the config's actual AFD all2all backend has been restored.
 # Patch functionality: temporarily presents a validation-safe backend during
 # explicit AFD ubatching revalidation, then restores the actual backend.
+# NPU platform normalization sees the real backend, including cached Ascend
+# config revalidation, so SP graph filtering cannot observe temporary DeepEP.
+# Install Ascend patches before fresh child-process validation, even in eager mode.
 # Expansion exception: upstream VllmConfig.__post_init__ is a large validation
 # pipeline; keep narrow original-function delegation so this patch only owns
 # the AFD backend validation bypass.
+# Removal plan: remove when vLLM accepts connector-owned ubatching.
 # Signature: matches upstream; no added parameters.
 def __post_init__(self):
     """Verify configs are valid & consistent with each other."""
 
     assert _original_vllm_config_post_init is not None
+    # ### PATCH START: AFD child-process Ascend config ordering
+    is_afd_npu = _apply_afd_npu_config_patches(self)
+    # ### PATCH END: AFD child-process Ascend config ordering
     if not _should_relax_vllm_config_backend(self):
         return _original_vllm_config_post_init(self)
 
     # ### PATCH START: AFD repeated ubatching backend validation
     parallel_config = self.parallel_config
     original_backend = parallel_config.all2all_backend
+    if is_afd_npu:
+        from afd_plugin.compat.patches.npu.ascend_platform import (
+            AFDAll2AllValidation,
+        )
+
+        self._afd_all2all_validation = AFDAll2AllValidation(original_backend)
     parallel_config.all2all_backend = _AFD_TEMP_BACKEND
     try:
         result = _original_vllm_config_post_init(self)
+        if is_afd_npu:
+            original_backend = self._afd_all2all_validation.backend
     finally:
         parallel_config.all2all_backend = original_backend
+        if is_afd_npu:
+            del self._afd_all2all_validation
     # ### PATCH END: AFD repeated ubatching backend validation
     return result
+
+
+def _apply_afd_npu_config_patches(config: EngineArgs | VllmConfig) -> bool:
+    if parse_optional_afd_config(config.additional_config) is None:
+        return False
+
+    from vllm.platforms import current_platform
+
+    if current_platform.device_type != "npu":
+        return False
+
+    from afd_plugin.compat.npu import apply_afd_ascend_config_patch_if_needed
+
+    apply_afd_ascend_config_patch_if_needed()
+    return True
 
 
 def _uses_auto_worker_value(worker_cls: str | type[Any]) -> bool:

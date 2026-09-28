@@ -27,10 +27,14 @@ _PATCHES_APPLIED = False
 def apply_afd_ascend_config_patch_if_needed() -> None:
     """Apply patches required while vLLM builds an AFD NPU config."""
 
+    from afd_plugin.compat.patches.npu.ascend_config import (
+        apply_afd_ascend_config_patch,
+    )
     from afd_plugin.compat.patches.npu.ascend_platform import (
         apply_afd_ascend_dbo_config_patch,
     )
 
+    apply_afd_ascend_config_patch()
     if not apply_afd_ascend_dbo_config_patch():
         raise RuntimeError(
             "AFD NPU DBO config patch requires vLLM-Ascend NPUPlatform",
