@@ -18,7 +18,6 @@ from vllm.distributed import (
     get_pp_group,
 )
 from vllm.forward_context import (
-    DPMetadata,
     ForwardContext,
     get_forward_context,
     override_forward_context,
@@ -46,6 +45,7 @@ from afd_plugin.v1.worker.npu.ubatching import (
 )
 
 AFD_NPU_NUM_UBATCHES = 2
+AFD_UBATCH_DP_METADATA_KEY = "afd_ubatch_dp_metadata"
 _READY_BARRIER_PARTIES = AFD_NPU_NUM_UBATCHES + 1
 AscendLastRankOutput: TypeAlias = torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]
 AscendModelOutput: TypeAlias = AscendLastRankOutput | IntermediateTensors
@@ -217,24 +217,16 @@ class AscendUBatchWrapper(UBatchWrapper):
         inputs_embeds = kwargs["inputs_embeds"]
         compute_stream = torch.npu.current_stream()
 
-        dp_size = self.vllm_config.parallel_config.data_parallel_size
-        ubatch_dp_metadata = []
-        for ubatch_slice in ubatch_slices:
+        ubatch_dp_metadata = (forward_context.additional_kwargs or {}).get(
+            AFD_UBATCH_DP_METADATA_KEY
+        )
+        if ubatch_dp_metadata is None:
+            dp_size = self.vllm_config.parallel_config.data_parallel_size
             if dp_size > 1:
-                ubatch_num_tokens_across_dp = torch.tensor(
-                    [ubatch_slice.num_tokens] * dp_size,
-                    device="cpu",
-                    dtype=torch.int32,
+                raise RuntimeError(
+                    "Ascend DP ubatches require synchronized stage token counts"
                 )
-                ubatch_dp_metadata.append(
-                    DPMetadata.make(
-                        self.vllm_config.parallel_config,
-                        ubatch_slice.num_tokens,
-                        ubatch_num_tokens_across_dp,
-                    )
-                )
-            else:
-                ubatch_dp_metadata.append(None)
+            ubatch_dp_metadata = [None] * len(ubatch_slices)
 
         if (
             graph_key not in self.cudagraphs
@@ -577,6 +569,7 @@ class AscendUBatchWrapper(UBatchWrapper):
 
 
 __all__ = [
+    "AFD_UBATCH_DP_METADATA_KEY",
     "AscendNPUGraphKey",
     "AscendNPUGraphMetaData",
     "AscendModelOutput",

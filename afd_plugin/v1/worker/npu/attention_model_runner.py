@@ -110,7 +110,10 @@ from afd_plugin.v1.worker.attention_metadata import (
     _resolve_world_ranks,
     build_ubatch_dp_metadata_list,
 )
-from afd_plugin.v1.worker.npu.npu_ubatch_wrapper import AscendUBatchWrapper
+from afd_plugin.v1.worker.npu.npu_ubatch_wrapper import (
+    AFD_UBATCH_DP_METADATA_KEY,
+    AscendUBatchWrapper,
+)
 from afd_plugin.v1.worker.npu.ubatch_utils import (
     check_enable_ubatch,
     maybe_create_ubatch_slices,
@@ -1544,7 +1547,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         padded_graph_tokens = _full_cudagraph_padded_tokens(forward_context)
         if padded_graph_tokens is not None and not ubatch_slices:
             dp_metadata = self._build_capture_dp_metadata(padded_graph_tokens)
-        self._send_dp_metadata(dp_metadata, ubatch_slices)
+        sent_dp_metadata = self._send_dp_metadata(dp_metadata, ubatch_slices)
+        if ubatch_slices and len(ubatch_slices) > 1:
+            forward_context.additional_kwargs[AFD_UBATCH_DP_METADATA_KEY] = [
+                sent_dp_metadata[stage_idx] for stage_idx in range(len(ubatch_slices))
+            ]
 
     def _install_async_moe_ubatch_metadata_on_forward_context(
         self,
@@ -1568,18 +1575,14 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         self,
         dp_metadata: DPMetadata | AFDDPMetadata | None,
         ubatch_slices: UBatchSlices | None,
-    ) -> None:
+    ) -> dict[int, DPMetadata | AFDDPMetadata]:
         assert self.connector.control_plane is not None, (
             "_send_dp_metadata needs control plane driven connectors"
         )
 
         if ubatch_slices and len(ubatch_slices) > 1:
-            dp_metadata_list = {
-                idx: metadata
-                for idx, metadata in enumerate(
-                    build_ubatch_dp_metadata_list(self.vllm_config, ubatch_slices),
-                )
-            }
+            ubatch_dp_metadata = self._build_ubatch_dp_metadata(ubatch_slices)
+            dp_metadata_list = dict(enumerate(ubatch_dp_metadata))
         else:
             dp_metadata = self._ensure_dp_metadata(dp_metadata)
             dp_metadata_list = {0: dp_metadata}
@@ -1603,6 +1606,32 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             is_graph_replaying,
         )
         self.connector.control_plane.send_dp_metadata_list(payload)
+        return dp_metadata_list
+
+    def _build_ubatch_dp_metadata(
+        self,
+        ubatch_slices: UBatchSlices,
+    ) -> list[DPMetadata | AFDDPMetadata]:
+        dp_size = int(self.vllm_config.parallel_config.data_parallel_size)
+        if dp_size == 1:
+            return build_ubatch_dp_metadata_list(self.vllm_config, ubatch_slices)
+
+        token_counts = torch.zeros(
+            (len(ubatch_slices), dp_size),
+            dtype=torch.int32,
+            device="cpu",
+        )
+        for stage_idx, ubatch_slice in enumerate(ubatch_slices):
+            token_counts[stage_idx, self.dp_rank] = ubatch_slice.num_tokens
+        dist.all_reduce(token_counts, group=get_dp_group().cpu_group)
+        return [
+            DPMetadata.make(
+                self.vllm_config.parallel_config,
+                ubatch_slice.num_tokens,
+                token_counts[stage_idx],
+            )
+            for stage_idx, ubatch_slice in enumerate(ubatch_slices)
+        ]
 
     def _ensure_dp_metadata(
         self,

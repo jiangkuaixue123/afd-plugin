@@ -694,6 +694,7 @@ def test_full_graph_capture_passes_shape_key_and_mla_registries(monkeypatch):
         cudagraph_runtime_mode=wrapper_module.CUDAGraphMode.FULL,
         batch_descriptor=_batch_descriptor(),
         attn_metadata=[{"layer0": "m0"}, {"layer0": "m1"}],
+        additional_kwargs={},
         is_draft_model=False,
         max_tokens_across_pcp=0,
     )
@@ -840,6 +841,7 @@ def test_non_mla_graph_replay_keeps_stream_fence(monkeypatch):
         cudagraph_runtime_mode=wrapper_module.CUDAGraphMode.FULL,
         batch_descriptor=_batch_descriptor(),
         attn_metadata=None,
+        additional_kwargs={},
     )
     monkeypatch.setattr(
         wrapper_module,

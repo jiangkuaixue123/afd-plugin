@@ -851,6 +851,90 @@ def test_npu_attention_runner_sends_per_ubatch_dp_metadata():
     assert _tokens(sent_dp_metadata_list[1]) == [3]
 
 
+def test_npu_attention_ubatch_dp_metadata_keeps_each_rank_stage_count(monkeypatch):
+    _require_npu_runtime()
+    import torch
+
+    from afd_plugin.v1.worker.npu import attention_model_runner
+
+    runner = _new_attention_runner()
+    runner.vllm_config = _vllm_config(
+        role="attention",
+        data_parallel_size=2,
+        data_parallel_rank=1,
+    )
+    runner.dp_rank = 1
+    runner.connector = _RecordingConnector()
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    ubatch_slices = [
+        SimpleNamespace(num_tokens=4),
+        SimpleNamespace(num_tokens=3),
+    ]
+
+    def sync_stage_counts(counts, *, group):
+        assert group == "cpu-dp-group"
+        assert counts.tolist() == [[0, 4], [0, 3]]
+        counts[:, 0] = torch.tensor([5, 7], dtype=torch.int32)
+
+    monkeypatch.setattr(
+        attention_model_runner,
+        "get_dp_group",
+        lambda: SimpleNamespace(cpu_group="cpu-dp-group"),
+    )
+    monkeypatch.setattr(attention_model_runner.dist, "all_reduce", sync_stage_counts)
+    monkeypatch.setattr(
+        attention_model_runner,
+        "DPMetadata",
+        SimpleNamespace(
+            make=lambda _config, _local_count, counts: _FakeDPMetadata(
+                counts.clone()
+            ),
+        ),
+    )
+
+    metadata = runner._send_dp_metadata(None, ubatch_slices)
+
+    assert _tokens(metadata[0]) == [5, 4]
+    assert _tokens(metadata[1]) == [7, 3]
+    assert runner.connector.sent_dp_metadata_lists[0][0] == metadata
+
+
+def test_npu_attention_passes_stage_dp_metadata_to_ubatch_context(monkeypatch):
+    _require_npu_runtime()
+
+    from afd_plugin.v1.worker.npu import attention_model_runner
+    from afd_plugin.v1.worker.npu.npu_ubatch_wrapper import (
+        AFD_UBATCH_DP_METADATA_KEY,
+    )
+
+    runner = _new_attention_runner()
+    runner.vllm_config = _vllm_config(role="attention", data_parallel_size=2)
+    runner.connector = _RecordingConnector()
+    runner._afd_pending_metadata = object()
+    runner._afd_suppress_metadata_send = False
+    stages = [SimpleNamespace(num_tokens=4), SimpleNamespace(num_tokens=3)]
+    stage_metadata = {0: object(), 1: object()}
+    runner._send_dp_metadata = lambda _metadata, _slices: stage_metadata
+    monkeypatch.setattr(
+        attention_model_runner,
+        "_full_cudagraph_padded_tokens",
+        lambda _context: None,
+    )
+    context = SimpleNamespace(
+        additional_kwargs={},
+        dp_metadata=object(),
+        ubatch_slices=stages,
+    )
+
+    runner._install_afd_metadata_on_forward_context(context)
+
+    assert context.additional_kwargs[AFD_UBATCH_DP_METADATA_KEY] == [
+        stage_metadata[0],
+        stage_metadata[1],
+    ]
+
+
 def test_npu_attention_capture_microbatch_also_captures_single_stage():
     _require_npu_runtime()
     from vllm.config import CUDAGraphMode
@@ -2461,6 +2545,58 @@ def test_npu_ubatch_merge_keeps_model_gathered_outputs(monkeypatch):
     )
     assert merged[0].tolist() == [[1.0], [2.0], [1.0], [2.0]]
     assert merged[1][0].tolist() == [[3.0], [4.0], [3.0], [4.0]]
+
+
+@pytest.mark.parametrize("has_stage_metadata", [False, True])
+def test_npu_ubatch_wrapper_reuses_synchronized_stage_dp_metadata(
+    monkeypatch, has_stage_metadata
+):
+    _require_npu_runtime()
+    import torch
+    from vllm.config import CUDAGraphMode
+
+    from afd_plugin.v1.worker.npu import npu_ubatch_wrapper
+
+    stage_metadata = [object(), object()]
+    slices = [SimpleNamespace(num_tokens=4), SimpleNamespace(num_tokens=3)]
+    context = SimpleNamespace(
+        batch_descriptor=SimpleNamespace(has_lora=False, num_active_loras=0),
+        ubatch_slices=slices,
+        cudagraph_runtime_mode=CUDAGraphMode.NONE,
+        attn_metadata=None,
+        additional_kwargs=(
+            {npu_ubatch_wrapper.AFD_UBATCH_DP_METADATA_KEY: stage_metadata}
+            if has_stage_metadata
+            else {}
+        ),
+    )
+    monkeypatch.setattr(npu_ubatch_wrapper, "get_forward_context", lambda: context)
+    monkeypatch.setattr(torch.npu, "current_stream", lambda: "compute-stream")
+
+    wrapper = object.__new__(npu_ubatch_wrapper.AscendUBatchWrapper)
+    wrapper.mla_full_graph_enabled = False
+    wrapper.vllm_config = _vllm_config(data_parallel_size=2)
+    wrapper.runnable = object()
+    wrapper.cudagraphs = {}
+    observed = []
+    wrapper._make_ubatch_metadata = lambda *args, **_kwargs: observed.append(
+        args[7]
+    ) or []
+    wrapper._run_ubatches = lambda _metadata, _model: "ran"
+
+    model_inputs = dict(
+        input_ids=None,
+        positions=None,
+        intermediate_tensors=None,
+        inputs_embeds=None,
+    )
+    if not has_stage_metadata:
+        with pytest.raises(RuntimeError, match="synchronized stage token counts"):
+            wrapper(**model_inputs)
+        assert observed == []
+    else:
+        assert wrapper(**model_inputs) == "ran"
+        assert observed == [stage_metadata]
 
 
 @pytest.mark.parametrize("cudagraph_mode", ["FULL", "FULL_AND_PIECEWISE"])
