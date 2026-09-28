@@ -1341,7 +1341,10 @@ def test_npu_attention_runner_builds_stage_metadata(
     assert runner._afd_transaction_counter == 1
 
 
-def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
+@pytest.mark.parametrize("async_stage", [True, False])
+def test_npu_attention_runner_isolates_dsa_caches_per_stage(
+    monkeypatch, async_stage
+):
     _require_npu_runtime()
     torch = pytest.importorskip("torch")
 
@@ -1426,9 +1429,10 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
     )
 
     def make_attn_group(group_id):
+        builder_offset = 1 if async_stage else 0
         builders = {
-            1: FakeDSABuilder(group_id, 0),
-            2: FakeDSABuilder(group_id, 1),
+            builder_offset: FakeDSABuilder(group_id, 0),
+            builder_offset + 1: FakeDSABuilder(group_id, 1),
         }
         return SimpleNamespace(
             get_metadata_builder=builders.__getitem__,
@@ -1447,32 +1451,39 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
     )
     runner.attn_groups = [[make_attn_group(0), make_attn_group(1)]]
     runner.max_model_len = 105
-    runner.optimistic_seq_lens_cpu = torch.tensor([105], dtype=torch.int32)
+    num_reqs = 1 if async_stage else 2
+    runner.optimistic_seq_lens_cpu = torch.tensor(
+        [105] if async_stage else [53, 105], dtype=torch.int32
+    )
     # vLLM-Ascend v0.26 exposes use_dcp as a read-only property derived from
     # dcp_size, so the fixture sets the underlying size instead.
     runner.dcp_size = 1
     runner.use_async_spec_decode = False
     runner.input_batch = SimpleNamespace(
         block_table=[block_table],
-        num_computed_tokens_cpu_tensor=torch.zeros(1, dtype=torch.int32),
-        num_prompt_tokens_cpu_tensor=torch.tensor([105], dtype=torch.int32),
+        num_computed_tokens_cpu_tensor=torch.zeros(num_reqs, dtype=torch.int32),
+        num_prompt_tokens_cpu_tensor=torch.tensor(
+            [105] if async_stage else [53, 52], dtype=torch.int32
+        ),
         req_ids=[],
     )
-    query_start_loc = torch.tensor([0, 105], dtype=torch.int32)
+    query_start_loc = torch.tensor(
+        [0, 105] if async_stage else [0, 53, 105], dtype=torch.int32
+    )
     runner.query_start_loc = SimpleNamespace(
         gpu=query_start_loc,
         cpu=query_start_loc,
     )
-    runner.seq_lens = torch.tensor([105], dtype=torch.int32)
+    runner.seq_lens = runner.optimistic_seq_lens_cpu
     runner.positions = torch.arange(105, dtype=torch.int64)
     runner.actual_seq_lengths_q = []
     runner.use_compress = False
     runner.attn_state = object()
     runner.decode_token_per_req = 1
-    runner.group_len = SimpleNamespace(gpu=torch.zeros(1, dtype=torch.int32))
-    runner.group_key_idx = SimpleNamespace(gpu=torch.zeros(1, dtype=torch.int32))
+    runner.group_len = SimpleNamespace(gpu=torch.zeros(num_reqs, dtype=torch.int32))
+    runner.group_key_idx = SimpleNamespace(gpu=torch.zeros(num_reqs, dtype=torch.int32))
     runner.group_key_cache_idx = SimpleNamespace(
-        gpu=torch.zeros(1, dtype=torch.int32),
+        gpu=torch.zeros(num_reqs, dtype=torch.int32),
     )
     runner.cache_config = SimpleNamespace(kv_sharing_fast_prefill=False)
     runner.model_config = SimpleNamespace(enable_return_routed_experts=False)
@@ -1489,16 +1500,16 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
 
     ubatch_slices = [
         SimpleNamespace(request_slice=slice(0, 1)),
-        SimpleNamespace(request_slice=slice(0, 1)),
+        SimpleNamespace(request_slice=slice(0 if async_stage else 1, num_reqs)),
     ]
     metadata, _ = runner._build_attention_metadata_with_ubatches(
         num_tokens=105,
-        num_reqs=1,
+        num_reqs=num_reqs,
         max_query_len=105,
         num_tokens_padded=112,
-        num_reqs_padded=1,
+        num_reqs_padded=num_reqs,
         ubatch_slices=ubatch_slices,
-        is_async_moe_stage_build=True,
+        is_async_moe_stage_build=async_stage,
     )
 
     assert [stage["layer-0"].token_layout for stage in metadata] == [
@@ -1515,8 +1526,8 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
     assert len(stage_0_cache_ids) == 1
     assert len(stage_1_cache_ids) == 1
     assert stage_0_cache_ids.isdisjoint(stage_1_cache_ids)
-    assert len(isolated_builder_inputs) == 4
-    assert len(materialized_stage_metadata) == 4
+    assert len(isolated_builder_inputs) == (4 if async_stage else 0)
+    assert len(materialized_stage_metadata) == (4 if async_stage else 0)
 
 
 def test_npu_attention_runner_uses_configured_model_sp_stage_layout():

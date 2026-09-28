@@ -785,27 +785,21 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 attn_metadata_dict[layer_name] = attn_metadata_i
             # ### PATCH END: AFD per-ubatch metadata assignment
 
-        # ### PATCH START: Isolate Async CAM DSA metadata caches by stage
+        # ### PATCH START: Isolate staged DSA metadata caches
         # DSA builders reuse these dictionaries across attention groups with
-        # the same token layout. Async CAM stages have different positions,
-        # sequence lengths, and sparse-attention metadata, so sharing one set
-        # makes later stages reuse the first stage's metadata. Preserve the
-        # pinned upstream cache and request-count behavior for native DBO.
-        if not is_async_moe_stage_build:
-            shared_dsa_metadata_caches: dict[object, object] = {}
-            dsa_metadata_caches = [shared_dsa_metadata_caches for _ in ubatch_slices]
-            num_actual_reqs_per_ubatch = [num_reqs for _ in ubatch_slices]
-        else:
-            dsa_metadata_caches = [{} for _ in ubatch_slices]
-            num_actual_reqs_per_ubatch = [
-                max(
-                    0,
-                    min(ubatch_slice.request_slice.stop, num_reqs)
-                    - ubatch_slice.request_slice.start,
-                )
-                for ubatch_slice in ubatch_slices
-            ]
-        # ### PATCH END: Isolate Async CAM DSA metadata caches by stage
+        # the same token layout. Native DBO and Async CAM stages can have
+        # different requests, positions, and sequence lengths, so each stage
+        # owns one cache shared only by its attention groups.
+        dsa_metadata_caches = [{} for _ in ubatch_slices]
+        num_actual_reqs_per_ubatch = [
+            max(
+                0,
+                min(ubatch_slice.request_slice.stop, num_reqs)
+                - ubatch_slice.request_slice.start,
+            )
+            for ubatch_slice in ubatch_slices
+        ]
+        # ### PATCH END: Isolate staged DSA metadata caches
         spec_decode_common_attn_metadata = None
         for kv_cache_gid, kv_cache_group in enumerate(
             self.kv_cache_config.kv_cache_groups,
