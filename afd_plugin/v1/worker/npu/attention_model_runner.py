@@ -1862,8 +1862,9 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     # Patch reason: upstream intentionally leaves NPU microbatching disabled and
     # uses its native DP synchronization, which cannot coordinate AFD stages.
     # Patch functionality: retain the upstream signature and execution/padding
-    # logic while enabling microbatching only during AFD live execution and using
-    # the AFD control-plane-aware DP synchronization path.
+    # logic while enabling microbatching only during AFD live execution, using
+    # the AFD control-plane-aware DP synchronization path, and executing MLA
+    # DBO eagerly until its two-stage FULL graph preserves runtime metadata.
     # Signature: matches upstream; no added parameters or changed defaults.
     def _determine_batch_execution_and_padding(
         self,
@@ -1973,6 +1974,20 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         # ### PATCH START: AFD live NPU microbatching
         if not (allow_microbatching or self._afd_live_execution):
             should_ubatch = False
+        # Ascend's MLA FULL graph captures both DBO stages before replay. Its
+        # stage-local attention metadata is not yet replay-safe: the reused
+        # graph corrupts GSM8K output even when RoPE buffers have fixed
+        # addresses. Keep graph execution for unsplit and non-MLA batches.
+        if (
+            should_ubatch
+            and self._afd_live_execution
+            and cudagraph_mode == CUDAGraphMode.FULL
+            and self.model_config.use_mla
+            and not self.use_sparse
+            and not self.use_compress
+        ):
+            cudagraph_mode = CUDAGraphMode.NONE
+            batch_descriptor = BatchDescriptor(num_tokens_padded)
         # ### PATCH END: AFD live NPU microbatching
 
         cudagraph_stats = None

@@ -541,6 +541,72 @@ def test_npu_attention_non_live_execution_disables_microbatching(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("should_ubatch", "use_mla", "live_execution", "expected_mode"),
+    [
+        (True, True, True, "NONE"),
+        (False, True, True, "FULL"),
+        (True, False, True, "FULL"),
+        (True, True, False, "FULL"),
+    ],
+)
+def test_npu_mla_dbo_uses_eager_runtime_for_full_graph_dispatch(
+    monkeypatch, should_ubatch, use_mla, live_execution, expected_mode
+):
+    _require_npu_runtime()
+    import numpy as np
+    from vllm.config import CUDAGraphMode
+    from vllm.forward_context import BatchDescriptor
+
+    from afd_plugin.v1.worker.npu import attention_model_runner
+
+    runner = _new_attention_runner()
+    runner._afd_live_execution = live_execution
+    runner._is_warmup = False
+    runner._afd_is_graph_capturing = False
+    runner._pad_for_sequence_parallelism = lambda num_tokens: num_tokens
+    runner.input_batch = SimpleNamespace(
+        num_computed_tokens_cpu=np.ones(4, dtype=np.int32),
+        lora_id_to_lora_request={},
+    )
+    runner.speculative_config = None
+    runner.uniform_decode_query_len = 1
+    runner.model_config = SimpleNamespace(
+        is_encoder_decoder=False,
+        use_mla=use_mla,
+    )
+    runner.use_sparse = False
+    runner.use_compress = False
+    runner.vllm_config = SimpleNamespace(
+        parallel_config=SimpleNamespace(data_parallel_size=1),
+        observability_config=SimpleNamespace(cudagraph_metrics=False),
+    )
+    runner.cudagraph_dispatcher = SimpleNamespace(
+        dispatch=lambda **_kwargs: (CUDAGraphMode.FULL, BatchDescriptor(8)),
+    )
+    monkeypatch.setattr(attention_model_runner, "enable_sp", lambda _config: False)
+    monkeypatch.setattr(
+        attention_model_runner,
+        "check_enable_ubatch",
+        lambda *_args, **_kwargs: should_ubatch,
+    )
+
+    runtime_mode, descriptor, actual_ubatch, _, _ = (
+        runner._determine_batch_execution_and_padding(
+            num_tokens=4,
+            num_reqs=4,
+            num_scheduled_tokens_np=np.ones(4, dtype=np.int32),
+            max_num_scheduled_tokens=1,
+            use_cascade_attn=False,
+            allow_microbatching=not live_execution,
+        )
+    )
+
+    assert runtime_mode == CUDAGraphMode[expected_mode]
+    assert descriptor.num_tokens == 8
+    assert actual_ubatch is should_ubatch
+
+
+@pytest.mark.parametrize(
     ("connector_name", "skip_dp_sync", "expected_counts"),
     [
         ("CAMP2pAFDConnector", False, [8, 8]),
