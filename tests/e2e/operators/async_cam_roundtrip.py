@@ -48,21 +48,32 @@ def make_input(
     *,
     ffn_ranks: int,
     experts_per_rank: int,
+    hidden_size: int,
+    top_k: int,
 ):
     batch = 1 if case == "decode" else BATCH_SIZE
-    values = torch.arange(batch * HIDDEN_SIZE, dtype=torch.float32).reshape(
-        batch, HIDDEN_SIZE
+    values = torch.arange(batch * hidden_size, dtype=torch.float32).reshape(
+        batch, hidden_size
     )
     x = (torch.sin(values * 0.013 + rank) * 0.5).to(dtype)
-    ids = torch.empty((batch, TOP_K), dtype=torch.int32)
+    ids = torch.empty((batch, top_k), dtype=torch.int32)
+    expert_offsets = torch.arange(top_k, dtype=torch.int32)
+    total_experts = ffn_ranks * experts_per_rank
     if case == "empty-rank-multichunk":
-        ids[:, 0], ids[:, 1] = 0, experts_per_rank - 1
+        ids[:] = expert_offsets.remainder(experts_per_rank)
+        ids[:, -1] = experts_per_rank - 1
     elif case == "sparse":
-        ids[:, 0] = (torch.arange(batch) + rank).remainder(3)
-        ids[:, 1] = ffn_ranks * experts_per_rank - 1
+        ids[:] = (
+            torch.arange(batch, dtype=torch.int32)[:, None]
+            + rank
+            + expert_offsets[None, :] * experts_per_rank
+        ).remainder(total_experts)
+        ids[:, -1] = total_experts - 1
     else:
-        ids[:, 0], ids[:, 1] = 0, ffn_ranks * experts_per_rank - 1
-    weights = torch.tensor([0.25, 0.75], dtype=torch.float32).repeat(batch, 1)
+        ids[:] = expert_offsets.remainder(total_experts)
+        ids[:, -1] = total_experts - 1
+    weights = torch.arange(1, top_k + 1, dtype=torch.float32)
+    weights = (weights / weights.sum()).repeat(batch, 1)
     return x, ids, weights
 
 
@@ -84,8 +95,11 @@ def main() -> None:
     parser.add_argument("--attention-dp", type=int, default=1)
     parser.add_argument("--ffn-ranks", type=int, default=FFN_RANKS)
     parser.add_argument("--experts-per-rank", type=int, default=EXPERTS_PER_RANK)
+    parser.add_argument("--hidden-size", type=int, default=HIDDEN_SIZE)
+    parser.add_argument("--top-k", type=int, default=TOP_K)
     args = parser.parse_args()
     assert args.attention_dp > 0 and args.ffn_ranks > 0 and args.experts_per_rank > 0
+    assert args.hidden_size > 0 and 1 < args.top_k <= args.experts_per_rank
     local_rank = int(os.environ["LOCAL_RANK"])
     rank = int(os.environ["RANK"])
     attention_ranks = args.tp * args.attention_dp
@@ -116,6 +130,8 @@ def main() -> None:
                         dtype,
                         ffn_ranks=args.ffn_ranks,
                         experts_per_rank=args.experts_per_rank,
+                        hidden_size=args.hidden_size,
+                        top_k=args.top_k,
                     )
                     x, ids, weights = x_cpu.npu(), ids_cpu.npu(), weights_cpu.npu()
                     ops.afd_async_dispatch_send(
@@ -125,8 +141,8 @@ def main() -> None:
                         0,
                         capacity,
                         x.shape[0],
-                        HIDDEN_SIZE,
-                        TOP_K,
+                        args.hidden_size,
+                        args.top_k,
                         args.ffn_ranks,
                         attention_ranks,
                         args.experts_per_rank,
@@ -144,8 +160,8 @@ def main() -> None:
                         comm,
                         0,
                         x.shape[0],
-                        HIDDEN_SIZE,
-                        TOP_K,
+                        args.hidden_size,
+                        args.top_k,
                         args.ffn_ranks,
                         attention_ranks,
                         args.experts_per_rank,
@@ -178,8 +194,8 @@ def main() -> None:
                                 comm,
                                 0,
                                 capacity,
-                                HIDDEN_SIZE,
-                                TOP_K,
+                                args.hidden_size,
+                                args.top_k,
                                 args.ffn_ranks,
                                 attention_ranks,
                                 args.experts_per_rank,
@@ -209,7 +225,7 @@ def main() -> None:
                         result = values.to(dtype).contiguous()
                         if not num_tokens:
                             result = torch.zeros(
-                                (1, HIDDEN_SIZE), dtype=dtype, device="npu"
+                                (1, args.hidden_size), dtype=dtype, device="npu"
                             )
                         ops.afd_async_combine_send(
                             result,
@@ -217,8 +233,8 @@ def main() -> None:
                             batch_info,
                             0,
                             capacity,
-                            HIDDEN_SIZE,
-                            TOP_K,
+                            args.hidden_size,
+                            args.top_k,
                             args.ffn_ranks,
                             attention_ranks,
                             args.experts_per_rank,
