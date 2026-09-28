@@ -48,6 +48,7 @@ def test_dsv4_fixed_deployment_and_cleanup(monkeypatch, tmp_path):
         assert command[command.index("--tensor-parallel-size") + 1] == tp
         assert command[command.index("--max-num-batched-tokens") + 1] == "8192"
         assert command[command.index("--max-model-len") + 1] == "1048576"
+        assert command[command.index("--attention_config.indexer_kv_dtype") + 1] == "int8"
         assert "--enforce-eager" in command
         assert "--enable-expert-parallel" in command
         assert "--enable-dbo" not in command

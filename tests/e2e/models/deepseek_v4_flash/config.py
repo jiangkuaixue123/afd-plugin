@@ -61,6 +61,8 @@ def configure_scenario(args: argparse.Namespace) -> None:
         "0.7",
         "--quantization",
         "ascend",
+        "--attention_config.indexer_kv_dtype",
+        "int8",
         "--tokenizer-mode",
         "deepseek_v4",
         "--model-loader-extra-config",
