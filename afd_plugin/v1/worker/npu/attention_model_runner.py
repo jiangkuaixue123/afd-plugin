@@ -47,6 +47,7 @@ from vllm_ascend.attention.utils import (
     using_paged_attention,
 )
 from vllm_ascend.compilation.acl_graph import ACLGraphWrapper
+from vllm_ascend.ops.fused_moe.force_eplb import build_force_eplb_topk
 from vllm_ascend.ops.rotary_embedding import update_cos_sin
 from vllm_ascend.spec_decode.dflash_proposer import AscendDflashProposer
 from vllm_ascend.spec_decode.draft_proposer import AscendDraftModelProposer
@@ -292,7 +293,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
 
         return hidden_states
 
-    # Upstream source: vllm-ascend commit 8d4409d6256d,
+    # Upstream source: vllm-ascend commit 80d8c194f,
     # NPUModelRunner._build_attention_metadata.
     # Patch reason: upstream accepts ubatch slices but does not construct separate
     # Ascend attention metadata for each NPU ubatch.
@@ -519,7 +520,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         )
         return full_metadata
 
-    # Upstream source: vllm-ascend commit 80d8c194f,
+    # Upstream source: vllm-ascend commit 8d4409d6256d,
     # NPUModelRunner._build_attention_metadata.
     # Patch reason: upstream builds one metadata object even when AFD schedules
     # NPU execution stages, while CAMAsync also distinguishes real tokens from
@@ -1133,7 +1134,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             self._afd_suppress_metadata_send = previous_suppress_send
             self._afd_pending_metadata = previous_metadata
 
-    # Upstream source: vllm-ascend commit 80d8c194f,
+    # Upstream source: vllm-ascend commit 8d4409d6256d,
     # NPUModelRunner._dummy_run.
     # Patch reason: upstream's dummy path forces ubatch slices to None, so it
     # cannot warm or capture the AFD two-stage Ascend execution path.
@@ -1401,7 +1402,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
 
             need_dummy_logits = not is_profile and lmhead_tp_enable()
             max_num_reqs_across_dp = max_num_reqs * self.uniform_decode_query_len
-            dummy_indices = torch.zeros(max_num_reqs_across_dp, dtype=torch.int32)
+            dummy_indices = torch.zeros(
+                max_num_reqs_across_dp,
+                dtype=torch.int32,
+                device=self.device,
+            )
 
             def dummy_compute_logits(hidden_states):
                 if not need_dummy_logits:
@@ -1420,6 +1425,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     )
                 return None
 
+            active_device_metadata_executor = (
+                self._prepare_device_metadata_for_forward(cudagraph_runtime_mode)
+            )
+            self.kvpp.prepare_forward(False)
+
             with set_ascend_forward_context(
                 attn_metadata,
                 self.vllm_config,
@@ -1430,12 +1440,18 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 aclgraph_runtime_mode=cudagraph_runtime_mode,
                 batch_descriptor=batch_desc,
                 model_instance=self.model,
+                device_metadata_executor=active_device_metadata_executor,
                 has_sinks=self._has_sinks,
-                input_ids=input_ids,
                 eplb_heat_collection_status=(
                     self.eplb_heat_collection_status if self.dynamic_eplb else False
                 ),
             ):
+                if (
+                    not is_graph_capturing
+                    and self.ascend_config.enable_force_eplb
+                    and self.vllm_config.model_config.is_moe
+                ):
+                    build_force_eplb_topk(self.device, self.max_num_tokens)
                 outputs = self._model_forward(
                     num_tokens_padded,
                     input_ids,
@@ -1443,6 +1459,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     intermediate_tensors,
                     inputs_embeds,
                 )
+            if (
+                active_device_metadata_executor is not None
+                and active_device_metadata_executor.submission_in_flight
+            ):
+                active_device_metadata_executor.release()
+            self.kvpp.complete_forward()
             if self.use_aux_hidden_state_outputs:
                 hidden_states, _ = outputs
             else:
