@@ -116,6 +116,7 @@ from afd_plugin.v1.worker.npu.npu_ubatch_wrapper import (
 )
 from afd_plugin.v1.worker.npu.ubatch_utils import (
     check_enable_ubatch,
+    create_request_boundary_ubatch_slices,
     maybe_create_ubatch_slices,
     pad_out_ubatch_slices,
     split_attn_metadata,
@@ -300,8 +301,9 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     # NPUModelRunner._build_attention_metadata.
     # Patch reason: upstream accepts ubatch slices but does not construct separate
     # Ascend attention metadata for each NPU ubatch.
-    # Patch functionality: normalize padded slices, build AFD control metadata,
-    # and route only split batches through the plugin-owned metadata builder.
+    # Patch functionality: use request boundaries for eager DBO, normalize
+    # padded slices, build AFD control metadata, and route split batches through
+    # the plugin-owned metadata builder. FULL graphs retain equal-sized stages.
     # Signature: matches upstream; no added parameters.
     def _build_attention_metadata(
         self,
@@ -324,6 +326,20 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         offload_dummy: bool = False,
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         # ### PATCH START: AFD NPU ubatch metadata routing
+        # Ascend MLA FULL graphs capture equal-sized stages. Eager DBO can
+        # avoid partial-request metadata by splitting on request boundaries.
+        if (
+            ubatch_slices is not None
+            and len(ubatch_slices) > 1
+            and self._afd_live_execution
+            and num_scheduled_tokens_np is not None
+            and cudagraph_runtime_mode != CUDAGraphMode.FULL
+        ):
+            request_slices = create_request_boundary_ubatch_slices(
+                num_scheduled_tokens_np,
+            )
+            if request_slices is not None:
+                ubatch_slices = request_slices
         ubatch_slices = _normalize_metadata_ubatch_slices(
             ubatch_slices,
             num_tokens_padded,

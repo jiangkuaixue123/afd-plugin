@@ -623,6 +623,48 @@ def test_npu_eager_camp2p_aligns_uneven_dp_tokens(
     assert descriptor.num_tokens == expected_counts[1]
 
 
+@pytest.mark.parametrize(
+    ("graph_mode", "expected_split"),
+    [("NONE", 3), ("FULL", 4)],
+)
+def test_npu_live_dbo_uses_request_boundary_only_outside_full_graph(
+    graph_mode, expected_split
+):
+    _require_npu_runtime()
+    import numpy as np
+    from vllm.config import CUDAGraphMode
+
+    from afd_plugin.v1.worker.npu.ubatch_utils import create_ubatch_slices
+
+    runner = _new_attention_runner()
+    runner._afd_live_execution = True
+    runner.afd_async_extra_info = SimpleNamespace(async_moe_ubatching=False)
+    runner._build_afd_metadata = lambda *_args: object()
+    runner._build_attention_metadata_with_ubatches = lambda **kwargs: (
+        kwargs["ubatch_slices"],
+        None,
+    )
+    scheduled_tokens = np.array([3, 5], dtype=np.int32)
+    midpoint_slices = create_ubatch_slices(scheduled_tokens, [4])
+
+    stage_slices, _ = runner._build_attention_metadata(
+        num_tokens=8,
+        num_reqs=2,
+        max_query_len=5,
+        num_tokens_padded=8,
+        num_reqs_padded=2,
+        ubatch_slices=midpoint_slices,
+        num_scheduled_tokens_np=scheduled_tokens,
+        cudagraph_runtime_mode=CUDAGraphMode[graph_mode],
+    )
+
+    assert [stage.token_slice for stage in stage_slices] == [
+        slice(0, expected_split),
+        slice(expected_split, 8),
+    ]
+    assert runner.ubatch_slices == stage_slices
+
+
 def _new_ffn_runner():
     _require_npu_runtime()
     from afd_plugin.v1.worker.npu.ffn_model_runner import AFDNPUFFNModelRunner
