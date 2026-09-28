@@ -153,12 +153,11 @@ samples.
 
 `afd-dsv4-flash-async-cam-dp2tp4-ep8` runs Attention DP2/TP4 on the first
 eight devices and FFN DP8/TP1/EP8 on the last eight. This is a standalone
-Ascend 910C case, outside the four-device PR gate. Use DSV4 Flash W8A8
+Ascend 910C case, outside the four-device PR gate. Use DSV4 Flash W4A8
 weights and a DSV4-capable vLLM/vLLM-Ascend runtime with CAM operators.
 
 The fixed deployment uses eager execution, MBT=8192, max-model-len=1048576,
 max-num-seqs=16, block-size=128, memory utilization=0.7, and seed=1024.
-Both roles explicitly disable `enable_dsv4_shared_compressor_workspace`.
 CAM uses `dynamicQuant=1`, Attention-side gating, and two token-split async
 MoE ubatches. FlashComm1 is enabled only on Attention. CPU binding and
 128-thread weight loading follow the reference prefill scripts. Prefix

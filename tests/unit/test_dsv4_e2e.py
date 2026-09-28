@@ -53,7 +53,7 @@ def test_dsv4_fixed_deployment_and_cleanup(monkeypatch, tmp_path):
         assert "--enable-dbo" not in command
         assert "--kv-transfer-config" not in command
         config = json.loads(command[command.index("--additional-config") + 1])
-        assert config["enable_dsv4_shared_compressor_workspace"] is False
+        assert "enable_dsv4_shared_compressor_workspace" not in config
         assert config["enable_cpu_binding"] is True
         assert config["enable_flashcomm1"] is (role == "attention")
         assert config["afd"] == {

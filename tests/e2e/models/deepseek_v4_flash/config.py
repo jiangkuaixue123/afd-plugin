@@ -91,5 +91,4 @@ def additional_config(role: str) -> dict[str, bool]:
         "enable_force_load_balance": False,
         "enable_dsa_cp": False,
         "multistream_dsv4_dsa_overlap": False,
-        "enable_dsv4_shared_compressor_workspace": False,
     }
