@@ -60,6 +60,7 @@ from vllm_ascend.utils import (
     oproj_tp_enable,
     should_skip_allreduce_across_dp_group,
 )
+from vllm_ascend.worker.dcp_utils import DCPDummyRunMetadata
 from vllm_ascend.worker.model_runner_v1 import (
     SEQ_LEN_WITH_MAX_PA_WORKSPACE,
     NPUModelRunner,
@@ -270,7 +271,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         for_cudagraph_capture: bool = False,
         num_scheduled_tokens: dict[str, int] | None = None,
         num_scheduled_tokens_np: np.ndarray | None = None,
+        dcp_dummy_metadata: DCPDummyRunMetadata | None = None,
         cascade_attn_prefix_lens: list[list[int]] | None = None,
+        skip_gdn_state_update: bool = False,
+        cudagraph_runtime_mode: CUDAGraphMode | None = None,
+        batch_descriptor: BatchDescriptor | None = None,
+        offload_dummy: bool = False,
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         # ### PATCH START: AFD NPU ubatch metadata routing
         ubatch_slices = _normalize_metadata_ubatch_slices(
@@ -278,6 +284,34 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             num_tokens_padded,
             num_reqs_padded,
         )
+        # Target dummy metadata may carry DCP/GDN/offload state that must be
+        # built by Ascend's pinned builder rather than the AFD stage builder.
+        if dcp_dummy_metadata is not None or skip_gdn_state_update or offload_dummy:
+            self.ubatch_slices = ubatch_slices
+            self._afd_async_moe_ubatch_metadata = None
+            self._afd_pending_metadata = self._build_afd_metadata(
+                ubatch_slices,
+                num_tokens,
+            )
+            return super()._build_attention_metadata(
+                num_tokens=num_tokens,
+                num_reqs=num_reqs,
+                max_query_len=max_query_len,
+                num_tokens_padded=num_tokens_padded,
+                num_reqs_padded=num_reqs_padded,
+                ubatch_slices=ubatch_slices,
+                logits_indices=logits_indices,
+                use_spec_decode=use_spec_decode,
+                for_cudagraph_capture=for_cudagraph_capture,
+                num_scheduled_tokens=num_scheduled_tokens,
+                num_scheduled_tokens_np=num_scheduled_tokens_np,
+                dcp_dummy_metadata=dcp_dummy_metadata,
+                cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+                skip_gdn_state_update=skip_gdn_state_update,
+                cudagraph_runtime_mode=cudagraph_runtime_mode,
+                batch_descriptor=batch_descriptor,
+                offload_dummy=offload_dummy,
+            )
         if self.afd_async_extra_info.async_moe_ubatching:
             self.ubatch_slices = None
             return self._build_attention_metadata_with_async_moe_ubatches(
@@ -326,7 +360,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             for_cudagraph_capture=for_cudagraph_capture,
             num_scheduled_tokens=num_scheduled_tokens,
             num_scheduled_tokens_np=num_scheduled_tokens_np,
+            dcp_dummy_metadata=dcp_dummy_metadata,
             cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+            skip_gdn_state_update=skip_gdn_state_update,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
+            batch_descriptor=batch_descriptor,
+            offload_dummy=offload_dummy,
         )
         # ### PATCH END: AFD NPU ubatch metadata routing
         return result
@@ -833,6 +872,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             )
         return attn_metadata, spec_decode_common_attn_metadata
 
+    # Upstream source: vllm-ascend commit 8d4409d, NPUModelRunner._dummy_run.
+    # Patch reason: AFD captures a separate two-stage dummy graph for ubatches.
+    # Patch functionality: use the AFD path for ubatches and preserve the
+    # upstream GDN state-skip path in the native runner.
+    # Signature: matches upstream; no added parameters.
     def _dummy_run(
         self,
         num_tokens: int,
@@ -849,6 +893,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
         profile_cpp: bool = False,
+        skip_gdn_state_update: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         with torch.inference_mode():
             return self._dummy_run_inference_mode(
@@ -866,6 +911,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 num_active_loras=num_active_loras,
                 profile_seq_lens=profile_seq_lens,
                 profile_cpp=profile_cpp,
+                skip_gdn_state_update=skip_gdn_state_update,
             )
 
     def _dummy_run_inference_mode(
@@ -884,6 +930,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
         profile_cpp: bool = False,
+        skip_gdn_state_update: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         previous = self._afd_is_graph_capturing
         self._afd_is_graph_capturing = bool(is_graph_capturing)
@@ -891,6 +938,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             bool(self.vllm_config.parallel_config.use_ubatching)
             and allow_microbatching
             and not is_profile
+            and not skip_gdn_state_update
         ):
             try:
                 return super()._dummy_run(
@@ -908,6 +956,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     num_active_loras=num_active_loras,
                     profile_seq_lens=profile_seq_lens,
                     profile_cpp=profile_cpp,
+                    skip_gdn_state_update=skip_gdn_state_update,
                 )
             finally:
                 self._afd_is_graph_capturing = previous

@@ -325,6 +325,50 @@ def test_npu_v1_runner_signatures_match_pinned_ascend():
         )
 
 
+def test_npu_dummy_gdn_skip_uses_native_runner(monkeypatch):
+    _require_npu_runtime()
+    from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
+
+    runner = _new_attention_runner()
+    runner.vllm_config = _vllm_config(use_ubatching=True)
+    runner._afd_is_graph_capturing = False
+    native_calls = []
+
+    def native_dummy_run(self, num_tokens, **kwargs):
+        native_calls.append((num_tokens, kwargs))
+        return "native", "dummy"
+
+    monkeypatch.setattr(NPUModelRunner, "_dummy_run", native_dummy_run)
+    assert runner._dummy_run(4, skip_gdn_state_update=True) == ("native", "dummy")
+    assert native_calls[0][0] == 4
+    assert native_calls[0][1]["skip_gdn_state_update"] is True
+    assert runner._afd_is_graph_capturing is False
+
+
+def test_npu_target_dummy_metadata_is_forwarded_to_native_builder(monkeypatch):
+    _require_npu_runtime()
+    from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
+
+    runner = _new_attention_runner()
+    runner._build_afd_metadata = lambda *_args: "afd"
+    native_calls = []
+
+    def native_builder(self, **kwargs):
+        native_calls.append(kwargs)
+        return {"layer": "native"}, None
+
+    monkeypatch.setattr(NPUModelRunner, "_build_attention_metadata", native_builder)
+    result = runner._build_attention_metadata(
+        num_tokens=4,
+        num_reqs=1,
+        max_query_len=4,
+        offload_dummy=True,
+    )
+    assert result == ({"layer": "native"}, None)
+    assert native_calls[0]["offload_dummy"] is True
+    assert runner._afd_pending_metadata == "afd"
+
+
 def _new_attention_runner():
     _require_npu_runtime()
     from afd_plugin.v1.worker.npu.attention_model_runner import (
