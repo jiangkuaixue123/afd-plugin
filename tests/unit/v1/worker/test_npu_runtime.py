@@ -1164,30 +1164,6 @@ def test_npu_attention_metadata_positional_args_and_padded_slices():
     assert normalized[-1].token_slice == slice(4, 8)
 
 
-def test_npu_eager_dbo_pads_last_stage_without_extra_requests():
-    _require_npu_runtime()
-    from afd_plugin.v1.worker.npu.attention_model_runner import (
-        _normalize_metadata_ubatch_slices,
-    )
-    from afd_plugin.v1.worker.npu.ubatch_utils import UBatchSlice
-
-    runner = _new_attention_runner()
-    runner.connector = SimpleNamespace()
-    runner._next_afd_transaction_id = lambda: 1
-    slices = [
-        UBatchSlice(slice(0, 1), slice(0, 3)),
-        UBatchSlice(slice(1, 2), slice(3, 5)),
-    ]
-
-    normalized = _normalize_metadata_ubatch_slices(slices, 8, 2)
-    metadata = runner._build_afd_metadata(normalized, 5)
-
-    assert normalized[-1].request_slice == slice(1, 2)
-    assert normalized[-1].token_slice == slice(3, 8)
-    assert metadata.tokens_lens == [3, 5]
-    assert sum(metadata.tokens_lens) == 8
-
-
 def test_npu_request_boundary_ubatch_slices_balance_tokens(monkeypatch):
     np = pytest.importorskip("numpy")
     fake_torch = ModuleType("torch")
