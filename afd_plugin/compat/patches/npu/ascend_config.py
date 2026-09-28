@@ -207,3 +207,29 @@ def apply_afd_ascend_config_patch() -> None:
         module = sys.modules.get(module_name)
         if module is not None:
             module.init_ascend_config = init_ascend_config
+
+
+# Upstream: vllm_ascend/patch/platform/patch_engine_core.py at
+# 8d4409d6256d8a6729140ddcc0d1889e3f96cdd6.
+# Patch reason: DP EngineCore initializes AscendConfig before vLLM loads
+# general plugins in the spawned process, so AFD's config namespace fails
+# strict validation before register_afd can install the namespace factory.
+# Patch functionality: install the AFD namespace factory in the child, then
+# run Ascend's complete EngineCore entry point unchanged.
+# Signature: matches the upstream process target; no added parameters.
+# Removal plan: remove once Ascend initializes plugin config after general
+# plugins have loaded in every DP child.
+def run_afd_ascend_engine_core(
+    *args,
+    dp_rank: int = 0,
+    local_dp_rank: int = 0,
+    **kwargs,
+):
+    from vllm_ascend.patch.platform import patch_engine_core
+
+    # ### PATCH START: AFD namespace before Ascend child config validation
+    apply_afd_ascend_config_patch()
+    # ### PATCH END: AFD namespace before Ascend child config validation
+    return patch_engine_core._run_engine_core_patch_func(
+        *args, dp_rank=dp_rank, local_dp_rank=local_dp_rank, **kwargs
+    )

@@ -108,9 +108,11 @@ def create_engine_config(
     if current_platform.device_type == "npu":
         from afd_plugin.compat.npu import (
             apply_afd_async_dp_engine_patch_if_needed,
+            apply_afd_ffn_engine_core_patch_if_needed,
         )
 
         apply_afd_async_dp_engine_patch_if_needed(config)
+        apply_afd_ffn_engine_core_patch_if_needed(config)
     # ### PATCH END: AFD Ascend async-DP patch ordering
     return config
 

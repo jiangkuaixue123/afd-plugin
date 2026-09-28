@@ -80,6 +80,11 @@ def _install_fake_vllm_config(monkeypatch):
     monkeypatch.setitem(sys.modules, "vllm.engine.arg_utils", arg_utils_module)
     monkeypatch.setitem(sys.modules, "vllm.platforms", platforms_module)
     monkeypatch.setattr(npu_compat, "fix_all2all_backend_for_afd", lambda config: None)
+    monkeypatch.setattr(
+        npu_compat,
+        "apply_afd_ffn_engine_core_patch_if_needed",
+        lambda config: False,
+    )
     return arg_utils_module, config_module
 
 
