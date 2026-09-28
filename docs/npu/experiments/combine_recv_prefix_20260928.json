@@ -1,0 +1,533 @@
+{
+  "environment": {
+    "itask": "jcz_afd2",
+    "device": "Ascend910_9382",
+    "cann": "9.0.1",
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post2",
+    "repository_head": "205bd770113aee7c9c098c55068ca2ce7c766d9c"
+  },
+  "measurement": "Last five tasks after one precision preflight and five warmups; maximum across Attention ranks per iteration, then arithmetic mean. Units: microseconds.",
+  "profile_task_us": {
+    "msprof_baseline_large1024": {
+      "attention_rank_samples_us": {
+        "1": [
+          138.68,
+          138.46,
+          138.36,
+          138.58,
+          138.58
+        ],
+        "0": [
+          140.04,
+          140.24,
+          140.58,
+          140.38,
+          138.94
+        ]
+      },
+      "slowest_rank_samples_us": [
+        140.04,
+        140.24,
+        140.58,
+        140.38,
+        138.94
+      ],
+      "slowest_mean_us": 140.036,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_candidate4_large1024": {
+      "attention_rank_samples_us": {
+        "0": [
+          36.94,
+          36.86,
+          37.12,
+          36.92,
+          37.42
+        ],
+        "1": [
+          39.6,
+          39.66,
+          39.8,
+          39.54,
+          39.2
+        ]
+      },
+      "slowest_rank_samples_us": [
+        39.6,
+        39.66,
+        39.8,
+        39.54,
+        39.2
+      ],
+      "slowest_mean_us": 39.56,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_baseline_e256": {
+      "attention_rank_samples_us": {
+        "1": [
+          105.54,
+          106.22,
+          105.52,
+          105.54,
+          105.52
+        ],
+        "0": [
+          103.776,
+          103.776,
+          103.72,
+          103.776,
+          103.8
+        ]
+      },
+      "slowest_rank_samples_us": [
+        105.54,
+        106.22,
+        105.52,
+        105.54,
+        105.52
+      ],
+      "slowest_mean_us": 105.668,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_baseline_e256_2": {
+      "attention_rank_samples_us": {
+        "0": [
+          104.34,
+          104.34,
+          104.42,
+          104.36,
+          104.34
+        ],
+        "1": [
+          104.26,
+          104.2,
+          104.26,
+          104.3,
+          104.2
+        ]
+      },
+      "slowest_rank_samples_us": [
+        104.34,
+        104.34,
+        104.42,
+        104.36,
+        104.34
+      ],
+      "slowest_mean_us": 104.36,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_candidate4_e256": {
+      "attention_rank_samples_us": {
+        "0": [
+          41.86,
+          41.86,
+          41.92,
+          42.54,
+          42.14
+        ],
+        "1": [
+          39.02,
+          39.86,
+          39.24,
+          39.58,
+          39.3
+        ]
+      },
+      "slowest_rank_samples_us": [
+        41.86,
+        41.86,
+        41.92,
+        42.54,
+        42.14
+      ],
+      "slowest_mean_us": 42.064,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_baseline_boundary49_48_perf": {
+      "attention_rank_samples_us": {
+        "1": [
+          17.74,
+          17.66,
+          17.48,
+          17.66,
+          17.42
+        ],
+        "0": [
+          16.86,
+          16.96,
+          16.94,
+          17.02,
+          17.0
+        ]
+      },
+      "slowest_rank_samples_us": [
+        17.74,
+        17.66,
+        17.48,
+        17.66,
+        17.42
+      ],
+      "slowest_mean_us": 17.592,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_candidate4_boundary49_48_perf": {
+      "attention_rank_samples_us": {
+        "0": [
+          16.6,
+          16.24,
+          16.34,
+          16.22,
+          16.26
+        ],
+        "1": [
+          16.66,
+          15.46,
+          16.82,
+          16.9,
+          16.76
+        ]
+      },
+      "slowest_rank_samples_us": [
+        16.66,
+        16.24,
+        16.82,
+        16.9,
+        16.76
+      ],
+      "slowest_mean_us": 16.676,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_baseline_hidden7168_3": {
+      "attention_rank_samples_us": {
+        "1": [
+          14.16,
+          13.88,
+          13.84,
+          14.36,
+          14.08
+        ],
+        "0": [
+          14.34,
+          14.4,
+          14.22,
+          14.6,
+          14.28
+        ]
+      },
+      "slowest_rank_samples_us": [
+        14.34,
+        14.4,
+        14.22,
+        14.6,
+        14.28
+      ],
+      "slowest_mean_us": 14.368,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_candidate4_hidden7168": {
+      "attention_rank_samples_us": {
+        "0": [
+          14.78,
+          14.66,
+          14.88,
+          14.72,
+          14.8
+        ],
+        "1": [
+          13.34,
+          13.18,
+          13.42,
+          13.54,
+          13.2
+        ]
+      },
+      "slowest_rank_samples_us": [
+        14.78,
+        14.66,
+        14.88,
+        14.72,
+        14.8
+      ],
+      "slowest_mean_us": 14.768,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_baseline_hidden7168_4": {
+      "attention_rank_samples_us": {
+        "1": [
+          14.48,
+          14.52,
+          14.38,
+          14.18,
+          14.4
+        ],
+        "0": [
+          13.28,
+          13.06,
+          13.02,
+          12.76,
+          12.82
+        ]
+      },
+      "slowest_rank_samples_us": [
+        14.48,
+        14.52,
+        14.38,
+        14.18,
+        14.4
+      ],
+      "slowest_mean_us": 14.392,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    },
+    "msprof_candidate4_hidden7168_2": {
+      "attention_rank_samples_us": {
+        "0": [
+          13.8,
+          13.66,
+          13.7,
+          14.04,
+          13.74
+        ],
+        "1": [
+          12.84,
+          13.4,
+          13.0,
+          12.76,
+          13.04
+        ]
+      },
+      "slowest_rank_samples_us": [
+        13.8,
+        13.66,
+        13.7,
+        14.04,
+        13.74
+      ],
+      "slowest_mean_us": 13.788,
+      "selection": "last 5 of 11 tasks per Attention rank; 1 preflight + 5 warmup + 5 measured"
+    }
+  },
+  "precision": {
+    "candidate4-precision-bf16-q0-sparse-large": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 3,
+        "hidden_size": 256,
+        "lengths": [
+          97,
+          65
+        ],
+        "dtype": "bf16",
+        "dynamic_quant": 0,
+        "routing": "sparse",
+        "capacity": 256,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 194
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-bf16-q1-97x65": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 3,
+        "hidden_size": 256,
+        "lengths": [
+          97,
+          65
+        ],
+        "dtype": "bf16",
+        "dynamic_quant": 1,
+        "routing": "balanced",
+        "capacity": 128,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 194
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-boundary49-48": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 3,
+        "hidden_size": 256,
+        "lengths": [
+          49,
+          48
+        ],
+        "dtype": "bf16",
+        "dynamic_quant": 1,
+        "routing": "balanced",
+        "capacity": 64,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 98
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-e256-large": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 128,
+        "top_k": 2,
+        "hidden_size": 256,
+        "lengths": [
+          1025,
+          1024
+        ],
+        "dtype": "bf16",
+        "dynamic_quant": 0,
+        "routing": "balanced",
+        "capacity": 2048,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 2050
+      },
+      "rounds": 1,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-fp16-q0-small": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 2,
+        "hidden_size": 256,
+        "lengths": [
+          7,
+          5
+        ],
+        "dtype": "fp16",
+        "dynamic_quant": 0,
+        "routing": "balanced",
+        "capacity": 8,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 14
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-fp16-q1-97x65": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 3,
+        "hidden_size": 256,
+        "lengths": [
+          97,
+          65
+        ],
+        "dtype": "fp16",
+        "dynamic_quant": 1,
+        "routing": "balanced",
+        "capacity": 128,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 194
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    },
+    "candidate4-precision-fp16-q1-sparse": {
+      "status": "passed",
+      "config": {
+        "attn_ranks": 2,
+        "moe_ranks": 2,
+        "tp_size": 2,
+        "experts_per_rank": 4,
+        "top_k": 2,
+        "hidden_size": 256,
+        "lengths": [
+          7,
+          5
+        ],
+        "dtype": "fp16",
+        "dynamic_quant": 1,
+        "routing": "sparse",
+        "capacity": 16,
+        "window_mb": 64,
+        "timeout_seconds": 120.0,
+        "max_seq_len": 14
+      },
+      "rounds": 2,
+      "mismatches": 0,
+      "cleanup_complete": true
+    }
+  },
+  "small_key_machine_code": {
+    "AfdAsyncCombineRecv_7e9d721ed44072c2032e1723d637c78a_100": {
+      "baseline": {
+        "size": 5352,
+        "sha256": "65eab2cb1777e9a54c9d06ca9f99bf8b402bcde8da8e94e8263e960e7f28fd16"
+      },
+      "candidate4": {
+        "size": 5352,
+        "sha256": "65eab2cb1777e9a54c9d06ca9f99bf8b402bcde8da8e94e8263e960e7f28fd16"
+      },
+      "identical": true
+    },
+    "AfdAsyncCombineRecv_7e9d721ed44072c2032e1723d637c78a_101": {
+      "baseline": {
+        "size": 5352,
+        "sha256": "6c85ce609f14575d21293dd96c3ad468f97ee2b2bbfdfc8769134a3e6fae5c0f"
+      },
+      "candidate4": {
+        "size": 5352,
+        "sha256": "6c85ce609f14575d21293dd96c3ad468f97ee2b2bbfdfc8769134a3e6fae5c0f"
+      },
+      "identical": true
+    },
+    "AfdAsyncCombineRecv_d2a9f391bf9a17f49b4399f97f3a3794_100": {
+      "baseline": {
+        "size": 5352,
+        "sha256": "65eab2cb1777e9a54c9d06ca9f99bf8b402bcde8da8e94e8263e960e7f28fd16"
+      },
+      "candidate4": {
+        "size": 5352,
+        "sha256": "65eab2cb1777e9a54c9d06ca9f99bf8b402bcde8da8e94e8263e960e7f28fd16"
+      },
+      "identical": true
+    },
+    "AfdAsyncCombineRecv_d2a9f391bf9a17f49b4399f97f3a3794_101": {
+      "baseline": {
+        "size": 5352,
+        "sha256": "6c85ce609f14575d21293dd96c3ad468f97ee2b2bbfdfc8769134a3e6fae5c0f"
+      },
+      "candidate4": {
+        "size": 5352,
+        "sha256": "6c85ce609f14575d21293dd96c3ad468f97ee2b2bbfdfc8769134a3e6fae5c0f"
+      },
+      "identical": true
+    }
+  }
+}
