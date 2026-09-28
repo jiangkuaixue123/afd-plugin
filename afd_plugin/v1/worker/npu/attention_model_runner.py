@@ -292,7 +292,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
 
         return hidden_states
 
-    # Upstream source: vllm-ascend commit 80d8c194f,
+    # Upstream source: vllm-ascend commit 8d4409d6256d,
     # NPUModelRunner._build_attention_metadata.
     # Patch reason: upstream accepts ubatch slices but does not construct separate
     # Ascend attention metadata for each NPU ubatch.
@@ -368,6 +368,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 num_scheduled_tokens=num_scheduled_tokens,
                 num_scheduled_tokens_np=num_scheduled_tokens_np,
                 cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+                cudagraph_runtime_mode=cudagraph_runtime_mode,
             )
         self._afd_pending_metadata = self._build_afd_metadata(
             ubatch_slices,
@@ -388,6 +389,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 num_scheduled_tokens=num_scheduled_tokens,
                 num_scheduled_tokens_np=num_scheduled_tokens_np,
                 cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+                cudagraph_runtime_mode=cudagraph_runtime_mode,
             )
         result = super()._build_attention_metadata(
             num_tokens=num_tokens,
@@ -425,6 +427,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         num_scheduled_tokens: dict[str, int] | None,
         num_scheduled_tokens_np: np.ndarray | None,
         cascade_attn_prefix_lens: list[list[int]] | None,
+        cudagraph_runtime_mode: CUDAGraphMode | None = None,
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         full_metadata = super()._build_attention_metadata(
             num_tokens=num_tokens,
@@ -439,6 +442,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             num_scheduled_tokens=num_scheduled_tokens,
             num_scheduled_tokens_np=num_scheduled_tokens_np,
             cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
         )
         self._afd_async_moe_ubatch_metadata = None
         self._afd_pending_metadata = self._build_afd_metadata(
@@ -505,6 +509,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             num_scheduled_tokens_np=num_scheduled_tokens_np,
             cascade_attn_prefix_lens=cascade_attn_prefix_lens,
             is_async_moe_stage_build=True,
+            cudagraph_runtime_mode=cudagraph_runtime_mode,
         )
         self._afd_async_moe_ubatch_metadata = AsyncMoeUbatchMetadata(
             attn_metadata=stage_attn_metadata,
@@ -526,9 +531,9 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
     # DeepSeek builder inputs and outputs, pass each stage's actual request
     # count. Native DBO keeps the original builder indices, shared caches, and
     # request count.
-    # Signature: adds plugin-owned ``is_async_moe_stage_build`` to the copied
-    # upstream signature. Native DBO keeps the default and therefore retains
-    # the original builder range and cache behavior.
+    # Signature: adds plugin-owned ``is_async_moe_stage_build`` and
+    # ``cudagraph_runtime_mode`` parameters. Native DBO keeps the default
+    # builder range and cache behavior.
     def _build_attention_metadata_with_ubatches(
         self,
         num_tokens: int,
@@ -545,6 +550,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         cascade_attn_prefix_lens: list[list[int]] | None = None,
         # ### PATCH START: Async CAM stage metadata ownership
         is_async_moe_stage_build: bool = False,
+        cudagraph_runtime_mode: CUDAGraphMode | None = None,
         # ### PATCH END: Async CAM stage metadata ownership
     ) -> tuple[PerLayerAttnMetadata, CommonAttentionMetadata | None]:
         """Build isolated per-stage Ascend attention metadata.
@@ -686,10 +692,8 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
             attn_gid: int,
             common_attn_metadata: CommonAttentionMetadata,
             # ### PATCH START: AFD stage-local actual request count
-            num_reqs_actual: int,
+            num_actual_reqs: int,
             # ### PATCH END: AFD stage-local actual request count
-            prefill_ratio_to_sas_metadata: dict[object, object],
-            decode_ratio_to_sas_metadata: dict[object, object],
             common_ratio_to_sas_metadata: dict[object, object],
             ubid: int | None = None,
         ) -> None:
@@ -720,17 +724,13 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 AscendDSAMetadataBuilder | AscendDSACPMetadataBuilder,
             ):
                 if for_cudagraph_capture:
-                    prefill_ratio_to_sas_metadata = {}
-                    decode_ratio_to_sas_metadata = {}
                     common_ratio_to_sas_metadata = {}
                 extra_attn_metadata_args = dict(
                     # ### PATCH START: AFD stage-local actual request count
-                    num_reqs_actual=num_reqs_actual,
+                    num_actual_reqs=num_actual_reqs,
                     # ### PATCH END: AFD stage-local actual request count
-                    prefill_ratio_to_sas_metadata=prefill_ratio_to_sas_metadata,
-                    decode_ratio_to_sas_metadata=decode_ratio_to_sas_metadata,
                     common_ratio_to_sas_metadata=common_ratio_to_sas_metadata,
-                    block_size=attn_group.kv_cache_spec.block_size,
+                    full_graph_mode=cudagraph_runtime_mode == CUDAGraphMode.FULL,
                 )
 
             if for_cudagraph_capture and not isinstance(
@@ -774,11 +774,6 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     common_attn_metadata.num_input_tokens,
                 )
             # ### PATCH END: Materialize Async CAM backend metadata
-            if isinstance(builder, AscendDSAMetadataBuilder):
-                prefill_ratio_to_sas_metadata = builder.prefill_ratio_to_sas_metadata
-                decode_ratio_to_sas_metadata = builder.decode_ratio_to_sas_metadata
-                common_ratio_to_sas_metadata = builder.common_ratio_to_sas_metadata
-
             # ### PATCH START: AFD per-ubatch metadata assignment
             assert ubid is not None
             attn_metadata_dict = attn_metadata[ubid]
@@ -793,15 +788,11 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         # makes later stages reuse the first stage's metadata. Preserve the
         # pinned upstream cache and request-count behavior for native DBO.
         if not is_async_moe_stage_build:
-            shared_dsa_metadata_caches: tuple[
-                dict[object, object],
-                dict[object, object],
-                dict[object, object],
-            ] = ({}, {}, {})
+            shared_dsa_metadata_caches: dict[object, object] = {}
             dsa_metadata_caches = [shared_dsa_metadata_caches for _ in ubatch_slices]
             num_actual_reqs_per_ubatch = [num_reqs for _ in ubatch_slices]
         else:
-            dsa_metadata_caches = [({}, {}, {}) for _ in ubatch_slices]
+            dsa_metadata_caches = [{} for _ in ubatch_slices]
             num_actual_reqs_per_ubatch = [
                 max(
                     0,
@@ -870,19 +861,12 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                     num_tokens_padded,
                 )
                 for ubid, ubatch_cm in enumerate(ubatch_common_metadata):
-                    (
-                        prefill_ratio_to_sas_metadata,
-                        decode_ratio_to_sas_metadata,
-                        common_ratio_to_sas_metadata,
-                    ) = dsa_metadata_caches[ubid]
                     _build_attn_group_metadata(
                         kv_cache_gid,
                         attn_gid,
                         ubatch_cm,
                         num_actual_reqs_per_ubatch[ubid],
-                        prefill_ratio_to_sas_metadata,
-                        decode_ratio_to_sas_metadata,
-                        common_ratio_to_sas_metadata,
+                        dsa_metadata_caches[ubid],
                         ubid,
                     )
                 # ### PATCH END: AFD stage metadata split

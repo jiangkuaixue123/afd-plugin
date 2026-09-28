@@ -1190,9 +1190,10 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
             self.stage_id = stage_id
 
         def build(self, *, common_attn_metadata, **kwargs):
-            prefill_cache = kwargs["prefill_ratio_to_sas_metadata"]
-            decode_cache = kwargs["decode_ratio_to_sas_metadata"]
             common_cache = kwargs["common_ratio_to_sas_metadata"]
+            assert kwargs["full_graph_mode"] is False
+            assert "prefill_ratio_to_sas_metadata" not in kwargs
+            assert "decode_ratio_to_sas_metadata" not in kwargs
             token_layout = (
                 tuple(common_attn_metadata.positions),
                 tuple(common_attn_metadata.query_start_loc_cpu),
@@ -1200,19 +1201,14 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
             )
             cached_layout = common_cache.setdefault("token_layout", token_layout)
             assert cached_layout == token_layout
-            prefill_cache.setdefault("token_layout", token_layout)
             cache_observations.append(
                 (
                     self.group_id,
                     self.stage_id,
-                    id(prefill_cache),
-                    id(decode_cache),
                     id(common_cache),
-                    kwargs["num_reqs_actual"],
+                    kwargs["num_actual_reqs"],
                 ),
             )
-            self.prefill_ratio_to_sas_metadata = prefill_cache
-            self.decode_ratio_to_sas_metadata = decode_cache
             self.common_ratio_to_sas_metadata = common_cache
             return SimpleNamespace(token_layout=cached_layout)
 
@@ -1342,12 +1338,12 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
         (tuple(range(0, 53)), (0, 53), (53,)),
         (tuple(range(53, 105)), (0, 52), (105,)),
     ]
-    assert [observation[5] for observation in cache_observations] == [1, 1, 1, 1]
+    assert [observation[3] for observation in cache_observations] == [1, 1, 1, 1]
     stage_0_cache_ids = {
-        observation[2:5] for observation in cache_observations if observation[1] == 0
+        observation[2] for observation in cache_observations if observation[1] == 0
     }
     stage_1_cache_ids = {
-        observation[2:5] for observation in cache_observations if observation[1] == 1
+        observation[2] for observation in cache_observations if observation[1] == 1
     }
     assert len(stage_0_cache_ids) == 1
     assert len(stage_1_cache_ids) == 1
