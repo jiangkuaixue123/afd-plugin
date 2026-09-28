@@ -200,8 +200,8 @@ class AFDDeepseekV4AttentionGateRemoteMoE(RemoteFFNProxy):
         self.routed_scaling_factor = float(
             getattr(config, "routed_scaling_factor", 1.5),
         )
-        # Native SP MLP owns replicated shared weights and consumes local
-        # tokens, including model-owned SP shards, without a TP reduction.
+        # Match native DSV4's explicit shared-output reduction. Ascend keeps
+        # weights TP-sharded with SP unless shared-expert DP is enabled.
         self.shared_experts = (
             AFDDeepseekV4SharedExperts(
                 hidden_size=config.hidden_size,
@@ -210,7 +210,8 @@ class AFDDeepseekV4AttentionGateRemoteMoE(RemoteFFNProxy):
                 hidden_act=config.hidden_act,
                 swiglu_limit=getattr(config, "swiglu_limit", None),
                 quant_config=vllm_config.quant_config,
-                is_sequence_parallel=True,
+                reduce_results=False,
+                is_sequence_parallel=self.use_sequence_parallel_moe,
                 prefix=f"{prefix}.shared_experts",
             )
             if config.n_shared_experts
