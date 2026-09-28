@@ -314,6 +314,7 @@ def _parent_forward_context():
         prefetch_mlp_gate_up_proj=False,
         prefetch_mlp_down_proj=False,
         model_instance=None,
+        device_metadata_executor=None,
         is_draft_model=False,
         is_draft_model_prefill=False,
         draft_attn_metadatas=None,
