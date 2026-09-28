@@ -52,6 +52,7 @@ def isolate_deepseek_attention_builder_inputs(
 def materialize_deepseek_attention_metadata(
     metadata: AttentionMetadata,
     input_positions: torch.Tensor,
+    num_input_tokens: int,
 ) -> None:
     """Detach mutable backend workspaces from one metadata object.
 
@@ -86,28 +87,20 @@ def materialize_deepseek_attention_metadata(
         return
 
     if isinstance(metadata, AscendDSAMetadata):
-        # DSA exposes RoPE storage through RopeDataProxy rather than tensors.
-        # Rebuild from the immutable full table instead of depending on the
-        # proxy's private representation or its reusable runtime buffer.
-        metadata.cos, metadata.sin = get_cos_and_sin_dsa(
-            input_positions[: metadata.num_input_tokens].long(),
+        # Target Ascend stores RoPE proxies on request metadata. Rebuild the
+        # exact physical token span before another async stage reuses the
+        # process-wide runtime RoPE buffers.
+        assert metadata.req_metadata is not None
+        metadata.req_metadata.cos, metadata.req_metadata.sin = get_cos_and_sin_dsa(
+            input_positions[:num_input_tokens].long(),
             use_cache=False,
         )
-        if metadata.prefill is not None:
-            metadata.prefill.cos, metadata.prefill.sin = get_cos_and_sin_dsa(
-                metadata.prefill.input_positions,
-                use_cache=False,
-            )
-        if metadata.decode is not None:
-            metadata.decode.cos, metadata.decode.sin = get_cos_and_sin_dsa(
-                metadata.decode.input_positions,
-                use_cache=False,
-            )
 
 
 def materialize_deepseek_attention_metadata_by_layer(
     metadata_by_layer: Mapping[str, AttentionMetadata],
     input_positions: torch.Tensor,
+    num_input_tokens: int,
 ) -> None:
     """Materialize each shared attention-group metadata object exactly once."""
 
@@ -116,7 +109,9 @@ def materialize_deepseek_attention_metadata_by_layer(
         metadata_id = id(metadata)
         if metadata_id in materialized_ids:
             continue
-        materialize_deepseek_attention_metadata(metadata, input_positions)
+        materialize_deepseek_attention_metadata(
+            metadata, input_positions, num_input_tokens
+        )
         materialized_ids.add(metadata_id)
 
 

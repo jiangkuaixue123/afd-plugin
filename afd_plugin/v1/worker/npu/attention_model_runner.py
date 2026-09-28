@@ -469,6 +469,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
         materialize_deepseek_attention_metadata_by_layer(
             full_attn_metadata,
             self.positions,
+            num_tokens_padded,
         )
         stage_slices = [
             UBatchSlice(stage.request_slice, stage.token_slice) for stage in stages
@@ -770,6 +771,7 @@ class AFDNPUAttentionModelRunner(NPUModelRunner):
                 materialize_deepseek_attention_metadata(
                     attn_metadata_i,
                     common_attn_metadata.positions,
+                    common_attn_metadata.num_input_tokens,
                 )
             # ### PATCH END: Materialize Async CAM backend metadata
             if isinstance(builder, AscendDSAMetadataBuilder):

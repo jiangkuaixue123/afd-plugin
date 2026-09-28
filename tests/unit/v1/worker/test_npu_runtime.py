@@ -1110,8 +1110,8 @@ def test_npu_attention_runner_builds_stage_metadata(
     monkeypatch.setattr(
         attention_model_runner,
         "materialize_deepseek_attention_metadata_by_layer",
-        lambda metadata, positions: materialized_full_metadata.append(
-            (metadata, positions),
+        lambda metadata, positions, num_tokens: materialized_full_metadata.append(
+            (metadata, positions, num_tokens),
         ),
     )
     monkeypatch.setattr(
@@ -1165,7 +1165,7 @@ def test_npu_attention_runner_builds_stage_metadata(
         slice(0, 550),
         slice(550, 1099),
     ]
-    assert materialized_full_metadata == [(full_attn_metadata, runner.positions)]
+    assert materialized_full_metadata == [(full_attn_metadata, runner.positions, 1100)]
     assert runner.ubatch_slices is None
     assert runner._afd_pending_metadata is not None
     assert runner._afd_pending_metadata.num_stages == 1
@@ -1235,11 +1235,13 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
         lambda *_args, **_kwargs: [
             SimpleNamespace(
                 positions=range(0, 53),
+                num_input_tokens=53,
                 query_start_loc_cpu=(0, 53),
                 seq_lens=(53,),
             ),
             SimpleNamespace(
                 positions=range(53, 105),
+                num_input_tokens=52,
                 query_start_loc_cpu=(0, 52),
                 seq_lens=(105,),
             ),
@@ -1255,8 +1257,8 @@ def test_npu_attention_runner_isolates_dsa_caches_per_stage(monkeypatch):
     monkeypatch.setattr(
         attention_model_runner,
         "materialize_deepseek_attention_metadata",
-        lambda metadata, positions: materialized_stage_metadata.append(
-            (metadata, positions),
+        lambda metadata, positions, num_tokens: materialized_stage_metadata.append(
+            (metadata, positions, num_tokens),
         ),
     )
 
