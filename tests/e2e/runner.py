@@ -331,7 +331,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--api-host", default="127.0.0.1")
-    parser.add_argument("--api-port-base", type=int, default=8000)
+    parser.add_argument(
+        "--api-port-base",
+        type=int,
+        # Shared hosts often run unrelated services on the default vLLM
+        # port; E2E drivers can shift the whole port range via env.
+        default=int(os.environ.get("AFD_E2E_API_PORT_BASE", "8000")),
+    )
     parser.add_argument("--afd-host", default="127.0.0.1")
     parser.add_argument("--afd-port", type=int, default=1239)
     parser.add_argument("--startup-timeout", type=float, default=900)
@@ -523,14 +529,18 @@ def configure_scenario(args: argparse.Namespace) -> None:
     if use_graph:
         args.cudagraph_capture_size = 8
     if enable_dbo:
-        args.dbo_decode_token_threshold = 1
+        # vLLM 0.30 validates that both DBO thresholds are at least the
+        # microbatch count (2), so a decode threshold of 1 is rejected.
+        args.dbo_decode_token_threshold = 2
         args.dbo_prefill_token_threshold = 8
-        if not any(
-            arg == "--no-enable-chunked-prefill" for arg in args.common_vllm_arg
-        ):
-            args.common_vllm_arg.append("--no-enable-chunked-prefill")
-        if not any(
-            arg == "--no-enable-chunked-prefill" for arg in args.common_vllm_arg
+        # vLLM 0.30 requires chunked prefill when mamba cache mode 'align'
+        # is active (hybrid Qwen3.5/3.6 models), so callers can opt out of
+        # the legacy DBO chunked-prefill disable via env.
+        if (
+            not any(
+                arg == "--no-enable-chunked-prefill" for arg in args.common_vllm_arg
+            )
+            and os.environ.get("AFD_E2E_DBO_KEEP_CHUNKED_PREFILL") != "1"
         ):
             args.common_vllm_arg.append("--no-enable-chunked-prefill")
 
