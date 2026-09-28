@@ -99,21 +99,21 @@ def create_engine_config(
 
         fix_all2all_backend_for_afd(config)
     # ### PATCH END: finalize AFD NPU backend before serialization
-    # ### PATCH START: AFD Ascend async-DP patch ordering
+    # ### PATCH START: AFD Ascend EngineCore patch ordering
     # Ascend platform initialization wraps EngineCoreProc.run_engine_core after
-    # general plugins load. Finalize the AFD Attention binding only after the
-    # complete config exists and before vLLM captures the subprocess target.
+    # general plugins load. Finalize AFD Attention scheduling and the early
+    # child config binding before vLLM captures the subprocess target.
     from vllm.platforms import current_platform
 
     if current_platform.device_type == "npu":
         from afd_plugin.compat.npu import (
             apply_afd_async_dp_engine_patch_if_needed,
-            apply_afd_ffn_engine_core_patch_if_needed,
+            apply_afd_ascend_engine_core_config_patch_if_needed,
         )
 
         apply_afd_async_dp_engine_patch_if_needed(config)
-        apply_afd_ffn_engine_core_patch_if_needed(config)
-    # ### PATCH END: AFD Ascend async-DP patch ordering
+        apply_afd_ascend_engine_core_config_patch_if_needed(config)
+    # ### PATCH END: AFD Ascend EngineCore patch ordering
     return config
 
 

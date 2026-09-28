@@ -116,7 +116,9 @@ def lifecycle_probe(role, dbo, *, serialized=None, fail=False):
     # runtime_config root cause owns worker finalization and is tested separately.
     npu_module.fix_all2all_backend_for_afd = lambda config: None
     npu_module.apply_afd_async_dp_engine_patch_if_needed = lambda config: None
-    npu_module.apply_afd_ffn_engine_core_patch_if_needed = lambda config: None
+    npu_module.apply_afd_ascend_engine_core_config_patch_if_needed = (
+        lambda config: None
+    )
     modules[npu_module.__name__] = npu_module
 
     class NPUPlatform:
