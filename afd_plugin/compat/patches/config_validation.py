@@ -35,11 +35,11 @@ _original_create_engine_config: Callable[..., Any] | None = None
 _original_vllm_config_post_init: Callable[..., Any] | None = None
 
 
-# Patch reason: vLLM validates native ubatching by requiring a DeepEP all2all
-# backend, while AFD ubatching is implemented by plugin connectors.
-# Patch functionality: temporarily uses a supported backend only during
-# upstream EngineArgs-to-VllmConfig validation for AFD configs. NPU keeps the
-# real EngineArgs backend and scopes the bypass to VllmConfig validation.
+# Patch reason: vLLM validates native ubatching against DeepEP backends and
+# selects a generic worker before AFD can bind its role-specific NPU lifecycle.
+# Patch functionality: prepare Ascend config, bypass backend validation only
+# where needed, select the AFD worker, and finalize the NPU backend and child
+# EngineCore binding after the full config exists.
 # Removal plan: remove when vLLM accepts connector-owned ubatching.
 # Expansion exception: upstream create_engine_config is a large config builder;
 # keep a narrow original-function delegation so this patch only owns the AFD
@@ -53,17 +53,13 @@ def create_engine_config(
     """Create the VllmConfig."""
 
     assert _original_create_engine_config is not None
-    # ### PATCH START: AFD automatic worker selection
+    # ### PATCH START: AFD config preflight
     worker_cls_was_auto = _uses_auto_worker_value(self.worker_cls)
-    # ### PATCH END: AFD automatic worker selection
-    # ### PATCH START: AFD Ascend config patch ordering
     is_afd_npu = _apply_afd_npu_config_patches(self)
-    # ### PATCH END: AFD Ascend config patch ordering
-    # ### PATCH START: NPU validates with its actual platform backend
     needs_engine_args_bypass = not is_afd_npu and _should_relax_engine_args_backend(
         self
     )
-    # ### PATCH END: NPU validates with its actual platform backend
+    # ### PATCH END: AFD config preflight
     if not needs_engine_args_bypass:
         config = _original_create_engine_config(
             self,
@@ -93,13 +89,12 @@ def create_engine_config(
     if worker_cls_was_auto:
         _select_afd_worker_for_auto(config)
     # ### PATCH END: AFD automatic worker selection
-    # ### PATCH START: finalize AFD NPU backend before serialization
+    # ### PATCH START: AFD NPU post-config setup
+    # Preserve the actual backend before serializing the child config.
     if is_afd_npu:
         from afd_plugin.compat.npu import fix_all2all_backend_for_afd
 
         fix_all2all_backend_for_afd(config)
-    # ### PATCH END: finalize AFD NPU backend before serialization
-    # ### PATCH START: AFD Ascend EngineCore patch ordering
     # Ascend platform initialization wraps EngineCoreProc.run_engine_core after
     # general plugins load. Finalize AFD Attention scheduling and the early
     # child config binding before vLLM captures the subprocess target.
@@ -113,7 +108,7 @@ def create_engine_config(
 
         apply_afd_async_dp_engine_patch_if_needed(config)
         apply_afd_ascend_engine_core_config_patch_if_needed(config)
-    # ### PATCH END: AFD Ascend EngineCore patch ordering
+    # ### PATCH END: AFD NPU post-config setup
     return config
 
 
