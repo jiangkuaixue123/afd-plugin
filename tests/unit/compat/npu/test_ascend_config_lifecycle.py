@@ -54,6 +54,7 @@ def factory_namespace():
         def __init__(self, **kwargs):
             unknown = set(kwargs) - {
                 "native_option",
+                "enable_force_eplb",
                 "scheduler_config",
                 "sparse_kv_offload_config",
                 "kvpp_config",
@@ -358,8 +359,7 @@ class AscendConfigLifecycleTests(unittest.TestCase):
         utils.clear_enable_sp = lambda: clears.append(1)
         additional = {
             "afd": {"role": "attention"},
-            "enable_force_load_balance": True,
-            "force_load_balance_topn_per_rank": 2,
+            "enable_force_eplb": True,
             "gdn_prefill_backend": "flashinfer",
             "kda_prefill_backend": "triton",
             "native_option": 1,
@@ -371,8 +371,22 @@ class AscendConfigLifecycleTests(unittest.TestCase):
             self.assertIs(native._INIT_VLLM_CONFIG, config)
             self.assertIs(config.additional_config, additional)
             self.assertIs(events[2][1], config)
+            self.assertTrue(events[1][1]["enable_force_eplb"])
             self.assertEqual(len(clears), 1)
             self.assertTrue(any(event[0] == "warning" for event in events))
+            for legacy_key in (
+                "enable_force_load_balance",
+                "force_load_balance_topn_per_rank",
+            ):
+                config.additional_config = {
+                    "afd": {},
+                    legacy_key: True,
+                    "refresh": True,
+                }
+                with self.assertRaisesRegex(ValueError, legacy_key):
+                    ns["init_ascend_config"](config)
+                self.assertIs(native._ASCEND_CONFIG, result)
+                self.assertEqual(len(clears), 1)
             config.additional_config = {"afd": {}, "typo": 1, "refresh": True}
             with self.assertRaisesRegex(ValueError, "typo"):
                 ns["init_ascend_config"](config)
