@@ -90,6 +90,7 @@ def additional_config(role: str) -> dict[str, bool]:
     return {
         "enable_flashcomm1": role == "attention",
         "enable_cpu_binding": True,
+        "enable_force_load_balance": False,
         "enable_dsa_cp": False,
         "multistream_dsv4_dsa_overlap": False,
     }
