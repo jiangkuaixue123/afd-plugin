@@ -14,172 +14,57 @@ class _QuantType:
     W8A8 = 1
 
 
-def _install_fake_modules(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
-    def build_fused_experts_input(*args: object, **kwargs: object) -> torch.Tensor:
-        """Fake builder: returns the possibly swapped topk_ids."""
-
-        del args
-        return kwargs["topk_ids"]
-
+def _install_fake_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     class AscendW8A8DynamicFusedMoEMethod:
         quant_type = _QuantType.W8A8
 
-    vllm = types.ModuleType("vllm")
-    vllm_config = types.ModuleType("vllm.config")
-    vllm_config.CompilationMode = SimpleNamespace(VLLM_COMPILE="vllm_compile")
-    vllm_config.VllmConfig = object
-    current_vllm_config = SimpleNamespace(
+    config = SimpleNamespace(
         additional_config={},
-        compilation_config=SimpleNamespace(mode="none"),
-        model_config=SimpleNamespace(enforce_eager=True, dtype=torch.float32),
+        use_v2_model_runner=False,
+        parallel_config=SimpleNamespace(enable_eplb=False),
+        model_config=SimpleNamespace(dtype=torch.float32),
         scheduler_config=SimpleNamespace(max_num_batched_tokens=8),
     )
-    vllm_config.get_current_vllm_config = lambda: current_vllm_config
-    vllm_logger = types.ModuleType("vllm.logger")
-    vllm_logger.logger = SimpleNamespace(warning_once=lambda *args, **kwargs: None)
-
-    root = types.ModuleType("vllm_ascend")
-    ascend_config_mod = types.ModuleType("vllm_ascend.ascend_config")
-    ascend_config_mod.get_ascend_config = lambda: SimpleNamespace(
-        enable_fused_mc2=0,
-        eplb_config=SimpleNamespace(dynamic_eplb=False),
+    ascend_config = SimpleNamespace(
+        eplb_config=SimpleNamespace(dynamic_eplb=False), enable_force_eplb=False
     )
-    ascend_forward_context_mod = types.ModuleType("vllm_ascend.ascend_forward_context")
-    ascend_forward_context_mod.MoECommType = SimpleNamespace(FUSED_MC2="fused_mc2")
-    ascend_forward_context_mod._MEGA_MOE_SUPPORTED = False
-    ascend_forward_context_mod._EXTRA_CTX = SimpleNamespace(
+    context = SimpleNamespace(
+        in_profile_run=False,
         moe_comm_method=SimpleNamespace(
-            fused_experts=lambda fused_experts_input: fused_experts_input
+            fused_experts=lambda fused_experts_input, quant_method: fused_experts_input
         ),
-        moe_comm_type=None,
     )
-    distributed = types.ModuleType("vllm_ascend.distributed")
-    parallel_state_mod = types.ModuleType("vllm_ascend.distributed.parallel_state")
-    parallel_state_mod.get_mc2_group = lambda: SimpleNamespace()
-    ops = types.ModuleType("vllm_ascend.ops")
-    fused_moe_pkg = types.ModuleType("vllm_ascend.ops.fused_moe")
-    experts_selector_mod = types.ModuleType(
-        "vllm_ascend.ops.fused_moe.experts_selector"
-    )
-
-    def select_experts(
-        hidden_states,
-        router_logits,
-        top_k,
-        use_grouped_topk,
-        renormalize,
-        topk_group,
-        num_expert_group,
-        custom_routing_function,
-        scoring_func,
-        routed_scaling_factor,
-        e_score_correction_bias,
-        mix_placement,
-        num_logical_experts,
-        num_shared_experts,
-        num_experts,
-        tid2eid,
-    ):
-        del (
-            hidden_states,
-            use_grouped_topk,
-            renormalize,
-            topk_group,
-            num_expert_group,
-            custom_routing_function,
-            scoring_func,
-            routed_scaling_factor,
-            e_score_correction_bias,
-            mix_placement,
-            num_logical_experts,
-            num_shared_experts,
-            num_experts,
-            tid2eid,
-        )
-        topk_ids = router_logits[:, :top_k].to(torch.int64)
-        return (
-            torch.ones_like(topk_ids, dtype=torch.float32),
-            topk_ids,
-        )
-
-    experts_selector_mod.select_experts = select_experts
-    experts_selector_mod.zero_experts_compute = None
-    fused_moe_mod = types.ModuleType("vllm_ascend.ops.fused_moe.fused_moe")
-    fused_moe_mod.logger = SimpleNamespace(
-        info=lambda *args, **kwargs: None,
-        warning=lambda *args, **kwargs: None,
-        info_once=lambda *args, **kwargs: None,
-    )
-    moe_runtime_args_mod = types.ModuleType(
-        "vllm_ascend.ops.fused_moe.moe_runtime_args"
-    )
-    moe_runtime_args_mod.build_fused_experts_input = build_fused_experts_input
-
-    quant = types.ModuleType("vllm_ascend.quantization")
-    methods = types.ModuleType("vllm_ascend.quantization.methods")
-    methods_base_mod = types.ModuleType("vllm_ascend.quantization.methods.base")
-
-    def get_moe_num_logical_experts(
-        layer,
-        num_experts,
-        global_redundant_expert_num=0,
-        num_shared_experts=0,
-    ):
-        num_logical_experts = getattr(layer.moe_config, "num_logical_experts", None)
-        if num_logical_experts is not None:
-            return int(num_logical_experts)
-        return int(num_experts - global_redundant_expert_num - num_shared_experts)
-
-    methods_base_mod.get_moe_num_logical_experts = get_moe_num_logical_experts
-    w8a8_mod = types.ModuleType("vllm_ascend.quantization.methods.w8a8_dynamic")
-    w8a8_mod.AscendW8A8DynamicFusedMoEMethod = AscendW8A8DynamicFusedMoEMethod
-
-    monkeypatch.setitem(sys.modules, "vllm", vllm)
-    monkeypatch.setitem(sys.modules, "vllm.config", vllm_config)
-    monkeypatch.setitem(sys.modules, "vllm.logger", vllm_logger)
-    monkeypatch.setitem(sys.modules, "vllm_ascend", root)
-    monkeypatch.setitem(sys.modules, "vllm_ascend.ascend_config", ascend_config_mod)
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.ascend_forward_context",
-        ascend_forward_context_mod,
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.distributed",
-        distributed,
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.distributed.parallel_state",
-        parallel_state_mod,
-    )
-    monkeypatch.setitem(sys.modules, "vllm_ascend.ops", ops)
-    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.fused_moe", fused_moe_pkg)
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.ops.fused_moe.experts_selector",
-        experts_selector_mod,
-    )
-    monkeypatch.setitem(
-        sys.modules, "vllm_ascend.ops.fused_moe.fused_moe", fused_moe_mod
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.ops.fused_moe.moe_runtime_args",
-        moe_runtime_args_mod,
-    )
-    monkeypatch.setitem(sys.modules, "vllm_ascend.quantization", quant)
-    monkeypatch.setitem(sys.modules, "vllm_ascend.quantization.methods", methods)
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.quantization.methods.base",
-        methods_base_mod,
-    )
-    monkeypatch.setitem(
-        sys.modules, "vllm_ascend.quantization.methods.w8a8_dynamic", w8a8_mod
-    )
-    return fused_moe_mod
+    modules = {
+        "vllm.config": {
+            "VllmConfig": SimpleNamespace,
+            "get_current_vllm_config": lambda: config,
+        },
+        "vllm.logger": {
+            "logger": SimpleNamespace(
+                warning_once=lambda *args: None,
+                info=lambda *args: None,
+                warning=lambda *args: None,
+            ),
+        },
+        "vllm_ascend.ascend_config": {"get_ascend_config": lambda: ascend_config},
+        "vllm_ascend.ascend_forward_context": {"_EXTRA_CTX": context},
+        "vllm_ascend.distributed.parallel_state": {
+            "get_mc2_group": lambda: SimpleNamespace(),
+        },
+        "vllm_ascend.ops.fused_moe.dataclass.fused_experts": {
+            "build_fused_experts_input": lambda **kwargs: kwargs,
+        },
+        "vllm_ascend.ops.fused_moe.routed_experts": {
+            "AscendRoutedExperts": SimpleNamespace,
+        },
+        "vllm_ascend.quantization.methods.w8a8.w8a8_dynamic": {
+            "AscendW8A8DynamicFusedMoEMethod": AscendW8A8DynamicFusedMoEMethod,
+        },
+    }
+    for name, attributes in modules.items():
+        module = types.ModuleType(name)
+        module.__dict__.update(attributes)
+        monkeypatch.setitem(sys.modules, name, module)
 
 
 @pytest.fixture
@@ -193,7 +78,16 @@ def force_lb_mod(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
 
 def _new_layer() -> SimpleNamespace:
-    return SimpleNamespace()
+    return SimpleNamespace(
+        mix_placement=False,
+        log2phy=None,
+        n_shared_experts=0,
+        ascend_expert_map=None,
+        global_redundant_expert_num=0,
+        ascend_mc2_mask=None,
+        apply_router_weight_on_input=False,
+        ascend_pertoken_scale=None,
+    )
 
 
 def _aggregate_target_rank_counts(
@@ -428,6 +322,26 @@ def test_force_load_balance_buffer_grows_for_large_batch(
     assert method.force_lb_fake_topk_buffer.shape[0] >= 5
 
 
+def test_force_load_balance_buffer_tracks_device_per_instance(force_lb_mod):
+    method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    other_method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    config = force_lb_mod.ForceLoadBalanceConfig(
+        n_routed_experts=4,
+        ep_size=2,
+        ep_rank=0,
+        top_k=2,
+        topn_per_rank=1,
+    )
+    force_lb_mod._init_force_lb_buffer(method, config, 4, torch.device("cpu"))
+    # Meta exercises the device-transfer branch without requiring accelerator
+    # hardware. Numerical cycle checks above use real CPU tensors.
+    ids = force_lb_mod._get_force_lb_topk_ids(method, config, 2, torch.device("meta"))
+    assert ids.device == torch.device("meta")
+    assert ids.shape == (2, 2)
+    assert method.force_lb_fake_topk_buffer.device == ids.device
+    assert other_method.force_lb_fake_topk_buffer is None
+
+
 def test_w8a8_apply_lazily_builds_and_swaps_topk_ids(
     force_lb_mod: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -464,14 +378,14 @@ def test_w8a8_apply_lazily_builds_and_swaps_topk_ids(
     out = method.apply(
         layer=layer,
         x=torch.empty((4, 1)),
-        router_logits=router_logits,
-        top_k=2,
-        renormalize=True,
-        num_experts=8,
+        topk_weights=torch.ones((4, 2)),
+        topk_ids=router_logits[:, :2].to(torch.int64),
+        shared_experts=None,
+        shared_experts_input=None,
     )
 
     expected = torch.tensor([[0, 2], [4, 6], [0, 2], [4, 6]])
-    assert torch.equal(out, expected)
+    assert torch.equal(out["topk_ids"], expected)
     assert method.force_lb_fake_topk_buffer.shape == (8, 2)
     for field_name in ("n_routed_experts", "ep_size", "ep_rank", "top_k"):
         assert not hasattr(layer, field_name)
@@ -491,6 +405,9 @@ def test_w8a8_apply_passthrough_when_plugin_disabled(
 
     layer = _new_layer()
     layer.mix_placement = False
+    # Incoming IDs have already been mapped by native routing. This map must
+    # not be applied again when AFD balancing is disabled.
+    layer.log2phy = torch.tensor([1, 0], dtype=torch.int64)
     layer.moe_config = SimpleNamespace(
         ep_size=1,
         ep_rank=0,
@@ -506,11 +423,115 @@ def test_w8a8_apply_passthrough_when_plugin_disabled(
     out = method.apply(
         layer=layer,
         x=torch.empty((4, 1)),
-        router_logits=router_logits,
-        top_k=2,
-        renormalize=True,
-        num_experts=2,
+        topk_weights=torch.ones((4, 2)),
+        topk_ids=router_logits.to(torch.int64),
+        shared_experts=None,
+        shared_experts_input=None,
     )
 
-    assert torch.equal(out, router_logits.to(torch.int64))
+    assert torch.equal(out["topk_ids"], router_logits.to(torch.int64))
     assert method.force_lb_fake_topk_buffer is None
+
+
+@pytest.mark.parametrize("native_policy", ["profile", "force_eplb"])
+def test_native_routing_policy_takes_precedence(force_lb_mod, native_policy):
+    force_lb_mod.get_current_vllm_config().additional_config = {
+        "enable_force_load_balance": True,
+    }
+    method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    force_lb_mod._EXTRA_CTX.in_profile_run = native_policy == "profile"
+    force_lb_mod.get_ascend_config().enable_force_eplb = native_policy == "force_eplb"
+    layer = _new_layer()
+    layer.log2phy = torch.tensor([1, 0], dtype=torch.int64)
+    ids = torch.tensor([[3, 1]])
+    weights = torch.tensor([[0.4, 0.6]])
+    payload = method.apply(layer, torch.empty((1, 4)), weights, ids, None, None)
+    assert payload["topk_ids"] is ids
+    assert payload["topk_weights"] is weights
+    assert method.force_lb_fake_topk_buffer is None
+
+
+def test_mixed_shared_ids_and_weights_survive_routed_override(force_lb_mod):
+    force_lb_mod.get_current_vllm_config().additional_config = {
+        "enable_force_load_balance": True,
+        "force_load_balance_topn_per_rank": 1,
+    }
+    method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    layer = _new_layer()
+    layer.mix_placement = True
+    layer.n_shared_experts = 1
+    layer.moe_config = SimpleNamespace(num_logical_experts=8, ep_size=4, ep_rank=0)
+    ids = torch.tensor([[7, 7, 8], [7, 7, 8]], dtype=torch.int64)
+    weights = torch.rand((2, 3))
+    payload = method.apply(layer, torch.empty((2, 4)), weights, ids, None, None)
+    assert torch.equal(payload["topk_ids"], torch.tensor([[0, 2, 8], [4, 6, 8]]))
+    assert payload["topk_weights"] is weights
+    assert torch.equal(ids, torch.tensor([[7, 7, 8], [7, 7, 8]]))
+
+
+@pytest.mark.parametrize("mixed_shared", [False, True])
+@pytest.mark.parametrize("ids_dtype", [torch.int32, torch.int64])
+def test_replacement_ids_use_current_physical_mapping_once(
+    force_lb_mod, mixed_shared, ids_dtype
+):
+    force_lb_mod.get_current_vllm_config().additional_config = {
+        "enable_force_load_balance": True,
+        "force_load_balance_topn_per_rank": 1,
+    }
+    method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    layer = _new_layer()
+    layer.mix_placement = mixed_shared
+    layer.n_shared_experts = int(mixed_shared)
+    layer.global_redundant_expert_num = 2
+    layer.moe_config = SimpleNamespace(num_logical_experts=2, ep_size=2, ep_rank=0)
+    # Four physical slots span two EP ranks. Logical IDs 0/1 must route to
+    # slots 0/2, rather than both landing on the first physical rank.
+    layer.log2phy = torch.tensor([0, 2], dtype=ids_dtype)
+    ids = torch.full((4, 1 + int(mixed_shared)), 3, dtype=ids_dtype)
+    original_ids = ids.clone()
+    weights = torch.rand(ids.shape, dtype=torch.float32)
+    hidden_states = torch.empty((4, 4), dtype=torch.bfloat16)
+    payload = method.apply(layer, hidden_states, weights, ids, None, None)
+
+    expected_routed = torch.tensor([0, 2, 0, 2], dtype=ids_dtype)
+    assert torch.equal(payload["topk_ids"][:, 0], expected_routed)
+    assert payload["topk_ids"].dtype == ids_dtype
+    assert torch.equal(
+        torch.bincount(payload["topk_ids"][:, 0].long() // 2),
+        torch.tensor([2, 2]),
+    )
+    if mixed_shared:
+        # ID 3 is outside this logical map: remapping the existing physical
+        # suffix would fail, as well as change its meaning.
+        assert torch.equal(payload["topk_ids"][:, 1], original_ids[:, 1])
+    assert torch.equal(ids, original_ids)
+    assert payload["topk_weights"] is weights
+    assert payload["hidden_states"] is hidden_states
+    assert payload["layer"] is layer
+
+    # EPLB can update placement between forwards. Cache logical IDs and apply
+    # the current map each time, without mutating the shared deterministic cycle.
+    logical_buffer = method.force_lb_fake_topk_buffer.clone()
+    layer.log2phy = torch.tensor([2, 0], dtype=ids_dtype)
+    second_payload = method.apply(layer, hidden_states, weights, ids, None, None)
+    assert torch.equal(
+        second_payload["topk_ids"][:, 0],
+        torch.tensor([2, 0, 2, 0], dtype=ids_dtype),
+    )
+    assert torch.equal(method.force_lb_fake_topk_buffer, logical_buffer)
+    if mixed_shared:
+        assert torch.equal(second_payload["topk_ids"][:, 1], original_ids[:, 1])
+
+
+@pytest.mark.parametrize(
+    "v2,dynamic,enabled,expected",
+    [(False, True, False, True), (True, True, False, False), (True, False, True, True)],
+)
+def test_target_expert_weight_list_policy(force_lb_mod, v2, dynamic, enabled, expected):
+    config = force_lb_mod.get_current_vllm_config()
+    config.use_v2_model_runner = v2
+    config.parallel_config.enable_eplb = enabled
+    force_lb_mod.get_ascend_config().eplb_config.dynamic_eplb = dynamic
+    method = force_lb_mod.AscendW8A8DynamicFusedMoEMethod()
+    assert method.use_expert_weight_list is expected
+    assert method.dynamic_eplb is (dynamic and not v2)

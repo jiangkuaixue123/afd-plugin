@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import sys
-from collections.abc import Callable
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -715,30 +713,8 @@ def test_async_send_ffn_work_item_output_notifies_empty_rank(
     ]
 
 
-def test_async_select_experts_uses_v026_num_experts_contract(monkeypatch):
-    calls = []
-    fake_package = ModuleType("vllm_ascend")
-    fake_ops = ModuleType("vllm_ascend.ops")
-    fake_fused_moe = ModuleType("vllm_ascend.ops.fused_moe")
-
-    class FakeSelectorModule(ModuleType):
-        select_experts: Callable[..., tuple[str, str]]
-
-    fake_selector = FakeSelectorModule("vllm_ascend.ops.fused_moe.experts_selector")
-
-    def select_experts(*, num_experts=-1, **kwargs):
-        calls.append((num_experts, kwargs))
-        return "weights", "ids"
-
-    fake_selector.select_experts = select_experts
-    monkeypatch.setitem(sys.modules, "vllm_ascend", fake_package)
-    monkeypatch.setitem(sys.modules, "vllm_ascend.ops", fake_ops)
-    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.fused_moe", fake_fused_moe)
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.ops.fused_moe.experts_selector",
-        fake_selector,
-    )
+def test_async_select_experts_uses_target_grouped_router():
+    pytest.importorskip("vllm_ascend.ops.fused_moe.router.grouped_topk_router")
     connector = CAMAsyncAFDConnector(
         0,
         0,
@@ -747,10 +723,34 @@ def test_async_select_experts_uses_v026_num_experts_contract(monkeypatch):
         0,
     )
 
-    result = connector.select_experts(router_logits="logits", num_experts=8)
-
-    assert result == ("weights", "ids")
-    assert calls == [(8, {"router_logits": "logits"})]
+    router_logits = torch.tensor(
+        [
+            [6.0, 5.0, 1.0, 0.0, -2.0, -3.0, -4.0, -5.0],
+            [-5.0, -4.0, -3.0, -2.0, 0.0, 1.0, 5.0, 6.0],
+        ],
+    )
+    weights, ids = connector.select_experts(
+        hidden_states=torch.zeros(2, 16),
+        router_logits=router_logits,
+        top_k=2,
+        use_grouped_topk=True,
+        renormalize=True,
+        scoring_func="softmax",
+        num_expert_group=2,
+        topk_group=1,
+        routed_scaling_factor=2.0,
+        e_score_correction_bias=None,
+        mix_placement=True,
+        num_logical_experts=8,
+        num_shared_experts=1,
+        num_experts=9,
+    )
+    assert ids.shape == weights.shape == (2, 3)
+    assert torch.all(ids[0, :2] < 4)
+    assert torch.all(ids[1, :2] >= 4)
+    assert torch.equal(ids[:, -1], torch.tensor([8, 8], dtype=torch.int32))
+    torch.testing.assert_close(weights[:, :2].sum(dim=-1), torch.tensor([2.0, 2.0]))
+    torch.testing.assert_close(weights[:, -1], torch.ones(2))
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])

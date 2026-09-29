@@ -1593,15 +1593,17 @@ def test_main_defers_a_first_signal_until_cleanup_failure_is_reported(monkeypatc
     assert installed_handlers == previous_handlers
 
 
-def test_runner_drops_flashcomm_for_npu_role_without_tp(monkeypatch):
+@pytest.mark.parametrize("ffn_tp_size", [1, 2])
+def test_runner_drops_flashcomm_for_npu_role(monkeypatch, ffn_tp_size):
     args = _args()
     args.device_backend = "npu"
-    args.ffn_tp_size = 1
+    args.ffn_tp_size = ffn_tp_size
     monkeypatch.setenv("VLLM_ASCEND_ENABLE_FLASHCOMM1", "1")
 
     env = runner.build_env("2,3", args, role="ffn")
 
     assert "VLLM_ASCEND_ENABLE_FLASHCOMM1" not in env
+    assert env["VLLM_USE_V2_MODEL_RUNNER"] == "0"
 
 
 def test_build_env_marks_managed_process_trees_by_role():
@@ -1714,6 +1716,27 @@ def test_stream_output_records_attention_split_steps(monkeypatch):
     )
     timestamps = iter([101.0, 102.0])
     monkeypatch.setattr(runner.time, "time", lambda: next(timestamps))
+
+    thread = runner.stream_output("attention", process, split_steps)
+    thread.join(timeout=5)
+
+    assert split_steps == [101.0]
+
+
+def test_stream_output_records_live_npu_split_control_metadata(monkeypatch):
+    split_steps: list[float] = []
+    control_entry = (
+        "AFD NPU Attention send_dp_metadata decision; "
+        "world_rank=2 key=((0, (2, 2)), (1, (3, 2))) "
+    )
+    process: Any = argparse.Namespace(
+        stdout=io.StringIO(
+            control_entry + "is_graph_capturing=False is_warmup=True\n"
+            + control_entry + "is_graph_capturing=True is_warmup=False\n"
+            + control_entry + "is_graph_capturing=False is_warmup=False\n"
+        ),
+    )
+    monkeypatch.setattr(runner.time, "time", lambda: 101.0)
 
     thread = runner.stream_output("attention", process, split_steps)
     thread.join(timeout=5)

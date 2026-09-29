@@ -91,6 +91,7 @@ DBO_EVAL_NUM_UBATCHES = 2
 # The engine logs one DEBUG line per executed step carrying its ubatch slice
 # list; a step line containing UBatchSlice entries is a live two-ubatch run.
 DBO_SPLIT_EVIDENCE_ENTRY = "UBatchSlice("
+NPU_DBO_CONTROL_ENTRY = "AFD NPU Attention send_dp_metadata decision;"
 ACCOUNTING_PROMPT = (
     "<|im_start|>system\n"
     "You are a professional accountant. Answer questions using accounting "
@@ -687,7 +688,7 @@ def build_vllm_command(
     if connector_extra_config:
         afd_config["afd"]["connector_extra_config"] = connector_extra_config
     if args.scenario == DSV4_ASYNC_CAM_SCENARIO:
-        afd_config.update(dsv4_config.additional_config())
+        afd_config.update(dsv4_config.additional_config(role))
     cmd = [
         args.vllm_bin,
         "serve",
@@ -961,8 +962,9 @@ def build_env(
     env = os.environ.copy()
     env.setdefault("VLLM_ENGINE_READY_TIMEOUT_S", "18000")
     env[visible_devices_env_name(args.device_backend)] = visible_devices
-    if args.device_backend != "npu":
-        env["VLLM_USE_V2_MODEL_RUNNER"] = "1" if args.use_v2_model_runner else "0"
+    env["VLLM_USE_V2_MODEL_RUNNER"] = (
+        "1" if args.device_backend == "gpu" and args.use_v2_model_runner else "0"
+    )
     if args.baseline:
         env["VLLM_PLUGINS"] = "ascend" if args.device_backend == "npu" else ""
     else:
@@ -975,15 +977,9 @@ def build_env(
             raise ValueError("role is required when setting an E2E run id")
         env[E2E_RUN_ID_ENV] = e2e_run_id
         env[E2E_PROCESS_ROLE_ENV] = role
-    if (
-        args.device_backend == "npu"
-        and role in ("attention", "ffn")
-        and role_tp_size(args, role) <= 1
-    ):
+    if args.device_backend == "npu":
         env.pop("VLLM_ASCEND_ENABLE_FLASHCOMM1", None)
     env.pop("AFD_PLUGIN_EARLY_ENGINE_PATCH", None)
-    if args.scenario == DSV4_ASYNC_CAM_SCENARIO:
-        env.update(dsv4_config.role_environment(role))
     current_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (
         str(REPO_ROOT)
@@ -1022,7 +1018,16 @@ def stream_output(
             if (
                 dbo_split_steps is not None
                 and name == "attention"
-                and DBO_SPLIT_EVIDENCE_ENTRY in line
+                and (
+                    DBO_SPLIT_EVIDENCE_ENTRY in line
+                    or (
+                        NPU_DBO_CONTROL_ENTRY in line
+                        and "key=((0," in line
+                        and ", (1, (" in line
+                        and "is_graph_capturing=False" in line
+                        and "is_warmup=False" in line
+                    )
+                )
             ):
                 dbo_split_steps.append(time.time())
 
