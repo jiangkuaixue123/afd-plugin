@@ -125,6 +125,9 @@ def select_cam_experts(
         router_logits,
         topk_indices_dtype=torch.int32,
     )
+    # TODO: Async CAM currently rejects mix_placement in feature validation.
+    # Before enabling it, verify these shared IDs and weights against actual
+    # expert placement and the CAM dispatch/combine payload contract.
     if mix_placement:
         shared_ids = torch.arange(
             num_logical_experts,
