@@ -36,14 +36,15 @@ _original_vllm_config_post_init: Callable[..., Any] | None = None
 
 
 # Patch reason: vLLM validates native ubatching against DeepEP backends and
-# selects a generic worker before AFD can bind its role-specific NPU lifecycle.
-# Patch functionality: prepare Ascend config, bypass backend validation only
-# where needed, select the AFD worker, and finalize the NPU backend and child
-# EngineCore binding after the full config exists.
-# Removal plan: remove when vLLM accepts connector-owned ubatching.
+# selects a generic worker before AFD can bind its NPU child lifecycle.
+# Patch functionality: install the Ascend config shim before validation, use a
+# temporary backend only for AFD GPU validation, select the role worker when
+# worker_cls is auto, finalize the NPU backend, and bind Ascend async-DP and
+# EngineCore hooks after the full config exists.
+# Removal plan: remove when vLLM supports connector-owned ubatching and
+# role-aware worker and child-process setup.
 # Expansion exception: upstream create_engine_config is a large config builder;
-# keep a narrow original-function delegation so this patch only owns the AFD
-# validation bypass.
+# keep original-function delegation scoped to AFD config lifecycle changes.
 # Signature: matches upstream; no added parameters.
 def create_engine_config(
     self,
@@ -85,11 +86,9 @@ def create_engine_config(
         config.parallel_config.all2all_backend = original_backend
         # ### PATCH END: AFD ubatching all2all backend validation
 
-    # ### PATCH START: AFD automatic worker selection
+    # ### PATCH START: AFD post-config setup
     if worker_cls_was_auto:
         _select_afd_worker_for_auto(config)
-    # ### PATCH END: AFD automatic worker selection
-    # ### PATCH START: AFD NPU post-config setup
     # Preserve the actual backend before serializing the child config.
     if is_afd_npu:
         from afd_plugin.compat.npu import fix_all2all_backend_for_afd
@@ -108,7 +107,7 @@ def create_engine_config(
 
         apply_afd_async_dp_engine_patch_if_needed(config)
         apply_afd_ascend_engine_core_config_patch_if_needed(config)
-    # ### PATCH END: AFD NPU post-config setup
+    # ### PATCH END: AFD post-config setup
     return config
 
 
