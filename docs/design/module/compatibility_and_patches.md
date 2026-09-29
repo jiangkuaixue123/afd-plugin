@@ -64,8 +64,8 @@ Direct strict calls raise for a missing or different vLLM; plugin registration
 calls the check with `strict=False`, so it warns and continues. This warning
 policy does not make another vLLM release supported.
 
-The NPU implementation remains based on vLLM-Ascend commit
-[`80d8c194f`](https://github.com/vllm-project/vllm-ascend/commit/80d8c194f7584b17fe08065ea99a130916f6b0e7).
+The NPU implementation is based on vLLM-Ascend commit
+[`8d4409d62`](https://github.com/vllm-project/vllm-ascend/commit/8d4409d6256d8a6729140ddcc0d1889e3f96cdd6).
 The repository does not declare a vLLM-Ascend package dependency in
 `pyproject.toml`, so this source commit and the recorded NPU validation are the
 compatibility evidence rather than a released package or container tag.
@@ -78,7 +78,7 @@ compatibility evidence rather than a released package or container tag.
 | Core vLLM patches | [`compat/patches/`](../../../afd_plugin/compat/patches) | [`tests/unit/compat/patches/`](../../../tests/unit/compat/patches) |
 | CUDA benchmark routing | [`model_executor/routing_simulator.py`](../../../afd_plugin/model_executor/routing_simulator.py) | [`test_routing_simulator.py`](../../../tests/unit/model_executor/test_routing_simulator.py) |
 | NPU adapters | [`compat/npu/`](../../../afd_plugin/compat/npu) | [`test_runtime.py`](../../../tests/unit/compat/test_runtime.py), [`test_ascend_ops.py`](../../../tests/unit/compat/test_ascend_ops.py) |
-| NPU patch paths | [`compat/patches/npu/`](../../../afd_plugin/compat/patches/npu) | [`test_force_load_balance.py`](../../../tests/unit/compat/patches/test_force_load_balance.py), [`test_npu_runtime.py`](../../../tests/unit/v1/worker/test_npu_runtime.py) |
+| NPU patch paths | [`compat/patches/npu/`](../../../afd_plugin/compat/patches/npu) | [`test_npu_runtime.py`](../../../tests/unit/v1/worker/test_npu_runtime.py) |
 | CUDA DBO Attention metadata workaround | [`attention_model_runner.py`](../../../afd_plugin/v1/worker/attention_model_runner.py) | restoration and error-path coverage in [`test_attention_model_runner.py`](../../../tests/unit/v1/worker/test_attention_model_runner.py) |
 
 ## Patch application lifecycle
@@ -97,10 +97,16 @@ Ascend patching is intentionally deferred until the Ascend plugin has finished
 its own platform initialization. AFD config normalization installs the
 platform-config wrapper through the config facade; NPU worker startup calls the
 idempotent runtime facade, which verifies that wrapper and installs the MLA
-graph resolver. The FFN worker imports the force-load-balance patch at worker
-construction, after Ascend platform initialization and before delegating to
-`NPUWorker.__init__()`. CUDA-only plugin registration does not import
-vLLM-Ascend.
+graph resolver. CUDA-only plugin registration does not import vLLM-Ascend.
+
+To force-balance FFN-side experts, configure vLLM-Ascend's native
+`additional_config.enable_force_eplb`; AFD no longer patches the W8A8
+quantization method. The native policy cycles through all local routed
+experts; it does not implement AFD's former
+`force_load_balance_topn_per_rank` benchmark policy.
+The Attention-side Async CAM `AFD_FORCE_BALANCED_TOPK_IDS` switch remains a
+separate AFD routing path. Recipes pinned to older release branches retain
+their original configuration as historical records.
 
 Python module import provides process-level one-time execution in the ordinary
 path. Some patches also preserve originals or set explicit sentinels, but this
@@ -122,7 +128,6 @@ not the package dependency policy.
 | [`engine_core.py`](../../../afd_plugin/compat/patches/engine_core.py): `EngineCore.__init__`, `_initialize_kv_caches`, `shutdown`; `EngineCoreProc.run_busy_loop`; `DPEngineCoreProc.run_busy_loop` | AFD FFN becomes a connector daemon: construct executor, skip scheduler/KV setup, return an empty KV-shaped result on late paths, start/monitor/stop the FFN worker loop, and use FFN-safe shutdown. Non-FFN branches copy pinned upstream behavior. | Imported by `register_afd`; **no patch-local version guard and no saved-original sentinel**. Direct class assignment means the package pin and review discipline are the compatibility guard. | [`test_engine_core.py`](../../../tests/unit/compat/patches/test_engine_core.py) covers FFN initialization, non-FFN behavior, and daemon start/stop; role runtime tests cover error propagation. | Remove when vLLM offers a headless connector-daemon engine lifecycle or an executor mode that does not require scheduler/KV ownership. |
 | [`npu/ascend_platform.py`](../../../afd_plugin/compat/patches/npu/ascend_platform.py): `NPUPlatform.check_and_update_config` | Snapshots AFD DBO state, runs upstream normalization, and restores configured `enable_dbo`, `ubatch_size`, and `all2all_backend` in `finally`; non-AFD behavior is unchanged. | Installed through the config facade during AFD NPU normalization and verified again by the worker runtime facade; no version guard. Saves the original on the class and uses a class sentinel. The runtime facade caches success only after the wrapper is installed, so an early missing vLLM-Ascend import remains retryable. | [`test_runtime.py`](../../../tests/unit/compat/test_runtime.py) and [`test_npu_runtime.py`](../../../tests/unit/v1/worker/test_npu_runtime.py). | Remove when vLLM-Ascend recognizes plugin-owned DBO workers or no longer clears these fields. |
 | [`npu/mla_graph.py`](../../../afd_plugin/compat/patches/npu/mla_graph.py): `vllm_ascend.attention.mla_v1.get_graph_params` | Resolves an AFD ubatch-owned `GraphParams` registry from the active forward context and otherwise delegates to the saved upstream process-global resolver. | Called through `apply_afd_ascend_patches_if_needed` during NPU worker startup; no version guard. Saves the original on the upstream module and uses a module sentinel. | [`test_runtime.py`](../../../tests/unit/compat/test_runtime.py) covers AFD-context resolution, upstream fallback, and idempotence; [`test_npu_mla_graph.py`](../../../tests/unit/v1/worker/test_npu_mla_graph.py) covers the owning graph lifecycle. | Remove when vLLM-Ascend accepts a forward-context-local MLA graph registry or exposes an equivalent resolver hook. |
-| [`npu/force_load_balance.py`](../../../afd_plugin/compat/patches/npu/force_load_balance.py): `AscendW8A8DynamicFusedMoEMethod.__init__`, `AscendW8A8DynamicFusedMoEMethod.apply` | Captures AFD profiling configuration as method-owned state and replaces routed expert IDs with a deterministic balanced buffer only when the method-owned switch is enabled; normal model-selected routing remains unchanged. This switch changes outputs and is not a correctness feature. | Imported by the NPU FFN worker after vLLM-Ascend platform initialization; **no patch-local version guard or explicit reload sentinel**. Functions copy the current upstream bodies with marked AFD deltas. | [`test_force_load_balance.py`](../../../tests/unit/compat/patches/test_force_load_balance.py) covers buffer bounds, determinism, growth, override, and pass-through. | Upstream a deterministic expert-routing profiling hook in vLLM-Ascend, then delete both copied functions. |
 
 ## Non-patch compatibility adapters
 

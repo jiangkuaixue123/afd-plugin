@@ -34,7 +34,7 @@ _ASCEND_CONFIG_ALIAS_MODULES = (
 # Upstream: vllm_ascend/ascend_config.py at
 # 8d4409d6256d8a6729140ddcc0d1889e3f96cdd6.
 # Patch reason: strict AscendConfig construction rejects AFD's shared settings.
-# Patch functionality: exclude only three AFD keys from constructor kwargs,
+# Patch functionality: exclude the AFD namespace from constructor kwargs,
 # preserving the source mapping, config identity and native singleton/cache.
 # Signature: matches upstream; no added parameters.
 # Removal plan: remove when upstream supports a plugin configuration namespace.
@@ -105,8 +105,6 @@ def init_ascend_config(vllm_config: VllmConfig) -> AscendConfig:
     _NON_USER_INPUT_KEYS = {
         # ### PATCH START: AFD namespace
         "afd",
-        "enable_force_load_balance",
-        "force_load_balance_topn_per_rank",
         # ### PATCH END: AFD namespace
         # control-flow flag (singleton/cache refresh), not a configuration field
         "refresh",

@@ -53,8 +53,6 @@ assert current_platform.device_type == "npu"
 import afd_plugin
 
 afd_plugin.register_afd()
-force_load_balance_module = "afd_plugin.compat.patches.npu.force_load_balance"
-assert force_load_balance_module not in sys.modules
 
 from afd_plugin.validation import resolve_class_from_qualname
 
@@ -62,7 +60,6 @@ for qualname in sys.argv[1:]:
     cls = resolve_class_from_qualname(qualname)
     assert cls.__module__.startswith("afd_plugin.v1.worker.npu")
 
-assert force_load_balance_module not in sys.modules
 """
 
 RUNTIME_OVERRIDE_CONTRACTS = [
