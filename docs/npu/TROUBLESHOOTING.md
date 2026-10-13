@@ -1,8 +1,5 @@
 # NPU troubleshooting
 
-Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
-checked-in tests; hardware results below retain their original revision scope.
-
 This guide covers common startup and runtime failures for the Ascend CAM
 connectors. Use it together with the connector-specific setup guide:
 

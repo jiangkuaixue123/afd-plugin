@@ -142,8 +142,7 @@ must be placed under `connector_extra_config`.
 The compatibility aliases `afd_connector`, `afd_role`, `afd_port`, `afd_host`,
 and `async` normalize to canonical fields. Supplying an alias and its canonical
 field together is rejected. Boolean-like strings and integer-like values are
-normalized; invalid types fail during parsing. The former `afd_extra_config`
-alias and untyped `extra_config` field are no longer accepted.
+normalized; invalid types fail during parsing.
 
 Role rank is runtime state derived from the global DP rank and local PCP/TP
 coordinates. It is resolved once by the connector factory and is not an
@@ -201,8 +200,7 @@ runtime integration and are not stable third-party extension interfaces.
 
 `afd_plugin.envs` exports boolean helpers for `AFD_FORCE_BALANCED_TOPK_IDS`
 and `AFD_ASYNC_CAM_LAYERED_GMM`. Profiling and connector diagnostics are read
-by their owning modules; the old CAMP2P stub/offline-scheduler exports are
-absent. Environment switches do not replace `additional_config["afd"]` as the
+by their owning modules. Environment switches do not replace `additional_config["afd"]` as the
 activation or topology channel. The layered-GMM switch is FFN-only and
 validated for the DeepSeek-V4 Async CAM path.
 

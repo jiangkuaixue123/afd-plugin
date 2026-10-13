@@ -172,8 +172,7 @@ The generic V2 E2E harness remains CUDA-only.
 
 For Ascend V2 Async CAM, the supported contract and launch settings are in the
 [CAM async guide](../../npu/CAM_ASYNC_CONNECTOR_USER_GUIDE.md#modelrunnerv2-deployment).
-The synchronous and historical V1 validation records above do not validate
-every V2 Async CAM model or SP topology.
+V2 Async CAM model and SP topology qualification requires dedicated device tests.
 
 ## Request and forward flow
 
@@ -250,17 +249,12 @@ native ubatching still gives each child context stage-local metadata.
 Ascend V2 Async CAM uses `NPUUBatchRunner` to adapt native DBO child inputs to
 Ascend attention builders. Native slicing, execution threads and output merge
 are reused at DP1 and DP > 1. Each child context carries its real token count
-separately from TP/SP padding and starts with `dp_metadata=None`. The old Async
-stage metadata sidecar and model-local two-stage pipeline are removed.
+separately from TP/SP padding and starts with `dp_metadata=None`.
 
 When vLLM does not produce `DPMetadata` for DP size 1, the shared provider
 creates `AFDDPMetadata` from the pending stage token count. DP greater than 1
 requires native DP metadata for synchronous control-plane connectors. Async
 CAM children skip model-side DP coordination; FFN consumes connector work items.
-
-The previous NPU design described a separate forward-context metadata mirror.
-That is no longer the contract: current CUDA and Ascend model paths read the
-canonical `additional_kwargs` entry.
 
 ## Control-plane coordination
 
@@ -406,9 +400,8 @@ configuration cells.
 Platform/connector limits are intentionally centralized in
 [execution platforms](execution_platforms.md#tested-runtime-matrix).
 
-The current native-only Async CAM DBO migration has local contract coverage;
-historical request/token-split accuracy results do not validate the changed
-boundaries. The next hardware gate needs DP1/DP > 1, plain TP/model SP, uneven
+Async CAM DBO has local contract coverage. The next hardware gate needs
+DP1/DP > 1, plain TP/model SP, uneven
 prefill lengths, and requests crossing a child boundary, with live two-child
 execution evidence and baseline output comparison.
 

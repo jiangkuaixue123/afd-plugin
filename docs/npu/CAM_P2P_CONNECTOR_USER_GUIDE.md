@@ -1,8 +1,5 @@
 # CAM P2P Connector User Guide
 
-Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
-checked-in tests; hardware results below retain their original revision scope.
-
 ## Overview
 
 `CAMP2pAFDConnector` is the synchronous Ascend NPU connector for
@@ -16,14 +13,7 @@ Ascend services. Use `P2pNcclAFDConnector` for CUDA deployments and
 
 `CAMP2pAFDConnector` supports prefill and decode in eager mode. V1 ACL graph
 uses `FULL_DECODE_ONLY`; the implemented V2 path also accepts `FULL`.
-V2-Lite V1/V2 has [representative v0.30 hardware evidence](https://github.com/vllm-project/afd-plugin/pull/425#issuecomment-6063910923),
-including 2A1F/2A2F functional checks with the MRV2 padding and FFN context
-repairs. The current source includes group-wise MRV2 padding before eager
-input preparation and graph fallback; the earlier upgrade evidence retains
-its original revision scope in the [runtime matrix](../design/module/execution_platforms.md#tested-runtime-matrix).
-Legacy V1 DBO 2A1F/2A2F regressions are
-recorded with the [stage-padding repair](https://github.com/vllm-project/afd-plugin/pull/430#issuecomment-6063840311).
-V2 now accepts eager native DBO with exactly two microbatches and Attention
+V2 accepts eager native DBO with exactly two microbatches and Attention
 DP > 1. V2 DBO graphs remain unsupported; other models and topologies require
 their own evidence.
 
@@ -32,7 +22,6 @@ their own evidence.
 - vLLM `0.30.0` at `ced6857a` and an Ascend PyTorch/vLLM-Ascend environment
   based on source commit
   [`8d4409d6`](https://github.com/vllm-project/vllm-ascend/commit/8d4409d6256d8a6729140ddcc0d1889e3f96cdd6).
-  Historical NPU results remain scoped to their original environment.
 - The AFD Ascend custom operators must be built and available at runtime.
 - HCCL connectivity for the data path and Gloo connectivity for DP metadata.
 - Identical model hidden size, model dtype, AFD topology, rendezvous address,
@@ -177,11 +166,9 @@ process groups. `HCCL_BUFFSIZE` remains a process-wide fallback.
 
 This example uses six NPUs on one host. It is a configuration template: replace
 `/path/to/model` and add any model-specific vLLM options required by the model.
-The checked-in DeepSeek-V3.2 recipe linked below provides a concrete,
-model-specific deployment.
 
-This graph + DBO template uses V1. Set `VLLM_PLUGINS=ascend,afd` for both
-roles; `VLLM_USE_V1` alone does not choose between ModelRunnerV1 and V2.
+This graph + DBO template selects ModelRunnerV1 and loads both the Ascend
+and AFD plugins on each role.
 
 The FFN service uses devices `4,5`:
 
@@ -259,8 +246,8 @@ vllm serve /path/to/model \
   }'
 ```
 
-For a complete DeepSeek-V3.2 deployment, see
-[`recipe/npu/CAMP2pAFDConnector/deepseek_v3_2/`](../../recipe/npu/CAMP2pAFDConnector/deepseek_v3_2/).
+For model-specific launch and validation cases, see the
+[E2E guide](../../tests/e2e/README.md).
 
 For CAM operator, HCCL, and device-memory failures, see the
 [NPU troubleshooting guide](TROUBLESHOOTING.md).

@@ -268,8 +268,7 @@ threads. Before the next dispatch, a peer raw receive reclaims CAM's single
 physical window; layout restoration, collectives and shared output stay with
 the owner. DP1 has scoped factory/threshold adapters for upstream's DP1 early
 returns. Native slicing owns request/token boundaries and distinguishes real
-tokens from padding; the Async planner, sidecar metadata and model-local stage
-loops are removed. The legacy split selector is accepted but ignored. FlashComm1
+tokens from padding. FlashComm1
 is Attention-local; without it, the CAM boundary shards replicated Attention
 tokens and restores the FFN result with TP all-gather.
 
@@ -284,8 +283,7 @@ cannot cancel a kernel already polling a device communication window.
 
 Synchronous MRV2 CAMP2P applies group-wise token padding before eager input
 preparation, including graph fallback. Padding follows strided FFN receiver
-groups and also keeps Attention TP peers aligned. This repair is present in
-the current source; the older upgrade record predates its integration.
+groups and also keeps Attention TP peers aligned.
 
 ### ACL Graph and NPU Graph
 
@@ -373,7 +371,7 @@ an expansion of the supported runtime contract.
 | CUDA V2 + `P2pNcclAFDConnector` | Eager or `FULL_DECODE_ONLY` native V2 CUDA Graph | Exactly two native microbatches; Attention DP > 1 | `compute_gate_on_attention=false`; PP/CP, elastic EP, EPLB, SP MoE, and compile SP rejected; role ranks equal DP x TP | DeepSeek-V2-Lite eager/graph DP2 and TP2 E2E; H20 live two-stage execution and representative 300-question comparisons; numerical equivalence is not established |
 | Ascend V1 + `CAMP2pAFDConnector` | Eager or current ACL Graph path | Native DBO, exactly two ubatches | Common and connector-local `compute_gate_on_attention=false`; `connector_extra_config.quant_mode=0`; plugin CANN ops required | V2-Lite 2A2F graph 300-question comparison, 2A1F/2A2F functional checks, and Legacy DBO regressions; runtime, graph, ops, connector, and profiler unit tests |
 | Ascend V2 + `CAMP2pAFDConnector` | Eager, `FULL`, or `FULL_DECODE_ONLY` native V2 ACL Graph | Eager native DBO with two ubatches and Attention DP > 1; graphs remain single-batch | `compute_gate_on_attention=false`; PP/CP, elastic EP, EPLB, SP MoE, and compile SP rejected; role ranks equal DP x TP | V2-Lite 2A2F FULL 300-question comparison and 2A1F eager/FULL_DECODE_ONLY/FULL functional checks; focused runner, context, validation, and device-contract unit tests |
-| Ascend + `CAMAsyncAFDConnector` | Eager only | Two native DBO microbatches on Attention, including DP1; legacy split selector is ignored | Experimental async path; `async=true`; documented path uses common `compute_gate_on_attention=true`; model runner v1 PCP is unsupported; prefill and decode context parallelism are unsupported; `connector_extra_config.dynamicQuant` is 0 or 1; plugin-owned async CAM ops required | Earlier V2-Lite and DSV4 layered comparisons retain their original scope; native-only migration has local checks and awaits NPU/accuracy validation; V3.2 v0.26 results remain historical |
+| Ascend + `CAMAsyncAFDConnector` | Eager only | Two native DBO microbatches on Attention, including DP1; legacy split selector is ignored | Experimental async path; `async=true`; documented path uses common `compute_gate_on_attention=true`; model runner v1 PCP is unsupported; prefill and decode context parallelism are unsupported; `connector_extra_config.dynamicQuant` is 0 or 1; plugin-owned async CAM ops required | Earlier V2-Lite and DSV4 layered comparisons retain their original scope; native-only migration has local checks and awaits NPU/accuracy validation |
 
 The Async CAM row also supports an MRV2 Attention runner for DeepSeek-V2/V3
 MLA and DeepSeek-V4, with static EP, PP=PCP=DCP=1, and Attention-local SP.
@@ -382,13 +380,6 @@ draft-model/MTP paths are excluded.
 FFN remains connector-driven. The row's upgrade evidence retains its original
 scope; MRV2 deployment settings are documented in the
 [CAM async guide](../../npu/CAM_ASYNC_CONNECTOR_USER_GUIDE.md#modelrunnerv2-deployment).
-
-The NPU upgrade results below were collected with CAMP input-padding and FFN
-context repairs that were reviewed separately at the time. Current source
-includes those repairs, including the MRV2 group-padding change in `913c9d3`.
-The historical many-to-one eager/fallback defect describes the uncorrected
-upgrade baseline, not a missing repair at this document's reviewed revision.
-New native DBO and Async CAM changes still need their own model comparisons.
 
 DSV2/V3 Async CAM Attention with model SP selects Ascend shared-expert DP before
 constructing the shared MLP. Each rank holds complete shared weights and computes
@@ -407,8 +398,7 @@ it does not add a new 300-question result. These records do not establish all
 model/topology support, numerical equivalence, performance, or clean device
 shutdown. Synchronous DSV4 profiles remain smoke-only, with known incorrect
 A5 concurrent answers; see their [E2E limits](../../../tests/e2e/README.md#dsv4-flash-sync-camp2p-concurrent-requests-local-4-or-16-npus).
-Historical v0.26 results at `80d8c194f` keep their original scope. GPU/NPU rank
-topology and connector resource rules remain owned by
+GPU/NPU rank topology and connector resource rules remain owned by
 [connector contracts](connector_contracts.md).
 
 The repository does not record a canonical CUDA container or a released

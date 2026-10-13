@@ -103,13 +103,9 @@ installs the MLA graph resolver. CUDA-only plugin registration does not import
 vLLM-Ascend.
 
 To force-balance FFN-side experts, configure vLLM-Ascend's native
-`additional_config.enable_force_eplb`; AFD no longer patches the W8A8
-quantization method. The native policy cycles through all local routed
-experts; it does not implement AFD's former
-`force_load_balance_topn_per_rank` benchmark policy.
-The Attention-side Async CAM `AFD_FORCE_BALANCED_TOPK_IDS` switch remains a
-separate AFD routing path. Recipes pinned to older release branches retain
-their original configuration as historical records.
+`additional_config.enable_force_eplb`. The native policy cycles through all
+local routed experts. The Attention-side Async CAM `AFD_FORCE_BALANCED_TOPK_IDS`
+switch is a separate AFD routing path.
 
 Python module import provides process-level one-time execution in the ordinary
 path. Some patches also preserve originals or set explicit sentinels, but this
@@ -166,8 +162,8 @@ Replace this seam when upstream exposes a pre-input padding callback.
 
 Async-DP queue statistics are a separate audit boundary. Current AFD selects
 ordinary `EngineCoreProc`, retains the native coordinator/stat channels, and
-disables wave coordination. The v0.26 coordinator monkey patches have been
-removed. Existing DPLB tests exercise native routing with supplied counts;
+disables wave coordination. Existing DPLB tests exercise native routing with
+supplied counts;
 they do not prove end-to-end publication from a running async Attention
 scheduler. Audit the v0.30 publisher path before adding another queue-statistics
 patch.

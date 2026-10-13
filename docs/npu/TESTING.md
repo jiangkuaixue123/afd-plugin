@@ -1,8 +1,5 @@
 # NPU validation
 
-Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
-checked-in tests; hardware results below retain their original revision scope.
-
 Configuration and source-contract tests can run on CPU; runtime contracts
 depend on vLLM/vLLM-Ascend, and device tests also need the matching Ascend
 runtime and hardware. Use vLLM 0.30.0 and the vLLM-Ascend source revision in
@@ -53,8 +50,7 @@ accuracy. Before qualifying the current native-only Async CAM DBO path, run
 model comparisons at Attention DP1 and DP > 1, plain TP and model SP, with
 uneven prefill lengths and requests crossing child boundaries. Enable DBO on
 Attention only and enable chunked prefill for DeepSeek-V2/V3. Keep two ubatches
-and eager execution; historical model-local request/token-split results do not
-qualify these new boundaries.
+and eager execution.
 
 For synchronous MRV2 CAMP2P, include eager two-stage execution at Attention
 DP > 1, many-to-one padding, and graph fallback without DBO. MRV2 DBO graphs
@@ -80,8 +76,8 @@ pytest -q tests/unit/test_envs.py \
 ```
 
 In an environment with matching CANN and torch-npu versions, rebuild the AFD
-extension and check the device Tensor `group_list` interface from #384 and the
-new W4A8 operator chain:
+extension and check the device Tensor `group_list` interface and the W4A8
+operator chain:
 
 ```bash
 SOC_VERSION=910c pytest -q tests/unit/compat/npu/test_gmm_layered.py
@@ -97,10 +93,9 @@ compares valid rows with an FP32 reference and perturbs the capacity tail. It
 exercises only the `swiglu_limit=0` operator chain; nonzero limits are
 temporarily ignored by the layered path and are not precision-equivalent to
 the model. It does not check distributed CAM completion or compare actual
-checkpoint results against the legacy path. All eight parameterized cases
-passed on Ascend 910C after the NZ weight layout fix. Recheck the tolerance
-and supported configurations against the project's precision standard when
-the operator changes.
+checkpoint results against the non-layered path. Recheck the tolerance and
+supported configurations against the project's precision standard when the
+operator changes.
 
 For end-to-end validation, toggle `AFD_ASYNC_CAM_LAYERED_GMM=0/1` with the same
 W4A8 checkpoint and deployment configuration. Record the processed parameter
@@ -108,13 +103,8 @@ shapes, dtypes, and formats; software versions; actual-path startup logs;
 accuracy; peak memory; and profiler traces. Cover completion on empty ranks,
 multiple chunks of one layer, interleaved DP work, and async CAM ubatching.
 Check that no layer-ID or count metadata D2H occurs between receive and send,
-and measure the retained worker group synchronization separately. No
-performance improvement has been measured for this change.
-
-The device Tensor `group_list` interface for the second GMM was merged in
-PR #384. This change uses it directly. The W13 layered GMM op_api also accepts
-the logical 3D view with 5D NZ storage produced by the W4A8 loader; the kernel
-math and PyTorch binding are unchanged.
+and measure the worker group synchronization separately. Performance gains
+require a controlled A/B comparison.
 
 The current ACLNN entry validates `layer_index` by its one-element int64
 contract, including a slice with nonzero storage offset. The GMM path accepts

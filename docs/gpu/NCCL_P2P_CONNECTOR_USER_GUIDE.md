@@ -1,8 +1,5 @@
 ## Background
 
-Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
-checked-in tests; hardware results below retain their original revision scope.
-
 P2pNcclAFDConnector (implemented with vLLM's PyNcclCommunicator) is a GPU-backed point-to-point connector for CUDA deployments. This guide documents its usage, configuration contract, rank mapping, and operational limits to help users and maintainers configure it correctly.
 
 ## When to use `P2pNcclAFDConnector`

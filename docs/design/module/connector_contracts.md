@@ -345,9 +345,7 @@ metadata/state ownership is divided remain open. See
 [#88](https://github.com/JiusiServe/afd-plugin/issues/88) and
 [#105](https://github.com/JiusiServe/afd-plugin/issues/105).
 
-The `AFDControlPlane` split removes control-plane methods from
-`AFDConnectorBase`, so CAM async no longer implements semantic no-ops. Its
-connector-driven work-item methods still live outside the abstract base. The
+Connector-driven work-item methods still live outside the abstract base. The
 configuration allow-list is not derived from the factory registry, and
 `AFDA2FTransferPayload` combines common data with backend state.
 Connector-owned typed configuration implements the decision from

@@ -163,8 +163,8 @@ separate from the optional routed W4A8 layered executor's unresolved nonzero
 
 The synchronous DSV4 E2E profiles check concurrent serving but disable answer
 checking; the A5 profile records incorrect concurrent answers. Async DSV4 has
-an exact-answer smoke case and historical layered off/on comparisons. Neither
-record establishes accuracy for the current native-DBO migration. See
+an exact-answer smoke case; current native DBO still requires model accuracy
+qualification. See
 [E2E testing](e2e_testing.md) and the [layered guide](../../npu/CAM_ASYNC_CONNECTOR_USER_GUIDE.md#w4a8-layered-gmm-experimental-disabled-by-default).
 
 ### Qwen3 MoE CUDA boundary
@@ -213,8 +213,7 @@ runner install the same `additional_kwargs` entry, and restores the original
 function in `finally`. This is a scoped compatibility adapter, not a permanent
 global provider.
 
-Async CAM reuses native DBO child slices, attention metadata and execution. It
-has no separate stage planner or ubatch metadata sidecar. The generic adapter
+Async CAM reuses native DBO child slices, attention metadata and execution. The generic adapter
 installs `afd_metadata` on the native child context; CAM transfer metadata and
 TP/SP layout conversion remain necessary for the communication boundary in
 `models/npu/async_cam_layout.py`. The single-window receive hook lives in
@@ -269,8 +268,7 @@ children. Dense layers remain local to Attention and run on each child's
 tokens. MoE sends top-k payloads through `send_async_cam_remote_call()`;
 native peer receive hooks reclaim the single CAM window before another send.
 Only the resumed owner restores layout, performs TP collectives, and adds its
-shared output. The former request-boundary model pipeline and Async metadata
-sidecar have been removed. `async_moe_split` no longer controls execution.
+shared output. Native DBO owns all microbatch boundaries.
 
 Connector ordering, work items, and transport buffers remain owned by
 [connector contracts](connector_contracts.md); graph and DBO mechanics remain
