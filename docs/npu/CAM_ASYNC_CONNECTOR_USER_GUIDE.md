@@ -1,5 +1,8 @@
 # CAM Async Connector User Guide
 
+Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
+checked-in tests; hardware results below retain their original revision scope.
+
 `CAMAsyncAFDConnector` is the Ascend CAM-backed asynchronous connector for AFD
 Attention/FFN disaggregation. It lets Attention workers compute MoE routing and
 exchange routed-expert activations with independent FFN expert ranks
@@ -33,7 +36,7 @@ The retained implementation describes an asynchronous Ascend NPU inference path
 with the following code-level constraints. Hardware evidence is limited to
 the models and configurations recorded above:
 
-- CAM operator packages are installed on every node;
+- plugin-owned Ascend operators are built and installed on every node;
 - Attention performs MoE gating before dispatch to FFN ranks;
 - execution is eager and AFD async-DP is enabled; **`async=true` is required**;
 - regular prefill and autoregressive decode steps use the same CAM path;
@@ -156,7 +159,9 @@ FFN ranks follow expert parallel placement. The runtime derives experts per rank
 from the model routed-expert count and `num_ffn_ranks`; use a model/topology in
 which routed experts divide evenly across FFN ranks. All roles must use the same
 model, routed-expert layout, quantization, HCCL address, rank counts, CAM
-settings, and ubatching settings. In an async deployment, every Attention (A)
+settings. Enable native DBO only on Attention; FFN must not receive
+`--enable-dbo` or native ubatching flags. Legacy connector flags may remain in
+shared JSON because their normalization is Attention-only. In an async deployment, every Attention (A)
 and FFN (F) process must also set `--max-num-batched-tokens` to the same value.
 
 ## AFD configuration
@@ -196,6 +201,7 @@ There is no separate `--afd-config` option.
 | `async` / `async_dp` | `bool` | `false` | Must be `true`. `async` is the accepted compatibility alias for canonical `async_dp`. |
 | `host` | `str` | `"127.0.0.1"` | **Must be the IP address of the node that owns Attention rank 0.** Every rank must use the same reachable value. |
 | `port` | `int` | `1239` | HCCL rendezvous port in `1..65535`; it must be free and reachable. |
+| `afd_process_group_timeout_s` | `int` | `120` | Positive AFD group rendezvous timeout in seconds; also bounds the NPU native DBO startup barrier, not device receive polling. |
 | `num_attention_ranks` | `int` | `1` | Total Attention ranks across all DP and TP groups. |
 | `num_ffn_ranks` | `int` | `1` | Total FFN expert ranks. |
 | `compute_gate_on_attention` | `bool` | `false` | Must be `true`; CAM async runs MoE routing on Attention before dispatching to FFN ranks. |
@@ -230,7 +236,7 @@ consumes expert-routed CAM work items and may independently use TP1.
 For eager DeepSeek-V2/V3 MLA or DeepSeek-V4 Attention at any DP size, enable
 native DBO explicitly or retain `async_moe_ubatching=true` as its alias:
 
-```bash
+```text
 --enable-dbo
 --dbo-decode-token-threshold <N>
 --dbo-prefill-token-threshold <N>
@@ -331,15 +337,21 @@ export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 
 The loader configures the packaged `afd-plugin` vendor directory and loads
 `afd_plugin._C_ascend`. No external CAM wheel or vendor library is required.
-Async CAM sends routed experts only. Attention owns native shared MLP weights
-and computes shared outputs in the model's token layout. Shared weights use
-the native replicated SP contract, so TP ranks do not add partial shared
-outputs across different token shards. Their memory is included in profiling.
+Async CAM sends routed experts only. Attention owns shared MLP weights and
+computes shared outputs in the model's token layout. DeepSeek-V2/V3 with
+effective model SP selects replicated shared weights. DeepSeek-V4 preserves
+the native shared-expert policy through `AFDDeepseekV4SharedExperts`, including
+all-gather/reduce-scatter for TP-sharded weights with SP and all-reduce without
+SP. Replicated weights use local SP tokens or split/gather full tokens. Shared
+weights and intermediates are included in Attention memory profiling.
 
 Set `connector_extra_config.hccl_buffer_size` when the CAM domain needs a
-larger buffer than unrelated TP, DP, or EP process groups. `HCCL_BUFFSIZE`
-remains a process-wide fallback and should be used only when all HCCL domains
-in the process should share the same size.
+larger buffer. Also set `HCCL_BUFFSIZE` to that same effective size on every
+rank: Async CAM host tiling reads the environment, whereas HCCL allocation
+can use the domain override. For the JSON example above, export
+`HCCL_BUFFSIZE=4096`. Changing only `hccl_buffer_size` can misalign the window
+capacity and tail-state address. `HCCL_BUFFSIZE` also affects unrelated groups
+without explicit overrides; see the [operator window contract](CAM_ASYNC_ROUTED_OPS.md#communication-window-configuration).
 
 For the experimental FlashComm1/SP cases, set
 `VLLM_ASCEND_ENABLE_FLASHCOMM1=1` only on Attention. Set it to `0` for plain TP
@@ -378,8 +390,8 @@ log must show `actual=layered` to confirm that the new path is active.
 
 ```bash
 # Use the same checkpoint, topology, capacity, and requests for both runs.
-AFD_ASYNC_CAM_LAYERED_GMM=0 bash <W4A8-FFN-launch-script>
-AFD_ASYNC_CAM_LAYERED_GMM=1 bash <W4A8-FFN-launch-script>
+AFD_ASYNC_CAM_LAYERED_GMM=0 bash /path/to/W4A8-FFN-launch-script.sh
+AFD_ASYNC_CAM_LAYERED_GMM=1 bash /path/to/W4A8-FFN-launch-script.sh
 ```
 
 The intended configuration is Ascend 910C / `ascend910_93`, async CAM FFN,

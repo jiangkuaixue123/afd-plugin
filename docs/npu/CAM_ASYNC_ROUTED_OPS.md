@@ -1,5 +1,8 @@
 # Routed-only CAM asynchronous operators
 
+Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
+checked-in tests; hardware results below retain their original revision scope.
+
 The AFD native package contains four experimental asynchronous communication
 operators for Ascend 910C (`ascend910_93`). They use the
 `cam_async_routed_only_compact_v2` protocol: only routed experts participate
@@ -219,10 +222,29 @@ and computes chunk length from expert counts. Shared activations and outputs
 do not cross the A/F boundary.
 
 DeepSeek-V2 and DeepSeek-V4 Attention roles construct the pinned native shared
-MLP using replicated weights and local model tokens. They load shared weights,
-scales and biases on Attention, then add the shared result after restoring the
-routed output layout. FFN ranks construct routed experts only. Two-stage
-execution keeps shared results separate by stage; interrupted model forwards
-release pending routing references and require process-group teardown.
+MLP or its AFD adapter. They load shared weights, scales and biases on
+Attention, then add the shared result after restoring the routed output
+layout. DeepSeek-V2/V3 with model SP uses replicated shared weights;
+DeepSeek-V4 preserves its native TP-sharded or shared-DP layout through
+`AFDDeepseekV4SharedExperts`. FFN ranks construct routed experts only.
+Native DBO children retain separate shared results. Peer receive hooks reclaim
+the single physical CAM window before another child dispatches; owner-side
+layout restoration and collectives happen after resumption. Interrupted
+transfers require A/F process-group teardown, not an in-place retry.
 
 The synchronous CAMP2P and GPU paths retain their existing ownership contracts.
+
+## Current kernel implementation notes
+
+At the reviewed source revision, dispatch-send batches prefix writes in
+aligned UB rows before copying them to the peer window. Combine-receive
+reuses dispatch statistics for expert prefixes, so their lifetime extends
+through the matching combine. Combine-send skips peer-window resolution for
+unused cells and reuses a destination base while its TP peer remains unchanged.
+These changes preserve the compact protocol and do not add concurrent windows
+or remove empty-expert completion notifications.
+
+Use [the standalone precision and performance harness](../../tests/npu/README.md)
+to compare identical routing, TP width, window size, dtype, quantization and
+chunk capacity before claiming a speedup. A source optimization alone is not
+performance evidence; include sparse/empty peers and repeated window reuse.

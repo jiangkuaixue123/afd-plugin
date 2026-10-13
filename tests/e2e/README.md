@@ -142,7 +142,9 @@ and graph mode change; the graph row uses `FULL_DECODE_ONLY` with capture size 8
 (with a shared minimum of 24 for diagnostics).
 
 The GPU validator accepts exactly two microbatches and requires Attention
-DP > 1; FFN remains connector-driven. NPU MRV2 DBO remains rejected. The
+DP > 1; FFN remains connector-driven. These generic MRV2 scenarios remain
+CUDA-only. NPU MRV2 accepts eager two-ubatch DBO (CAMP2P with Attention DP > 1;
+Async CAM also at DP1), but needs separate NPU model qualification. The
 runner requires live two-stage execution and matching layouts on all
 Attention/FFN ranks, plus consecutive FULL replays on the graph row. MRV1
 `afd-graph-dbo-*` scenarios do not substitute for these checks.
@@ -179,10 +181,13 @@ weights and a DSV4-capable vLLM/vLLM-Ascend runtime with CAM operators.
 
 The fixed deployment uses eager execution, MBT=8192, max-model-len=1048576,
 max-num-seqs=16, block-size=128, memory utilization=0.7, and seed=1024.
-CAM uses `dynamicQuant=1`, Attention-side gating, and two token-split async
-MoE ubatches. FlashComm1 is enabled only on Attention. CPU binding and
+CAM uses `dynamicQuant=1`, Attention-side gating, and the legacy
+`async_moe_ubatching` flag, which now enables two native DBO children on
+Attention. The retained `async_moe_split="token"` field is ignored by the
+current runtime. Earlier model-local split results need rerunning after this
+migration. FlashComm1 is enabled only on Attention. CPU binding and
 128-thread weight loading follow the reference prefill scripts. Prefix
-caching, native DBO, and KV transfer are not enabled.
+caching and KV transfer are not enabled; FFN does not enable native DBO.
 
 After startup, an async HTTP client schedules ten independent chat requests together.
 They ask for `12 + 7` through `21 + 7`, with temperature=0, thinking=false,

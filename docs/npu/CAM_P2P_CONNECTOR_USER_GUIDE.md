@@ -1,5 +1,8 @@
 # CAM P2P Connector User Guide
 
+Source reviewed: 2026-10-13 at AFD `36dadb4`. This refresh checks code and
+checked-in tests; hardware results below retain their original revision scope.
+
 ## Overview
 
 `CAMP2pAFDConnector` is the synchronous Ascend NPU connector for
@@ -14,12 +17,15 @@ Ascend services. Use `P2pNcclAFDConnector` for CUDA deployments and
 `CAMP2pAFDConnector` supports prefill and decode in eager mode. V1 ACL graph
 uses `FULL_DECODE_ONLY`; the implemented V2 path also accepts `FULL`.
 V2-Lite V1/V2 has [representative v0.30 hardware evidence](https://github.com/vllm-project/afd-plugin/pull/425#issuecomment-6063910923),
-including 2A1F/2A2F functional checks with the separately reviewed MRV2 padding
-and FFN context repair applied. The integration alone retains the MRV2
-many-to-one correctness gap described in the [runtime matrix](../design/module/execution_platforms.md#tested-runtime-matrix).
+including 2A1F/2A2F functional checks with the MRV2 padding and FFN context
+repairs. The current source includes group-wise MRV2 padding before eager
+input preparation and graph fallback; the earlier upgrade evidence retains
+its original revision scope in the [runtime matrix](../design/module/execution_platforms.md#tested-runtime-matrix).
 Legacy V1 DBO 2A1F/2A2F regressions are
 recorded with the [stage-padding repair](https://github.com/vllm-project/afd-plugin/pull/430#issuecomment-6063840311).
-V2 DBO remains unsupported; other models and topologies require their own evidence.
+V2 now accepts eager native DBO with exactly two microbatches and Attention
+DP > 1. V2 DBO graphs remain unsupported; other models and topologies require
+their own evidence.
 
 ## Prerequisites
 
@@ -57,6 +63,15 @@ The connector creates these communication groups:
   to FFN ranks.
 
 ## DBO and ubatching
+
+Select the runner explicitly on both roles with
+`VLLM_USE_V2_MODEL_RUNNER=0` (V1) or `1` (V2). V1 supports the documented
+two-stage ACL graph path. V2 DBO requires `--enforce-eager`, Attention DP > 1,
+exactly two microbatches, and no speculative decoding. V2 also requires
+static EP, PP=PCP=DCP=1, and each role's ranks equal to DP x TP; SP MoE and
+compile SP are rejected. Without DBO, V2 accepts eager, `FULL`, or
+`FULL_DECODE_ONLY`. The [NPU testing guide](TESTING.md) separates executor
+checks from model correctness evidence.
 
 DBO is configured with vLLM CLI flags, not inside the `afd` object:
 
@@ -131,6 +146,7 @@ Pass AFD configuration through vLLM's `--additional-config` option under the
 | `connector` | `str` | `"P2pNcclAFDConnector"` | Set to `CAMP2pAFDConnector` for this synchronous NPU path. |
 | `host` | `str` | `"127.0.0.1"` | Non-empty rendezvous host shared by every rank. It must be reachable from all participating processes. If the Attention and FFN ranks run on different machines, set this field to the FFN machine's reachable IP address. |
 | `port` | `int` | `1239` | AFD rendezvous port in `1..65535`. It is separate from the vLLM HTTP service ports. |
+| `afd_process_group_timeout_s` | `int` | `120` | Positive AFD group rendezvous timeout in seconds; also used by the native NPU DBO startup barrier. It does not bound a polling device kernel. |
 | `num_attention_ranks` | `int` | `1` | Total number of Attention worker ranks. Must be positive. |
 | `num_ffn_ranks` | `int` | `1` | Total number of FFN worker ranks. Must be positive. |
 | `compute_gate_on_attention` | `bool` | `false` | Controls whether the MoE gate is computed on the Attention side or the FFN side. Currently only `false` is supported. |
@@ -151,6 +167,7 @@ role rank.
 | `core_num` | `int` | `8` | Positive default AIV core count for both roles. |
 | `attn_core_num` / `ffn_core_num` | `int` | unset | Positive role-specific override for `core_num`. |
 | `quant_mode` | `int` | `0` | CAM quantization mode. The current runtime supports only `0`. |
+| `compute_gate_on_attention` | `bool` | `false` | Connector-local operator option; must remain `false`, as must the common AFD field. |
 | `hccl_buffer_size` | `int` | unset | Positive CAMP2P HCCL buffer size in MB. The override applies to every connector-owned `afd*` communication domain and the FFN-side `afd_moe` domain; the Gloo control group is unaffected. When unset, HCCL uses `HCCL_BUFFSIZE`, then its built-in default. Use the same value on all members of each HCCL domain. |
 
 The per-domain setting avoids increasing buffers for unrelated TP, DP, or EP
@@ -163,10 +180,13 @@ This example uses six NPUs on one host. It is a configuration template: replace
 The checked-in DeepSeek-V3.2 recipe linked below provides a concrete,
 model-specific deployment.
 
+This graph + DBO template uses V1. Set `VLLM_PLUGINS=ascend,afd` for both
+roles; `VLLM_USE_V1` alone does not choose between ModelRunnerV1 and V2.
+
 The FFN service uses devices `4,5`:
 
 ```bash
-ASCEND_RT_VISIBLE_DEVICES=4,5 VLLM_USE_V1=1 \
+ASCEND_RT_VISIBLE_DEVICES=4,5 VLLM_PLUGINS=ascend,afd VLLM_USE_V2_MODEL_RUNNER=0 \
 vllm serve /path/to/model \
   --host 127.0.0.1 \
   --port 8001 \
@@ -204,7 +224,7 @@ vllm serve /path/to/model \
 The Attention service uses devices `0,1,2,3`:
 
 ```bash
-ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 VLLM_USE_V1=1 \
+ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 VLLM_PLUGINS=ascend,afd VLLM_USE_V2_MODEL_RUNNER=0 \
 vllm serve /path/to/model \
   --host 127.0.0.1 \
   --port 8000 \

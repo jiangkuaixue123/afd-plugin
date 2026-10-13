@@ -17,6 +17,7 @@ primary_code_paths:
   - "afd_plugin/v1/worker/npu/npu_ubatch_wrapper.py"
   - "afd_plugin/v1/worker/npu/ubatch_utils.py"
   - "afd_plugin/v1/worker/npu/ubatching.py"
+  - "afd_plugin/v1/worker/npu/ubatch_runner.py"
   - "csrc/**"
   - "setup.py"
   - "MANIFEST.in"
@@ -37,6 +38,9 @@ validation_paths:
   - "tests/unit/v1/worker/test_npu_device_contract.py"
   - "tests/unit/v1/worker/test_npu_mla_graph.py"
   - "tests/unit/v1/worker/test_npu_runtime.py"
+  - "tests/unit/v1/worker/test_npu_model_runner_v2.py"
+  - "tests/unit/model_executor/test_async_cam_dbo.py"
+  - "tests/npu/test_mrv2_dbo.py"
   - "tests/e2e/models/deepseek_v2_lite/test_deepseek_v2_lite.py"
   - "tests/e2e/models/deepseek_v2_lite/test_async_cam_npu.py"
 upstream_refs:
@@ -50,7 +54,7 @@ verified_platform_refs:
 related_issues:
   - "#86"
   - "#129"
-last_reviewed: 2026-08-27
+last_reviewed: 2026-10-13
 ---
 
 # Execution platforms
@@ -102,7 +106,7 @@ the corresponding runtime stack.
 | Attention execution | upstream V1 or V2 `GPUModelRunner` extension | upstream V1 or V2 `NPUModelRunner` extension |
 | FFN execution | plugin minimal runner | upstream `NPUModelRunner` extension |
 | Graph policy/keying | `v1/worker/cuda_graph.py` | shared policy/keying plus ACL/NPUGraph integration |
-| Native ubatching | `AFDUBatchWrapper` and vLLM ubatching APIs | `AscendUBatchWrapper`, Ascend contexts, streams, and slice utilities |
+| Native ubatching | V1 `AFDUBatchWrapper`; V2 native vLLM ubatch runner | V1 `AscendUBatchWrapper`; V2 `NPUUBatchRunner` adapting native child inputs, contexts, and streams |
 | Profiling | `compat/profiler.py` | `compat/npu/profiler.py` |
 | Native operators | PyTorch/vLLM CUDA runtime used by NCCL P2P | plugin CANN A2E/E2A and routed-only async CAM ops |
 | Build/packaging | no plugin CUDA extension | `setup.py`, `csrc/npu/**`, packaged `_cann_ops_custom` vendor tree |
@@ -156,19 +160,21 @@ single-stage capture it sends the padded capture shape before entering formal
 CUDA Graph capture. For an ubatched capture, `AFDUBatchWrapper` supplies the
 exact stage slices and sends per-stage metadata before the graph body.
 
-ModelRunnerV2 rejects ubatching and reuses the native full-graph manager. Its
-Attention wrapper observes each native capture descriptor at the exact input
-preparation seam, publishes a warmup and capture payload outside the graph,
-and suppresses duplicate context sends. Full-graph replay bypasses context
-creation, so an instance-scoped `run_fullgraph` hook publishes the padded
-shape immediately before replay. The wrapper verifies descriptor order and
-call count and restores all temporary symbols and state in `finally`.
+CUDA ModelRunnerV2 supports exactly two native microbatches at Attention
+DP > 1 and reuses the native full-graph manager. Its Attention wrapper observes
+each capture descriptor at input preparation and publishes warmup/capture
+control outside the graph. Two-stage preparation installs metadata on both
+children and sends the complete layout before eager execution or graph replay.
+Single-stage full replay bypasses context creation, so an instance-scoped
+`run_fullgraph` hook publishes its padded shape; two-stage replay reuses the
+already-published layout. Temporary symbols and state are restored in `finally`.
 
 FFN uses the Attention payload's warmup/capture flags. It creates a shared
 CUDA graph memory pool, uses `connector.control_plane` to update the owning
 connector state before `torch.cuda.graph(...)`, captures only
 model/data-plane work, and stores the graph by `make_ffn_graph_key()`. A
-matching future payload replays the graph; a missing key runs eagerly.
+future payload replays only when `is_graph_replaying=true` and its key matches;
+otherwise FFN executes eagerly.
 
 ### CUDA native ubatching
 
@@ -238,7 +244,7 @@ reassembled to match the upstream Ascend layout.
 ### NPU native ubatching and DBO
 
 `AscendUBatchWrapper` is plugin-owned and deliberately separate from the CUDA
-wrapper. The current path:
+wrapper. This is the V1 path; V2 uses `NPUUBatchRunner`. The V1 wrapper:
 
 - supports exactly two native ubatches;
 - creates one forward context and execution thread per stage;
@@ -266,6 +272,20 @@ tokens from padding; the Async planner, sidecar metadata and model-local stage
 loops are removed. The legacy split selector is accepted but ignored. FlashComm1
 is Attention-local; without it, the CAM boundary shards replicated Attention
 tokens and restores the FFN result with TP all-gather.
+
+`NPUUBatchRunner` creates independent Ascend metadata builders per child and
+copies child block tables because DSA metadata construction may clear padded
+rows in place. Its scoped input adapter applies native request truncation to
+Ascend's exact CPU sequence lengths as well as the native upper bounds. Native
+NPU contexts update both the NPU stream and vLLM's thread-local stream cache.
+A failed child aborts the bounded startup barrier and wakes its peer; a failed
+CAM transfer still requires restarting the A/F group. These host-side wakeups
+cannot cancel a kernel already polling a device communication window.
+
+Synchronous MRV2 CAMP2P applies group-wise token padding before eager input
+preparation, including graph fallback. Padding follows strided FFN receiver
+groups and also keeps Attention TP peers aligned. This repair is present in
+the current source; the older upgrade record predates its integration.
 
 ### ACL Graph and NPU Graph
 
@@ -299,8 +319,8 @@ stage pipeline. DBO graphs remain unsupported in V2.
 The FFN runner owns a separate ACL graph cache keyed by stage token counts and
 A/F topology. Warmup runs the eager FFN path. Formal capture updates connector
 state through `connector.control_plane` before entering `torch.npu.graph(...)`,
-so replay contains only model and data-plane operations. An unknown key falls
-back to eager execution. CAM async does not enter this path because validation
+so replay contains only model and data-plane operations. Replay additionally requires the control payload's
+`is_graph_replaying=true`; an unknown key or eager payload executes eagerly. CAM async does not enter this path because validation
 requires eager execution and `connector.control_plane` is `None`.
 
 ### Ascend native operators and packaging
@@ -357,16 +377,18 @@ an expansion of the supported runtime contract.
 
 The Async CAM row also supports an MRV2 Attention runner for DeepSeek-V2/V3
 MLA and DeepSeek-V4, with static EP, PP=PCP=DCP=1, and Attention-local SP.
-Finegrained TP, shared-expert DP, and native draft-model/MTP paths are excluded.
+Finegrained TP, explicit shared-expert DP configuration, and native
+draft-model/MTP paths are excluded.
 FFN remains connector-driven. The row's upgrade evidence retains its original
 scope; MRV2 deployment settings are documented in the
 [CAM async guide](../../npu/CAM_ASYNC_CONNECTOR_USER_GUIDE.md#modelrunnerv2-deployment).
 
-The NPU results below were collected with the CAMP input-padding and FFN
-context repair included. That repair is being reviewed separately from the
-upgrade integration; its 2A1F results do not qualify the integration without it.
-NPU MRV2 many-to-one eager/fallback execution can produce incorrect output.
-That CAMP repair is not included in this integration baseline.
+The NPU upgrade results below were collected with CAMP input-padding and FFN
+context repairs that were reviewed separately at the time. Current source
+includes those repairs, including the MRV2 group-padding change in `913c9d3`.
+The historical many-to-one eager/fallback defect describes the uncorrected
+upgrade baseline, not a missing repair at this document's reviewed revision.
+New native DBO and Async CAM changes still need their own model comparisons.
 
 DSV2/V3 Async CAM Attention with model SP selects Ascend shared-expert DP before
 constructing the shared MLP. Each rank holds complete shared weights and computes

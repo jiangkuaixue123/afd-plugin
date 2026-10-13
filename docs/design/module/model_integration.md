@@ -34,7 +34,7 @@ related_issues:
   - "#88"
   - "#105"
   - "#129"
-last_reviewed: 2026-08-27
+last_reviewed: 2026-10-13
 ---
 
 # Model integration
@@ -142,6 +142,31 @@ connector validates one-dimensional `torch.int32` input IDs and preallocates
 their receive buffers for graph execution. This boundary currently has
 focused unit coverage but no repository model or accuracy E2E case.
 
+### DeepSeek V4 Ascend boundary
+
+[`npu/deepseek_v4.py`](../../../afd_plugin/model_executor/models/npu/deepseek_v4.py)
+wraps the native Ascend model independently of the CUDA adapter. Attention
+owns attention, mHC, normalization and finalization. Synchronous CAMP2P sends
+normalized hidden states and Hash-layer token IDs to FFN, which owns the
+native gate and MoE. Async CAM keeps the Hash/top-k router and shared experts
+on Attention and sends only routed-expert work; `dynamicQuant=1` is required.
+
+Shared-expert layout is model-specific. DeepSeek-V2/V3 Async CAM forces
+replicated shared weights when effective model SP is enabled. DeepSeek-V4
+instead uses `AFDDeepseekV4SharedExperts` to preserve the native policy:
+TP-sharded weights need all-gather/reduce-scatter around SP computation, or
+all-reduce without SP; replicated shared weights compute local SP tokens,
+or split/gather replicated input tokens without SP. The W8A8 fused arithmetic
+adapter preserves the shared MLP's clamp and activation parameters. This is
+separate from the optional routed W4A8 layered executor's unresolved nonzero
+`swiglu_limit` behavior.
+
+The synchronous DSV4 E2E profiles check concurrent serving but disable answer
+checking; the A5 profile records incorrect concurrent answers. Async DSV4 has
+an exact-answer smoke case and historical layered off/on comparisons. Neither
+record establishes accuracy for the current native-DBO migration. See
+[E2E testing](e2e_testing.md) and the [layered guide](../../npu/CAM_ASYNC_CONNECTOR_USER_GUIDE.md#w4a8-layered-gmm-experimental-disabled-by-default).
+
 ### Qwen3 MoE CUDA boundary
 
 `AFDQwen3MoeModel` uses the native `decoder_layer_type` injection hook. The
@@ -210,8 +235,8 @@ dispatches to the selected decoder layer. Normal mode executes that layer's
 MLP. Attention-side-gate mode requires connector-produced group/routing and
 quantization metadata and executes the Ascend routed-expert path. Async CAM
 returns only routed output in `AFDF2ATransferPayload`; Attention owns the
-native shared MLP, uses replicated weights on its local tokens, and adds
-the shared result after restoring the routed token layout. Pending stages
+shared MLP with the model-specific TP/SP policy above and adds its result
+after restoring the routed token layout. Pending stages
 retain separate shared tensors; failed forwards discard pending routing references.
 
 ```mermaid
@@ -239,15 +264,13 @@ sequenceDiagram
     AttentionLayer->>AttentionLayer: Continue residual/layer pipeline
 ```
 
-CAM async has two model-side variants:
-
-- the standard gate path keeps dense layers on Attention, sends only MoE
-  layers with top-k payloads, and delays the matching FFN receive until it is
-  needed;
-- the experimental two-stage request-boundary path runs dense layers once,
-  slices the MoE region by request, installs stage-specific forward context,
-  pipelines send/receive across the two stages, and restores parent context
-  state on exit.
+CAM async uses the same model forward for unsplit execution and native DBO
+children. Dense layers remain local to Attention and run on each child's
+tokens. MoE sends top-k payloads through `send_async_cam_remote_call()`;
+native peer receive hooks reclaim the single CAM window before another send.
+Only the resumed owner restores layout, performs TP collectives, and adds its
+shared output. The former request-boundary model pipeline and Async metadata
+sidecar have been removed. `async_moe_split` no longer controls execution.
 
 Connector ordering, work items, and transport buffers remain owned by
 [connector contracts](connector_contracts.md); graph and DBO mechanics remain
@@ -278,7 +301,7 @@ the other role can be omitted from model/accuracy E2E coverage.
 
 - Missing `afd_metadata` on an AFD path fails explicitly; an AFD model alias is
   not an implicit local-forward fallback.
-- AFD paths that require a connector, top-k payload, group list, or async stage
+- AFD paths that require a connector, top-k payload, group list, or native child
   metadata fail when that input is missing.
 - DeepSeek V4 fails when its remote boundary lacks token-aligned input IDs or
   when those IDs have the wrong shape/dtype for P2P transfer.
@@ -311,7 +334,7 @@ forward-context contract. Run model unit tests and the affected GPU/NPU model
 and accuracy E2E paths; weight-loading changes require role-specific evidence.
 Forward-context mutations require restoration/error-path tests, and an
 architecture registration change requires package registration plus checkpoint
-load evidence. A unit-only architecture such as the current DeepSeek V4 path
+load evidence. A unit-only boundary such as the current CUDA DeepSeek V4 path
 must not be described as hardware-validated without new E2E evidence.
 
 ## Limitations and open issues
@@ -323,7 +346,7 @@ remain linked to
 [#88](https://github.com/JiusiServe/afd-plugin/issues/88) and
 [#105](https://github.com/JiusiServe/afd-plugin/issues/105).
 
-The current `AFDForwardContextMetadata` shape, connector reference, async MoE
-sidecar, and architecture aliases remain **draft**. They describe the working
+The current `AFDForwardContextMetadata` shape, connector reference, native
+child-context adapters, and architecture aliases remain **draft**. They describe the working
 pinned implementation and must not be used as an independent extension promise
 until the linked issues and owner review are complete.

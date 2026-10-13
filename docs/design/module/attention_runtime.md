@@ -29,6 +29,9 @@ validation_paths:
   - "tests/unit/v1/worker/test_model_runner_v2.py"
   - "tests/unit/v1/worker/test_npu_device_contract.py"
   - "tests/unit/v1/worker/test_npu_runtime.py"
+  - "tests/unit/v1/worker/test_npu_model_runner_v2.py"
+  - "tests/unit/model_executor/test_async_cam_dbo.py"
+  - "tests/npu/test_mrv2_dbo.py"
   - "tests/e2e/models/deepseek_v2_lite/test_deepseek_v2_lite.py"
   - "tests/e2e/accuracy/**"
   - "tests/e2e/models/deepseek_v2_lite/test_async_cam_npu.py"
@@ -49,7 +52,7 @@ related_issues:
   - "#88"
   - "#105"
   - "#129"
-last_reviewed: 2026-08-27
+last_reviewed: 2026-10-13
 ---
 
 # Attention runtime
@@ -84,14 +87,14 @@ worker for the active platform when `worker_cls="auto"`.
 CUDA launch shape:
 
 ```bash
-vllm serve <model> \
+vllm serve /path/to/model \
   --additional-config '{"afd":{"role":"attention","connector":"P2pNcclAFDConnector","host":"127.0.0.1","port":1239,"num_attention_ranks":1,"num_ffn_ranks":1}}'
 ```
 
 Ascend launch shape:
 
 ```bash
-VLLM_PLUGINS=ascend,afd vllm serve <model> \
+VLLM_PLUGINS=ascend,afd vllm serve /path/to/model \
   --additional-config '{"afd":{"role":"attention","connector":"CAMP2pAFDConnector","host":"127.0.0.1","port":1239,"num_attention_ranks":1,"num_ffn_ranks":1}}'
 ```
 
@@ -264,7 +267,7 @@ canonical `additional_kwargs` entry.
 When `connector.control_plane` is not `None`, the runner sends an
 `AFDControlPayload` through that `AFDControlPlane` before model/data-plane
 transfer. The payload contains a stage-indexed DP metadata map plus
-`is_warmup`, `is_graph_capturing`, and `is_profile` flags.
+`is_warmup`, `is_graph_capturing`, `is_graph_replaying`, and `is_profile` flags.
 
 - A non-ubatched request sends stage `0` and uses native or fallback DP
   metadata.
@@ -313,7 +316,10 @@ The legacy `async_moe_ubatching` option is an alias for vLLM native DBO. It:
 - does not support prefill or decode context parallel metadata.
 
 Native DBO owns request/token boundaries; `async_moe_split` is deprecated and
-ignored. `models/npu/async_cam_layout.py` retains only communication layout
+ignored. Enable DBO on Attention only; Async FFN rejects native DBO flags and
+continues its work-item loop. For DeepSeek-V2/V3, enable chunked prefill so a
+request crossing a native microbatch boundary can attend to its prefix KV.
+`models/npu/async_cam_layout.py` retains only communication layout
 conversion, and `models/npu/async_cam_dbo.py` supplies the single-window receive
 hook. FlashComm1/SP is Attention-local and
 FFN topology validation is independent. See the CAM async user guide for the
@@ -399,6 +405,12 @@ remain unsupported. Hardware evidence remains limited to the recorded model and
 configuration cells.
 Platform/connector limits are intentionally centralized in
 [execution platforms](execution_platforms.md#tested-runtime-matrix).
+
+The current native-only Async CAM DBO migration has local contract coverage;
+historical request/token-split accuracy results do not validate the changed
+boundaries. The next hardware gate needs DP1/DP > 1, plain TP/model SP, uneven
+prefill lengths, and requests crossing a child boundary, with live two-child
+execution evidence and baseline output comparison.
 
 This document does not decide the runtime refactor, connector metadata
 ownership, or transfer metadata/state shape. See
