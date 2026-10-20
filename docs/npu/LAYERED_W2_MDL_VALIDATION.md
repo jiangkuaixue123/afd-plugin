@@ -1,0 +1,94 @@
+# Layered W2 MDL graph validation
+
+The old W2 `MSD_API_DEQUANT` route used `GetNormalConfig()` despite its
+configuration constant's MDL name. The change gives only this route an explicit
+MDL configuration while retaining `enUnitFlag=true`. Tile sizes, quantization,
+workspace requests, input layout and other dispatch routes are unchanged.
+The SDK configuration bundle changes `doNorm`, `doMultiDataLoad` and `batchMode`;
+batch-specific branches are gated out for the ordinary, non-batched Matmul type.
+
+## Environment and method
+
+Measured on Ascend A3 on 2026-10-20 with CANN 9.1.0, driver 25.5.1.1,
+Python 3.12.13, torch 2.10.0+cpu and torch_npu 2.10.0.post4.
+Baseline source: `300fb2017d3f9eba032dd699b37cfe05f54ffd5f`.
+Measured candidate: `fdc61626083e9a51e1f546da5a17f7b924129a62`.
+The PR cherry-picks their fixture/kernel changes onto current main; the relevant
+kernel, executor, operator loader and NPU test sources are byte-identical to the
+measured candidate. A fresh device build of the rebased PR was not repeated.
+
+The benchmark captures one actual `AsyncCAMW4A8Executor` W13→W2 invocation,
+including the device selector clone, with its four retained tensors and eight
+weight layers resident. Geometry: E=64, H=4096, I=2048, C=262144, seed=1234.
+Input restoration and routing metadata updates happen outside timing. W2-only
+measurements also restore its in-place input before every call.
+
+Five independent baseline processes establish per-case variability. Three
+independent ABBA groups each use four processes, ten graph warm replays after
+capture/shape changes and 50 samples per cell. Speedup is the geometric mean
+of the three paired group ratios. The 95% interval resamples the three groups,
+not the 50 within-process samples. Formal timing has profiling disabled.
+
+## Results
+
+Times are geometric aggregates of six baseline and six candidate process medians.
+
+| Graph workload | Baseline ms | MDL ms | Latency reduction |
+| --- | ---: | ---: | ---: |
+| Actual chain, balanced M=98304 | 14.013778 | 12.710788 | 9.297920% |
+| Actual chain, balanced M=16384 | 2.544288 | 2.342758 | 7.920894% |
+| Actual chain, skewed M=98304 | 14.273416 | 12.960874 | 9.195716% |
+| W2 single, balanced M=98304 | 5.915060 | 4.611928 | 22.030746% |
+
+Main-chain speedup is 1.10251055, with group-bootstrap 95% interval
+[1.10189365, 1.10365339], above the frozen 0.250595% baseline-noise gate.
+None of 28 event/host median/p95 regression checks triggered. Chain M=512
+has no established gain. These are operator results from three independent
+groups, not full-model throughput or concurrent-deployment measurements.
+
+Main-chain event medians (ms/call), retained for direct paired recomputation:
+
+| Group | A1 | B1 | B2 | A2 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 14.028779984 | 12.702919960 | 12.664860249 | 13.968490124 |
+| 2 | 14.000279903 | 12.722589970 | 12.708100319 | 14.021639824 |
+| 3 | 14.020480156 | 12.737730026 | 12.728660107 | 14.043119907 |
+
+## Precision and resource checks
+
+The existing device suite passed 31 tests with zero skips:
+
+```bash
+SOC_VERSION=910c AFD_RUN_ASCEND_OP_RUNTIME=1 python -m pytest -q \
+  tests/npu/test_async_cam_layered_w4a8.py \
+  tests/npu/test_gmm_layered_device_group_list.py \
+  tests/npu/test_gmm_swiglu_quant_v2_layered_precision.py
+```
+
+Additional differential probes passed ND N=288 FP16/BF16 tails; group-list
+encodings 0/1; quantization groups 1/2; ten dynamic M values with balanced/skewed
+and empty-expert routing; and selectors 0→7→0 in one graph. W13 int8 outputs,
+FP32 scales and final chain outputs matched baseline bytes, including M=98304.
+Three retained-tensor graph replays had bounded allocations; releasing the graph
+returned allocated memory to input/weight residency. Long-running/multi-graph
+memory behavior was not tested. GPU E2E and model-level throughput were not run.
+
+## Profiling and lessons
+
+Independent graph profiles show approximately 3 us between W13 and W2, favoring
+kernel-internal work over launch-gap changes. After MDL, W2 MTE2 busy time changes
+from 4675.414 to 3033.624 us while MAC busy time stays 2616.889 versus 2616.828 us;
+W13 activities remain approximately unchanged. This supports reduced W2 transfer
+and scheduling overhead, not a source-line or whole-device bandwidth claim.
+
+Prior synchronization-removal candidates had no established graph gain and were
+reverted. Increasing W13 workspace regressed M=16384 chain latency by 4.596% and
+was reverted. None of those changes are in this PR.
+
+Two validation-harness corrections were made before formal candidate timing:
+the builtin cumulative-list reference was normalized to counts/type1 while
+layered type0 remained tested, and the first timed graph gained explicit warmup.
+The old five A/A blocks were excluded and fresh thresholds collected. Failed
+and superseded runs remain in the local experiment archive, alongside complete
+raw profiles, hashes and per-sample timing records. This report contains the
+review-facing results; it does not claim that remote-only artifacts are public.
