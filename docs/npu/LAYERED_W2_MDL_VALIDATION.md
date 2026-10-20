@@ -1,4 +1,4 @@
-# Layered W2 MDL graph validation
+# Layered W13/W2 graph validation
 
 The old W2 `MSD_API_DEQUANT` route used `GetNormalConfig()` despite its
 configuration constant's MDL name. The change gives only this route an explicit
@@ -135,3 +135,71 @@ small fragments and workspace boundaries. A possible separate experiment is
 tile selection based on actual device-side expert/slice rows, with consistent
 Matmul resources and task partitioning. Host allocation capacity cannot safely
 make that choice; switching cost and any adaptive benefit remain unverified.
+
+## Device-adaptive W13 tiles (retained)
+
+After rejecting the fixed tile, candidate `463ff4e` selects between 128×256 and
+256×128 from each actual expert/workspace-slice intersection on device. Host
+capacity does not determine the choice. It compares M16/N64-aligned packed
+A+B traffic and task counts, selecting the alternative only when neither grows
+and B traffic decreases. K256, workspace, quantization and cross-core pipeline
+synchronization are preserved. The cost model is not a latency guarantee.
+
+Two complete host-generated Matmul configurations are initialized once. All
+AICs make the same choice, including cores without an assigned task. Empty
+intersections do not switch; active selection persists across workspace slices.
+On a change, the previous object calls End, then public SetMMRowMajor restores
+the shared layout state cleared by End. Task grids, tails and offsets use the
+selected configuration. Repeated Init was rejected because it accumulates buffer
+handles; resetting TPipe would affect event state. Installed CANN 9.1 source
+supports shared hardware buffers and a derived bound of 16 handles for the two
+objects, while device tests provide the concrete reuse evidence.
+
+This experiment compares against the **retained W2 MDL baseline**, on the new
+A3 node used by the rejected fixed-tile follow-up. Five fresh A/A processes
+preceded three ABBA groups (12 processes), each measuring the same eight graph
+cases with ten warm replays and 50 samples. Times below are geometric aggregates
+of six baseline and six candidate process medians. Do not combine these timings
+with the earlier node's W2 results to claim an end-to-end cumulative speedup.
+
+| Actual single-chain graph | W2-MDL baseline ms | Adaptive W13 ms | Latency reduction |
+| --- | ---: | ---: | ---: |
+| Balanced M=98304 | 12.661287 | 12.072201 | 4.652655% |
+| Balanced M=16384 | 2.329549 | 2.204595 | 5.363888% |
+| Balanced M=3277 | 0.855156 | 0.856919 | -0.206142% |
+| Balanced M=512 | 0.686131 | 0.685848 | 0.041170% |
+| Skewed M=98304 | 12.911829 | 11.898706 | 7.846475% |
+
+Main latency reduction is 4.652655%, above its frozen 0.293774% noise threshold;
+the three-group speedup 95% interval is [1.047238244, 1.051524820]. Main host
+median and event/host p95 also improve. None of 32 event/host median/p95 checks
+meets the predeclared reproducible-regression rule. M3277's +0.206142% latency
+and M512's −0.041170% latency are within their approximately 1.82% noise gates;
+no improvement is established for those small cases. Only three independent
+groups were used, and samples within a process are not independent replicates.
+
+Switching controls keep total M=516 and the count multiset (four experts with
+64 rows, four with 65, the others empty) constant. Clustered versus alternating
+order produces one versus seven source-modeled tile transitions. The event
+latency difference-in-differences, (candidate alternating−clustered) minus
+(baseline alternating−clustered), is +3.3637, +1.7306 and +5.5648 microseconds
+across the three groups; host values are +2.2364, +1.3357 and +3.6524 microseconds.
+This indicates an ordering/switching-associated net cost, not an isolated API
+cost: count-to-weight mapping and access locality also change. Both controls
+and same-graph alternating metadata pass the frozen no-regression gates. Their
+larger noise thresholds remain a limitation, not evidence that switching is free.
+
+Independent build and 31 native tests passed with zero skips. The first pressure
+gate changes M98304→3277→98304 in one graph with selectors 0/7/0 and eager
+references; q, finite FP32 scale and actual-chain output fingerprints exactly
+match baseline. The main workload models 94 transitions, 47 in each direction;
+these are source-derived counts, not hardware measurements. Two group-list
+encodings, 13-M boundaries and 25 logical same-graph scenarios (including empty,
+skewed and alternating controls) pass exact baseline and cross-encoding checks.
+
+Fresh capture and three replays allocate 11,341,407,744 bytes on both sides;
+release returns to 8,654,953,984 bytes of resident inputs/weights. Actual loading
+uses the candidate W13 object and host library. All 13 W2 kernel objects are
+byte-identical to baseline. Long-running/multi-graph behavior and model throughput
+are not established. The PR cherry-pick has byte-identical relevant sources;
+its rebased checkout was not rebuilt separately on device.
