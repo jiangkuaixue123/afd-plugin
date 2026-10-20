@@ -92,3 +92,46 @@ The old five A/A blocks were excluded and fresh thresholds collected. Failed
 and superseded runs remain in the local experiment archive, alongside complete
 raw profiles, hashes and per-sample timing records. This report contains the
 review-facing results; it does not claim that remote-only artifacts are public.
+
+## Follow-up W13 tile experiment (rejected)
+
+A separate experiment changed only W13 A8W4 MSD host tiling from
+128×256×256 to 256×128×256, using retained W2 MDL as its baseline.
+The intent was to rebalance A/B L1-to-L0 instruction cost; it does not reduce
+ideal total packed transfer bytes. CANN source selects direct LoadData3DPro
+for A and repeated LoadDataWithTranspose for B. These source observations are
+a hypothesis, not an instruction-level measured bottleneck.
+
+The task restarted on another A3 node before this experiment. The 44 retained
+baseline build artifacts matched their sealed hashes, and fresh A/A blocks
+established new noise thresholds. Independent candidate build, 31 native tests
+(zero skips), and exact boundary W13 q/FP32-scale/chain comparisons for both
+group-list encodings passed. Runtime logs confirmed the candidate host library
+and 256×128 tile, unchanged mLimit=1638 and ACLNN workspace=83,870,208 bytes.
+Three graph replays with four retained tensors showed no allocated-memory growth.
+
+A 12-shape diagnostic pilot triggered the predeclared regression confirmation
+at M=3277. Five fresh A/A processes and three independent ABBA groups confirmed
+**6.338645% higher actual single-chain graph event-median latency**, from
+0.858917405 to 0.913361128 ms. All three B/A group ratios exceeded the 1.420935%
+noise threshold. Speedup was 0.940391898 with three-group bootstrap 95% interval
+[0.928349916, 0.950339727]. Host median and event/host p95 also regressed beyond
+their own thresholds in every group.
+
+| Group | A1 ms | B1 ms | B2 ms | A2 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.876879990 | 0.907660007 | 0.910479993 | 0.851160020 |
+| 2 | 0.880030006 | 0.909600019 | 0.915769994 | 0.841030002 |
+| 3 | 0.854310006 | 0.909180015 | 0.927630007 | 0.850809991 |
+
+Candidate `f15ae6e` was reverted by `525a9d0` in the local experiment branch;
+neither commit is part of this PR. Under the frozen early-rejection rule, the
+M98304 benefit matrix and conditional candidate PMU were canceled. M16384 was
+4.406384% faster in the pilot only; this is not a confirmed gain and cannot be
+extrapolated to M98304. W2's retained result is unaffected.
+
+The lesson is that a fixed tile can favor larger expert fragments while hurting
+small fragments and workspace boundaries. A possible separate experiment is
+tile selection based on actual device-side expert/slice rows, with consistent
+Matmul resources and task partitioning. Host allocation capacity cannot safely
+make that choice; switching cost and any adaptive benefit remain unverified.
