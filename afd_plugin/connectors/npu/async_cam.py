@@ -70,7 +70,6 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 AFD_ASYNC_CAM_GROUP_NAME = "afd_async_cam"
-ATTN_RANKS_PER_DP_CONFIG_KEY = "attn_ranks_per_dp"
 
 _AFD_ASYNC_EXTRA_CONFIG_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -779,7 +778,6 @@ __all__ = [
     "CAMAsyncAFDConnector",
     "AFDAsyncTransferState",
     "AFDAsyncTopology",
-    "ATTN_RANKS_PER_DP_CONFIG_KEY",
     "CAM_COMM_ID",
     "build_async_topology",
     "select_cam_experts",
