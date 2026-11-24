@@ -1,0 +1,34 @@
+afd_plugin/model_executor/ffn/remote.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 376-381,408-416,439
+afd_plugin/model_executor/models/deepseek_v2.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 24,321
+  s_7b3fa50dff6903::t_00c48aa3955276 187-204,311-320,322
+docs/design/module/model_integration.md
+  s_7b3fa50dff6903::t_00c48aa3955276 213-215,358-362
+  s_7b3fa50dff6903::t_40b41c98c28c24 49,72-75,80,136,187,206-212
+tests/unit/model_executor/models/test_deepseek_v2_construction.py
+  s_7b3fa50dff6903::t_40b41c98c28c24 174
+afd_plugin/connectors/factory.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 29,43,61-63,97-100,103-106,144-148
+tests/unit/model_executor/ffn/test_remote.py
+  s_7b3fa50dff6903::t_40b41c98c28c24 193-195,202
+  s_7b3fa50dff6903::t_0c58e7f43177e2 23,41,152-159,166-177,342-346
+afd_plugin/model_executor/ffn/npu/remote.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "66cd9dcae88e1affe38c272d175cde4f576d5efe",
+  "prompts": {},
+  "sessions": {
+    "s_7b3fa50dff6903": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20e0d-0f26-73a1-a3e6-84a787b2d104",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": null
+    }
+  }
+}
