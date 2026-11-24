@@ -1,0 +1,32 @@
+docs/design/module/model_integration.md
+  s_7b3fa50dff6903::t_40b41c98c28c24 49,72-75,80,136,187,206-213,356-359
+afd_plugin/model_executor/ffn/npu/remote.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 1-23
+afd_plugin/connectors/factory.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 29,43,61-63,97-100,103-106,144-148
+afd_plugin/model_executor/models/deepseek_v2.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 24,293-300
+tests/unit/model_executor/models/test_deepseek_v2_construction.py
+  s_7b3fa50dff6903::t_40b41c98c28c24 174
+tests/unit/model_executor/ffn/test_remote.py
+  s_7b3fa50dff6903::t_40b41c98c28c24 193-195,202
+  s_7b3fa50dff6903::t_0c58e7f43177e2 23,41,152-159,166-177,342-346
+afd_plugin/model_executor/ffn/remote.py
+  s_7b3fa50dff6903::t_af0bfaf7651208 376-381,408-416,439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7029305bd6d5e54dd173b72e2e4ff70593915c59",
+  "prompts": {},
+  "sessions": {
+    "s_7b3fa50dff6903": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20e0d-0f26-73a1-a3e6-84a787b2d104",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "jiangkuaixue123 <jiangxiaozhou111@163.com>"
+    }
+  }
+}
