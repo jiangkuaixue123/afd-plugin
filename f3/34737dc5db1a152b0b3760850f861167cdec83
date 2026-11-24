@@ -1,0 +1,35 @@
+afd_plugin/model_executor/models/npu/deepseek_v4_weights.py
+  s_995b40a037f82f::t_f66c02472ef215 1-41
+tests/npu/test_attention_gate_numerics.py
+  s_995b40a037f82f::t_a2e3fd6a20455f 71
+tests/unit/model_executor/models/npu/test_deepseek_v4_weights.py
+  s_995b40a037f82f::t_a2e3fd6a20455f 1-99
+tests/unit/model_executor/models/test_deepseek_v2_construction.py
+  s_995b40a037f82f::t_fea8981b33592c 178-183,621,625,632
+  s_995b40a037f82f::t_a2e3fd6a20455f 191-192,196-197,540,639-640,658,666
+afd_plugin/model_executor/models/deepseek_v2.py
+  s_995b40a037f82f::t_f66c02472ef215 24,254,256,293,324,341,423,621
+.agents/skills/review-pr/references/modules/model-integration.md
+  s_995b40a037f82f::t_a2e3fd6a20455f 10,40-41
+docs/design/module/model_integration.md
+  s_995b40a037f82f::t_a2e3fd6a20455f 137,185,203-204
+  s_995b40a037f82f::t_9c1ebbd393a30f 346-349,385-386
+afd_plugin/model_executor/models/npu/deepseek_v4.py
+  s_995b40a037f82f::t_f66c02472ef215 57-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f334737dc5db1a152b0b3760850f861167cdec83",
+  "prompts": {},
+  "sessions": {
+    "s_995b40a037f82f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20c74-91ce-72d1-aa80-ffba90081018",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "jiangkuaixue123 <jiangxiaozhou111@163.com>"
+    }
+  }
+}
